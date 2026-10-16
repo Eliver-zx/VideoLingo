@@ -3,7 +3,6 @@ import os
 import re
 from rich.panel import Panel
 from rich.console import Console
-import autocorrect_py as autocorrect
 from core.utils import *
 from core.utils.models import *
 console = Console()
@@ -169,19 +168,13 @@ def get_sentence_timestamps(df_words, df_sentences):
 
     return time_stamp_list
 
-def align_timestamp(df_text, df_translate, subtitle_output_configs: list, output_dir: str, for_display: bool = True):
+def align_timestamp(df_text, df_translate, subtitle_output_configs: list, output_dir: str | None, for_display: bool = True):
     """Align timestamps and add a new timestamp column to df_translate"""
     df_trans_time = df_translate.copy()
-
-    # Assign an ID to each word in df_text['text'] and create a new DataFrame
-    words = df_text['text'].str.split(expand=True).stack().reset_index(level=1, drop=True).reset_index()
-    words.columns = ['id', 'word']
-    words['id'] = words['id'].astype(int)
 
     # Process timestamps ⏰
     time_stamp_list = get_sentence_timestamps(df_text, df_translate)
     df_trans_time['timestamp'] = time_stamp_list
-    df_trans_time['duration'] = df_trans_time['timestamp'].apply(lambda x: x[1] - x[0])
 
     # Remove gaps and fix overlaps 🕳️
     for i in range(len(df_trans_time)-1):
@@ -194,6 +187,8 @@ def align_timestamp(df_text, df_translate, subtitle_output_configs: list, output
             midpoint = max(curr_start, min(next_end, curr_end + delta_time / 2))
             df_trans_time.at[i, 'timestamp'] = (curr_start, midpoint)
             df_trans_time.at[i+1, 'timestamp'] = (midpoint, next_end)
+
+    df_trans_time['duration'] = df_trans_time['timestamp'].apply(lambda x: x[1] - x[0])
 
     # Convert start and end timestamps to SRT format
     df_trans_time['timestamp'] = df_trans_time['timestamp'].apply(lambda x: convert_to_srt_format(x[0], x[1]))
@@ -233,8 +228,7 @@ def gen_source_subtitles():
 def clean_translation(x):
     if pd.isna(x):
         return ''
-    cleaned = str(x).strip('。，、？！：；')
-    return autocorrect.format(cleaned)
+    return str(x).strip('。，、？！：；').strip()
 
 def align_timestamp_main():
     df_text = pd.read_excel(_2_CLEANED_CHUNKS)

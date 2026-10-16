@@ -7,7 +7,9 @@ from core.task_runner import StopTask
 from core.utils import *
 console = Console()
 
-def valid_translate_result(result: dict, required_keys: list, required_sub_keys: list):
+def valid_translate_result(result: object, required_keys: list, required_sub_keys: list):
+    if not isinstance(result, dict):
+        return {"status": "error", "message": f"Expected a JSON object, got {type(result).__name__}"}
     # Check for the required key
     if not all(key in result for key in required_keys):
         return {"status": "error", "message": f"Missing required key(s): {', '.join(set(required_keys) - set(result.keys()))}"}
@@ -18,6 +20,10 @@ def valid_translate_result(result: dict, required_keys: list, required_sub_keys:
             return {"status": "error", "message": f"Item {key} is not an object"}
         if not all(sub_key in result[key] for sub_key in required_sub_keys):
             return {"status": "error", "message": f"Missing required sub-key(s) in item {key}: {', '.join(set(required_sub_keys) - set(result[key].keys()))}"}
+        for sub_key in required_sub_keys:
+            val = result[key][sub_key]
+            if not isinstance(val, str) or not val.strip():
+                return {"status": "error", "message": f"Empty or non-string value for '{sub_key}' in item {key}"}
 
     return {"status": "success", "message": "Translation completed"}
 
@@ -34,7 +40,7 @@ def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_
         for retry in range(3):
             if step_name == 'faithfulness':
                 result = ask_gpt(prompt+retry* " ", resp_type='json', valid_def=valid_faith, log_title=f'translate_{step_name}')
-            elif step_name == 'expressiveness':
+            else:
                 result = ask_gpt(prompt+retry* " ", resp_type='json', valid_def=valid_express, log_title=f'translate_{step_name}')
             result = {str(i): result[str(i)] for i in range(1, length+1)}
             if len(lines.split('\n')) == len(result):
@@ -44,10 +50,12 @@ def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_
         raise ValueError(f'[red]❌ {step_name.capitalize()} translation of block {index} failed after 3 retries. Please check `output/gpt_log/error.json` for more details.[/red]')
 
     ## Step 1: Faithful to the Original Text
+    line_list = lines.split('\n')
     prompt1 = get_prompt_faithfulness(lines, shared_prompt)
-    faith_result = retry_translation(prompt1, len(lines.split('\n')), 'faithfulness')
+    faith_result = retry_translation(prompt1, len(line_list), 'faithfulness')
 
-    for i in faith_result:
+    for idx, i in enumerate(faith_result):
+        faith_result[i].setdefault("origin", line_list[idx] if idx < len(line_list) else "")
         faith_result[i]["direct"] = faith_result[i]["direct"].replace('\n', ' ')
 
     # If reflect_translate is False or not set, use faithful translation directly

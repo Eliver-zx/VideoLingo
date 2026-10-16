@@ -71,10 +71,10 @@ def align_subs(src_sub: str, tr_sub: str, src_part: str) -> Tuple[List[str], Lis
             return {"status": "error", "message": f"Align does not contain {len(src_parts)} non-empty parts as expected!"}
         return {"status": "success", "message": "Align completed"}
     parsed = ask_gpt(align_prompt, resp_type='json', valid_def=valid_align, log_title='align_subs')
-    tr_parts = get_target_parts(parsed, len(src_parts))
+    tr_parts = get_target_parts(parsed, len(src_parts)) or [tr_sub]
     
     # The parts are in the target language, so the source-language joiner does not apply
-    tr_remerged = join_words(tr_parts, get_text_joiner(''.join(tr_parts)))
+    tr_remerged = str(join_words(tr_parts, get_text_joiner(''.join(tr_parts))))
     
     table = Table(title="🔗 Aligned parts")
     table.add_column("Language", style="cyan")
@@ -131,9 +131,9 @@ def _find_spaced_cut(words: List[str], weights: List[float], start_idx: int, end
 def align_source_by_ratio(src_sub: str, tr_sub: str, tr_split: str) -> Tuple[List[str], List[str], str]:
     """Split source sentence locally according to target-language split parts and phrase boundaries."""
     tr_parts = [p.strip() for p in tr_split.split('\n') if p.strip()]
-    tr_remerged = join_words(tr_parts, get_text_joiner(''.join(tr_parts))) if tr_parts else str(tr_sub)
+    tr_remerged = str(tr_sub)
     if len(tr_parts) < 2:
-        return [src_sub], [tr_sub], str(tr_sub)
+        return [src_sub], [tr_sub], tr_remerged
 
     tr_lens = [max(1.0, calc_len(p)) for p in tr_parts]
     total_tr_len = sum(tr_lens)
@@ -204,15 +204,15 @@ def align_source_by_ratio(src_sub: str, tr_sub: str, tr_split: str) -> Tuple[Lis
 
     return src_parts, tr_parts, tr_remerged
 
-def _call_split_sentence(text: str, num_parts: int = 2, language: str = None) -> str:
+def _call_split_sentence(text: str, num_parts: int = 2, language: str | None = None) -> str:
     if language is not None:
         try:
             sig = inspect.signature(split_sentence)
             if "language" in sig.parameters:
-                return split_sentence(text, num_parts=num_parts, language=language)
+                return str(split_sentence(text, num_parts=num_parts, language=language) or "")
         except (TypeError, ValueError):
             pass
-    return split_sentence(text, num_parts=num_parts)
+    return str(split_sentence(text, num_parts=num_parts) or "")
 
 def split_align_subs(src_lines: List[str], tr_lines: List[str]):
     subtitle_set = load_key("subtitle")
@@ -291,6 +291,27 @@ def split_source_lines(lines: List[str]) -> List[str]:
     return lines
 
 def split_for_sub_main():
+    import os
+    if (
+        os.path.exists(_5_SPLIT_SUB)
+        and os.path.exists(_5_REMERGED)
+        and os.path.exists(_4_2_TRANSLATION)
+        and os.path.getmtime(_5_SPLIT_SUB) >= os.path.getmtime(_4_2_TRANSLATION)
+    ):
+        try:
+            subtitle_set = load_key("subtitle")
+            max_sub_len = subtitle_set["max_length"]
+            target_mult = subtitle_set["target_multiplier"]
+            df_existing = pd.read_excel(_5_SPLIT_SUB)
+            if (
+                all(len(str(s)) <= max_sub_len for s in df_existing["Source"].fillna(""))
+                and all(calc_len(str(tr)) * target_mult <= max_sub_len for tr in df_existing["Translation"].fillna(""))
+            ):
+                rprint(f"[yellow]⚠️ File <{_5_SPLIT_SUB}> already exists and is up-to-date, skip <split_for_sub_main> step.[/yellow]")
+                return
+        except Exception:
+            pass
+
     console.print("[bold green]🚀 Start splitting subtitles...[/bold green]")
     
     df = pd.read_excel(_4_2_TRANSLATION)
@@ -307,27 +328,26 @@ def split_for_sub_main():
     subtitle_set = load_key("subtitle")
     MAX_SUB_LENGTH = subtitle_set["max_length"]
     TARGET_SUB_MULTIPLIER = subtitle_set["target_multiplier"]
-    
+
+    orig_src = src.copy()
+    orig_remerged = trans.copy()
+    split_src, split_trans = src.copy(), trans.copy()
     for attempt in range(3):  # 多次切割
         console.print(Panel(f"🔄 Split attempt {attempt + 1}", expand=False))
         split_src, split_trans, remerged = split_align_subs(src.copy(), trans)
+        if attempt == 0:
+            orig_remerged = remerged
         
         # 检查是否所有字幕都符合长度要求
-        if all(len(src) <= MAX_SUB_LENGTH for src in split_src) and \
+        if all(len(s) <= MAX_SUB_LENGTH for s in split_src) and \
            all(calc_len(tr) * TARGET_SUB_MULTIPLIER <= MAX_SUB_LENGTH for tr in split_trans):
             break
         
         # 更新源数据继续下一轮分割
         src, trans = split_src, split_trans
 
-    # 确保二者有相同的长度，防止报错
-    if len(src) > len(remerged):
-        remerged += [None] * (len(src) - len(remerged))
-    elif len(remerged) > len(src):
-        src += [None] * (len(remerged) - len(src))
-    
     pd.DataFrame({'Source': split_src, 'Translation': split_trans}).to_excel(_5_SPLIT_SUB, index=False)
-    pd.DataFrame({'Source': src, 'Translation': remerged}).to_excel(_5_REMERGED, index=False)
+    pd.DataFrame({'Source': orig_src, 'Translation': orig_remerged}).to_excel(_5_REMERGED, index=False)
 
 if __name__ == '__main__':
     split_for_sub_main()

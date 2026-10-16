@@ -470,3 +470,122 @@ def test_translate_all_reuses_raw_cache_and_invalidates_on_terminology_change(
         )
         is None
     )
+    # Legacy cache without Fingerprint column must be rejected when fingerprint is required
+    pd.DataFrame(
+        {
+            "Source": ["Hello world.", "How are you?"],
+            "Translation": ["旧缓存1", "旧缓存2"],
+        }
+    ).to_csv(raw_csv, index=False, encoding="utf-8-sig")
+    assert (
+        translate._load_cached_raw_translation(
+            ["Hello world.", "How are you?"], fingerprint=new_fp
+        )
+        is None
+    )
+
+
+def test_generate_shared_prompt_formats_list_and_string_context_cleanly():
+    """generate_shared_prompt joins list inputs with newlines and turns None into empty string instead of 'None'."""
+    from core.prompts import generate_shared_prompt
+
+    with_lists = generate_shared_prompt(
+        ["Prev line 1.", "Prev line 2."],
+        ["Next line 1.", "Next line 2."],
+        "Theme summary",
+        "Term notes",
+    )
+    assert "<previous_content>\nPrev line 1.\nPrev line 2.\n</previous_content>" in with_lists
+    assert "<subsequent_content>\nNext line 1.\nNext line 2.\n</subsequent_content>" in with_lists
+    assert "['Prev line 1.'" not in with_lists
+
+    with_strings = generate_shared_prompt("prev", "next", "summary", "notes")
+    assert "<previous_content>\nprev\n</previous_content>" in with_strings
+    assert "<subsequent_content>\nnext\n</subsequent_content>" in with_strings
+
+    with_nones = generate_shared_prompt(None, None, None, None)
+    assert "<previous_content>\n\n</previous_content>" in with_nones
+    assert "<subsequent_content>\n\n</subsequent_content>" in with_nones
+    assert "None" not in with_nones
+
+
+def test_valid_translate_result_rejects_empty_strings_and_populates_missing_origin(monkeypatch):
+    """valid_translate_result rejects non-dicts and empty/whitespace translations, and translate_lines populates missing origin keys."""
+    import core.translate_lines as tl
+
+    assert tl.valid_translate_result([{"1": {"direct": "ok"}}], ["1"], ["direct"])["status"] == "error"
+    assert tl.valid_translate_result({"1": {"direct": ""}}, ["1"], ["direct"])["status"] == "error"
+    assert tl.valid_translate_result({"1": {"direct": "   \n "}}, ["1"], ["direct"])["status"] == "error"
+    assert tl.valid_translate_result({"1": {"direct": 123}}, ["1"], ["direct"])["status"] == "error"
+    assert tl.valid_translate_result({"1": {"direct": "有效译文"}}, ["1"], ["direct"])["status"] == "success"
+
+    def fake_ask_gpt(prompt, **kwargs):
+        if kwargs.get("log_title") == "translate_faithfulness":
+            # LLM omitted "origin" key
+            return {"1": {"direct": "第一行直译"}, "2": {"direct": "第二行直译"}}
+        return {
+            "1": {"reflect": "OK", "free": "第一行直译"},
+            "2": {"reflect": "Adjusted phrasing", "free": "第二行润色"},
+        }
+
+    monkeypatch.setattr(tl, "ask_gpt", fake_ask_gpt)
+    monkeypatch.setattr(tl, "load_key", lambda k: True if k == "reflect_translate" else "简体中文")
+    monkeypatch.setattr(tl, "check_cancel", lambda: None)
+    monkeypatch.setattr(tl.console, "print", lambda *a, **kw: None)
+
+    trans, orig = tl.translate_lines("Line one.\nLine two.", ["Prev line."], ["Next line."], "notes", "summary", 0)
+    assert trans == "第一行直译\n第二行润色"
+    assert orig == "Line one.\nLine two."
+
+
+def test_translate_chunk_scans_previous_content_and_chunk_for_terms(monkeypatch):
+    """translate_chunk passes both previous_content (last 4 lines) and current chunk to terminology search."""
+    import core._4_2_translate as translate
+
+    captured = {}
+
+    def fake_search(text):
+        captured["search_scope"] = text
+        return "matched terms"
+
+    def fake_translate_lines(chunk, prev, after, notes, theme, idx):
+        captured["prev"] = prev
+        captured["after"] = after
+        captured["notes"] = notes
+        return "译文", chunk
+
+    monkeypatch.setattr(translate, "search_things_to_note_in_prompt", fake_search)
+    monkeypatch.setattr(translate, "translate_lines", fake_translate_lines)
+
+    chunks = [
+        "L1\nL2\nL3 mentioning Raycasting\nL4\nL5",
+        "Current chunk referring to it.",
+        "N1\nN2\nN3\nN4",
+    ]
+    translate.translate_chunk(chunks[1], chunks, "theme", 1)
+
+    assert captured["prev"] == ["L2", "L3 mentioning Raycasting", "L4", "L5"]
+    assert captured["after"] == ["N1", "N2", "N3"]
+    assert "L3 mentioning Raycasting" in captured["search_scope"]
+    assert "Current chunk referring to it." in captured["search_scope"]
+
+
+def test_translation_prompts_contain_asr_recovery_and_keep_if_flawless_in_english(monkeypatch):
+    """Both translation prompts contain English instructions for ASR phonetic recovery and Keep-if-Flawless."""
+    import core.prompts as prompts
+
+    monkeypatch.setattr(prompts, "load_key", lambda k: "简体中文" if k == "target_language" else True)
+    monkeypatch.setattr(prompts, "load_key_or", lambda k, d="": "")
+    monkeypatch.setattr(prompts, "get_source_language", lambda: "English")
+
+    shared = prompts.generate_shared_prompt(["Prev"], ["Next"], "Summary", "Notes")
+    faith_prompt = prompts.get_prompt_faithfulness("Hello world.", shared)
+    express_prompt = prompts.get_prompt_expressiveness(
+        {"1": {"origin": "Hello world.", "direct": "你好世界。"}}, "Hello world.", shared
+    )
+
+    assert "ASR Homophone & Phonetic Error Recovery" in faith_prompt
+    assert "Strict Terminology & Clean Proper Nouns" in faith_prompt
+    assert "Principle of Necessary Enhancement (Keep-if-Flawless)" in express_prompt
+    assert "Anti-Translationese" in express_prompt
+

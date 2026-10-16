@@ -3,19 +3,17 @@ import json
 import concurrent.futures
 from core.translate_lines import translate_lines
 from core._4_1_summarize import search_things_to_note_in_prompt
-from core._8_1_audio_task import check_len_then_trim
 from core._6_gen_sub import align_timestamp
 from core.utils import *
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
-from difflib import SequenceMatcher
 from core.utils.models import *
 console = Console()
 
 _4_2_TRANSLATION_RAW = "output/log/translation_raw.csv"
 
 # Function to split text into chunks
-def split_chunks_by_chars(chunk_size=1500, max_i=12): 
+def split_chunks_by_chars(chunk_size=2400, max_i=15): 
     """Split text into chunks based on character count, return a list of multi-line text chunks"""
     with open(_3_2_SPLIT_BY_MEANING, "r", encoding="utf-8") as file:
         sentences = [line.strip() for line in file.read().split('\n') if line.strip()]
@@ -41,34 +39,32 @@ def split_chunks_by_chars(chunk_size=1500, max_i=12):
 
 # Get context from surrounding chunks
 def get_previous_content(chunks, chunk_index):
-    return None if chunk_index == 0 else chunks[chunk_index - 1].split('\n')[-3:] # Get last 3 lines
+    return None if chunk_index == 0 else chunks[chunk_index - 1].split('\n')[-4:] # Get last 4 lines
 def get_after_content(chunks, chunk_index):
-    return None if chunk_index == len(chunks) - 1 else chunks[chunk_index + 1].split('\n')[:2] # Get first 2 lines
+    return None if chunk_index == len(chunks) - 1 else chunks[chunk_index + 1].split('\n')[:3] # Get first 3 lines
 
 # 🔍 Translate a single chunk
 def translate_chunk(chunk, chunks, theme_prompt, i):
-    things_to_note_prompt = search_things_to_note_in_prompt(chunk)
     previous_content_prompt = get_previous_content(chunks, i)
     after_content_prompt = get_after_content(chunks, i)
+    search_scope = "\n".join(previous_content_prompt) + "\n" + chunk if previous_content_prompt else chunk
+    things_to_note_prompt = search_things_to_note_in_prompt(search_scope)
     translation, english_result = translate_lines(chunk, previous_content_prompt, after_content_prompt, things_to_note_prompt, theme_prompt, i)
     return i, english_result, translation
-
-# Add similarity calculation function
-def similar(a, b):
-    return SequenceMatcher(None, a, b).ratio()
 
 
 def _translation_cache_fingerprint() -> str:
     """Compute a SHA-256 fingerprint of translation settings and terminology content.
 
-    Ensures cached raw translations are invalidated whenever ``target_language``,
-    ``translation_style``, ``reflect_translate``, or ``terminology.json`` changes.
+    Ensures cached raw translations are invalidated whenever ``api.model``,
+    ``target_language``, ``translation_style``, ``reflect_translate``, or
+    ``terminology.json`` changes.
     """
     import hashlib
     import os
 
     h = hashlib.sha256()
-    for key in ("target_language", "translation_style", "reflect_translate"):
+    for key in ("api.model", "target_language", "translation_style", "reflect_translate"):
         val = str(load_key_or(key, "") or "")
         h.update(f"{key}={val}\n".encode("utf-8"))
     if os.path.exists(_4_1_TERMINOLOGY):
@@ -89,9 +85,11 @@ def _load_cached_raw_translation(expected_sources: list[str], fingerprint: str =
         df_cached = pd.read_csv(_4_2_TRANSLATION_RAW, encoding="utf-8-sig")
         if "Source" not in df_cached.columns or "Translation" not in df_cached.columns:
             return None
-        if "Fingerprint" in df_cached.columns and fingerprint:
-            cached_fp = str(df_cached["Fingerprint"].iloc[0]).strip() if len(df_cached) > 0 else ""
-            if cached_fp and cached_fp != fingerprint:
+        if fingerprint:
+            if "Fingerprint" not in df_cached.columns or len(df_cached) == 0:
+                return None
+            cached_fp = str(df_cached["Fingerprint"].iloc[0]).strip()
+            if cached_fp != fingerprint:
                 return None
         cached_src = [str(s).strip() for s in df_cached["Source"].fillna("")]
         target_src = [str(s).strip() for s in expected_sources]
@@ -109,7 +107,7 @@ def _load_cached_raw_translation(expected_sources: list[str], fingerprint: str =
 @check_file_exists(_4_2_TRANSLATION)
 def translate_all():
     console.print("[bold green]Start Translating All...[/bold green]")
-    chunks = split_chunks_by_chars(chunk_size=1500, max_i=12)
+    chunks = split_chunks_by_chars(chunk_size=2400, max_i=15)
     expected_sources = [line for chunk in chunks for line in chunk.split('\n') if line.strip()]
     fingerprint = _translation_cache_fingerprint()
 
@@ -140,28 +138,18 @@ def translate_all():
                         f.cancel()
                     raise
 
-        results.sort(key=lambda x: x[0])  # Sort results based on original order
+        results.sort(key=lambda x: x[0])  # Sort results based on original chunk index
         
         # 💾 Save results to lists and Excel file
         src_text, trans_text = [], []
         for i, chunk in enumerate(chunks):
             chunk_lines = chunk.split('\n')
             src_text.extend(chunk_lines)
-            
-            # Calculate similarity between current chunk and translation results
-            chunk_text = ''.join(chunk_lines).lower()
-            matching_results = [(r, similar(''.join(r[1].split('\n')).lower(), chunk_text)) 
-                              for r in results]
-            best_match = max(matching_results, key=lambda x: x[1])
-            
-            # Check similarity and handle exceptions
-            if best_match[1] < 0.9:
-                console.print(f"[yellow]Warning: No matching translation found for chunk {i}[/yellow]")
-                raise ValueError(f"Translation matching failed (chunk {i})")
-            elif best_match[1] < 1.0:
-                console.print(f"[yellow]Warning: Similar match found (chunk {i}, similarity: {best_match[1]:.3f})[/yellow]")
-                
-            trans_text.extend(best_match[0][2].split('\n'))
+            _, _, chunk_trans = results[i]
+            trans_lines = chunk_trans.split('\n')
+            if len(trans_lines) != len(chunk_lines):
+                raise ValueError(f"Translation line count mismatch in chunk {i}: expected {len(chunk_lines)}, got {len(trans_lines)}")
+            trans_text.extend(trans_lines)
         
         df_translate = pd.DataFrame({'Source': src_text, 'Translation': trans_text})
         import os
@@ -170,14 +158,10 @@ def translate_all():
         df_to_cache['Fingerprint'] = fingerprint
         df_to_cache.to_csv(_4_2_TRANSLATION_RAW, index=False, encoding='utf-8-sig')
 
-    # Trim long translation text
     df_text = pd.read_excel(_2_CLEANED_CHUNKS)
     df_text['text'] = df_text['text'].str.strip('"').str.strip()
     subtitle_output_configs = [('trans_subs_for_audio.srt', ['Translation'])]
     df_time = align_timestamp(df_text, df_translate, subtitle_output_configs, output_dir=None, for_display=False)
-    console.print(df_time)
-    # apply check_len_then_trim to df_time['Translation'], only when duration > MIN_TRIM_DURATION.
-    df_time['Translation'] = df_time.apply(lambda x: check_len_then_trim(x['Translation'], x['duration']) if x['duration'] > load_key("min_trim_duration") else x['Translation'], axis=1)
     console.print(df_time)
     
     df_time.to_excel(_4_2_TRANSLATION, index=False)

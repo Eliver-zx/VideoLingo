@@ -229,3 +229,106 @@ def test_cloud_asr_cache_keys_and_credential_checks(tmp_path, monkeypatch):
     monkeypatch.setattr(deepgram_asr, "load_key_or", lambda k, d=None: "")
     with pytest.raises(ValueError, match="whisper.deepgram_api_key"):
         deepgram_asr.configured_credentials()
+
+
+# ------------------------------------------------------------------
+# 4. Pipeline Simplification & Edge-Case Regression Tests
+# ------------------------------------------------------------------
+
+def test_split_sentences_by_meaning_preserves_full_sentences(tmp_path, monkeypatch):
+    import core._3_2_split_meaning as meaning
+
+    nlp_txt = tmp_path / "split_by_nlp.txt"
+    meaning_txt = tmp_path / "split_by_meaning.txt"
+    monkeypatch.setattr(meaning, "_3_1_SPLIT_BY_NLP", str(nlp_txt))
+    monkeypatch.setattr(meaning, "_3_2_SPLIT_BY_MEANING", str(meaning_txt))
+
+    with pytest.raises(FileNotFoundError):
+        meaning.split_sentences_by_meaning()
+
+    nlp_txt.write_text("First complete sentence here.\nSecond complete sentence here.\n", encoding="utf-8")
+    meaning.split_sentences_by_meaning()
+
+    assert meaning_txt.read_text(encoding="utf-8") == nlp_txt.read_text(encoding="utf-8")
+
+
+def test_split_for_sub_main_multi_pass_remerged_no_none_and_mtime_skip(tmp_path, monkeypatch):
+    import os
+    import time
+    import core._5_split_sub as module
+
+    trans_xlsx = tmp_path / "translation_results.xlsx"
+    split_xlsx = tmp_path / "translation_results_for_subtitles.xlsx"
+    remerged_xlsx = tmp_path / "translation_results_remerged.xlsx"
+
+    orig_sources = ["word " * 25, "short line"]
+    orig_translations = ["这是一段非常非常长的需要切分很多次的字幕文本内容测试" * 2, "短字幕"]
+    pd.DataFrame({
+        "Source": orig_sources,
+        "Translation": orig_translations,
+    }).to_excel(trans_xlsx, index=False)
+
+    monkeypatch.setattr(module, "_4_2_TRANSLATION", str(trans_xlsx))
+    monkeypatch.setattr(module, "_5_SPLIT_SUB", str(split_xlsx))
+    monkeypatch.setattr(module, "_5_REMERGED", str(remerged_xlsx))
+    monkeypatch.setattr(module, "find_subtitle_file", lambda: None)
+
+    settings = {"subtitle": {"max_length": 40, "target_multiplier": 1.3}, "max_workers": 1}
+    monkeypatch.setattr(module, "load_key", lambda key: settings[key])
+    monkeypatch.setattr(module, "load_key_or", lambda key, default=None: "简体中文" if key == "target_language" else default)
+
+    call_count = {"n": 0}
+
+    def fake_split(sentence, num_parts=2, language=None):
+        call_count["n"] += 1
+        mid = len(sentence) // 2
+        return sentence[:mid] + "\n" + sentence[mid:]
+
+    monkeypatch.setattr(module, "split_sentence", fake_split)
+
+    module.split_for_sub_main()
+    first_calls = call_count["n"]
+    assert first_calls >= 2  # Multi-pass split occurred
+
+    df_remerged = pd.read_excel(remerged_xlsx)
+    assert not df_remerged.isna().any().any()
+    assert df_remerged["Source"].tolist() == orig_sources
+    assert df_remerged["Translation"].tolist() == orig_translations
+
+    # Second run when outputs are up-to-date and within max_length should skip
+    module.split_for_sub_main()
+    assert call_count["n"] == first_calls
+
+    # Tightening subtitle.max_length invalidates the skip even without touching _4_2_TRANSLATION mtime
+    settings["subtitle"]["max_length"] = 20
+    module.split_for_sub_main()
+    after_tighten_calls = call_count["n"]
+    assert after_tighten_calls > first_calls
+
+    # Touching _4_2_TRANSLATION with a newer mtime also invalidates the skip
+    future_time = os.path.getmtime(split_xlsx) + 10.0
+    os.utime(trans_xlsx, (future_time, future_time))
+    time.sleep(0.01)
+    module.split_for_sub_main()
+    assert call_count["n"] > after_tighten_calls
+
+
+def test_align_timestamp_recomputes_duration_after_gap_and_overlap_smoothing():
+    import core._6_gen_sub as gen_sub
+
+    df_text = pd.DataFrame({
+        "text": ["hello", "world", "next", "line"],
+        "start": [0.0, 0.4, 1.4, 2.0],
+        "end": [0.4, 1.0, 1.9, 3.0],
+    })
+    df_translate = pd.DataFrame({
+        "Source": ["hello world", "next line"],
+        "Translation": ["你好世界", "下一行"],
+    })
+    # Gap between line 0 (ends 1.0) and line 1 (starts 1.4) is 0.4s (< 1.0s),
+    # so line 0 end timestamp is extended to 1.4s -> duration must become 1.4s, not 1.0s.
+    res = gen_sub.align_timestamp(df_text, df_translate, [], output_dir=None, for_display=False)
+    assert res.loc[0, "duration"] == pytest.approx(1.4)
+    assert res.loc[1, "duration"] == pytest.approx(1.6)
+
+

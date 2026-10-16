@@ -132,37 +132,11 @@ def _clear_path(path):
 
 
 def _subtitle_length_controls():
-    """Render inline controls for the two subtitle-length tunables.
-
-    Both values live in config.yaml and are read by:
-      - max_split_length    → core/_3_2_split_meaning.py (first pass NLP cut)
-      - subtitle.max_length → core/_5_split_sub.py       (final subtitle line)
-    """
-    DEFAULT_MAX_SPLIT_LENGTH = 20
+    """Render inline control for subtitle.max_length (read by core/_5_split_sub.py)."""
     DEFAULT_MAX_LENGTH = 75
     MAX_LENGTH_KEY = "subtitle.max_length"
 
     with st.expander(t("Subtitle length tuning"), expanded=False):
-        st.caption(
-            t(
-                "These two values control how subtitles are cut. "
-                "Smaller = more, shorter lines. Larger = fewer, longer lines."
-            )
-        )
-
-        new_max_split = st.number_input(
-            t("max_split_length (rough cut, words/tokens per chunk)"),
-            min_value=8,
-            max_value=60,
-            value=int(load_key("max_split_length")),
-            step=1,
-            help=t(
-                "Suggested: 18-25. Below 18 cuts too finely and hurts translation; "
-                "above 25 makes downstream subtitle splitting hard to align."
-            ),
-            key="cfg_max_split_length",
-            width=220,
-        )
         new_max_length = st.number_input(
             t("max_length (max characters per subtitle line)"),
             min_value=20,
@@ -178,20 +152,14 @@ def _subtitle_length_controls():
         )
 
         changed = False
-        if new_max_split != load_key("max_split_length"):
-            update_key("max_split_length", int(new_max_split))
-            changed = True
         if new_max_length != load_key(MAX_LENGTH_KEY):
             update_key(MAX_LENGTH_KEY, int(new_max_length))
             changed = True
 
         if st.button(
-            t("Restore defaults ({split}/{length})")
-            .replace("{split}", str(DEFAULT_MAX_SPLIT_LENGTH))
-            .replace("{length}", str(DEFAULT_MAX_LENGTH)),
+            t("Restore defaults ({length})").replace("{length}", str(DEFAULT_MAX_LENGTH)),
             key="restore_subtitle_length_defaults",
         ):
-            update_key("max_split_length", DEFAULT_MAX_SPLIT_LENGTH)
             update_key(MAX_LENGTH_KEY, DEFAULT_MAX_LENGTH)
             st.rerun()
 

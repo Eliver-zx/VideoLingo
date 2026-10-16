@@ -1,9 +1,6 @@
-import concurrent.futures
 from difflib import SequenceMatcher
-import math
 import re
 from core.prompts import get_split_prompt
-from core.spacy_utils.load_nlp_model import init_nlp
 from core.task_runner import StopTask
 from core.utils import *
 from rich.console import Console
@@ -12,11 +9,7 @@ from core.utils.config_utils import get_text_joiner
 from core.utils.models import _3_1_SPLIT_BY_NLP, _3_2_SPLIT_BY_MEANING
 console = Console()
 
-def tokenize_sentence(sentence, nlp):
-    doc = nlp(sentence)
-    return [token.text for token in doc]
-
-def _resolve_split_joiner(text: str, language: str = None) -> str:
+def _resolve_split_joiner(text: str, language: str | None = None) -> str:
     if language is not None:
         return get_text_joiner(text)
     whisper_language = load_key("whisper.language")
@@ -99,6 +92,8 @@ def split_sentence(sentence, num_parts, word_limit=20, index=-1, retry_attempt=0
         console.print(f"[yellow]⚠️ LLM split failed ({e}), splitting mechanically: {sentence}[/yellow]")
         return mechanical_split(sentence, num_parts, language=language)
     best_split = pick_split(response_data)
+    if best_split is None:
+        return mechanical_split(sentence, num_parts, language=language)
     split_points = find_split_positions(sentence, best_split, language=language)
     # split the sentence based on the split points
     for i, split_point in enumerate(split_points):
@@ -120,50 +115,17 @@ def split_sentence(sentence, num_parts, word_limit=20, index=-1, retry_attempt=0
     
     return best_split
 
-def parallel_split_sentences(sentences, max_length, max_workers, nlp, retry_attempt=0):
-    """Split sentences in parallel using a thread pool."""
-    new_sentences = [None] * len(sentences)
-    futures = []
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for index, sentence in enumerate(sentences):
-            # Use tokenizer to split the sentence
-            tokens = tokenize_sentence(sentence, nlp)
-            # print("Tokenization result:", tokens)
-            num_parts = math.ceil(len(tokens) / max_length)
-            if len(tokens) > max_length:
-                future = executor.submit(split_sentence, sentence, num_parts, max_length, index=index, retry_attempt=retry_attempt)
-                futures.append((future, index, num_parts, sentence))
-            else:
-                new_sentences[index] = [sentence]
-
-        for future, index, num_parts, sentence in futures:
-            split_result = future.result()
-            if split_result:
-                split_lines = split_result.strip().split('\n')
-                new_sentences[index] = [line.strip() for line in split_lines]
-            else:
-                new_sentences[index] = [sentence]
-
-    return [sentence for sublist in new_sentences for sentence in sublist]
-
 @check_file_exists(_3_2_SPLIT_BY_MEANING)
 def split_sentences_by_meaning():
-    """The main function to split sentences by meaning."""
-    # read input sentences
-    with open(_3_1_SPLIT_BY_NLP, 'r', encoding='utf-8') as f:
-        sentences = [line.strip() for line in f.readlines()]
-
-    nlp = init_nlp()
-    # 🔄 process sentences multiple times to ensure all are split
-    for retry_attempt in range(3):
-        sentences = parallel_split_sentences(sentences, max_length=load_key("max_split_length"), max_workers=load_key("max_workers"), nlp=nlp, retry_attempt=retry_attempt)
-
-    # 💾 save results
-    with open(_3_2_SPLIT_BY_MEANING, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(sentences))
-    console.print('[green]✅ All sentences have been successfully split![/green]')
+    """Keep complete sentences from _3_1_SPLIT_BY_NLP intact for translation;
+    short subtitle line splitting is performed after translation in _5_split_sub."""
+    import os
+    import shutil
+    if not os.path.exists(_3_1_SPLIT_BY_NLP):
+        raise FileNotFoundError(f"Missing NLP split file: {_3_1_SPLIT_BY_NLP}")
+    os.makedirs(os.path.dirname(_3_2_SPLIT_BY_MEANING), exist_ok=True)
+    shutil.copyfile(_3_1_SPLIT_BY_NLP, _3_2_SPLIT_BY_MEANING)
+    console.print('[green]✅ Sentences prepared for translation![/green]')
 
 if __name__ == '__main__':
-    # print(split_sentence('Which makes no sense to the... average guy who always pushes the character creation slider all the way to the right.', 2, 22))
     split_sentences_by_meaning()
