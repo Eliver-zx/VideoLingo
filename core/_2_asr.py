@@ -34,11 +34,20 @@ def prepare_audio(media_file, media_type, demucs):
     demucs_audio()
     return normalize_audio_volume(_VOCAL_AUDIO_FILE, _VOCAL_AUDIO_FILE, format="mp3")
 
+SUPPORTED_RUNTIMES = (
+    "local", "elevenlabs", "mai",
+    "deepgram", "assembly", "zero", "replicate_parakeet", "replicate_whisper",
+)
+
 @check_file_exists(_2_CLEANED_CHUNKS)
 def transcribe():
-    runtime = load_key("whisper.runtime")
-    if runtime not in ("local", "elevenlabs", "mai"):
-        raise ValueError("Select local, elevenlabs or mai for whisper.runtime. The 302.ai WhisperX cloud service has been retired.")
+    raw_runtime = str(load_key("whisper.runtime") or "").strip()
+    runtime = "zero" if raw_runtime == "Zero" else raw_runtime
+    if runtime not in SUPPORTED_RUNTIMES:
+        raise ValueError(
+            "Select local, elevenlabs, mai, deepgram, assembly, zero, replicate_parakeet or replicate_whisper "
+            "for whisper.runtime. The 302.ai WhisperX cloud service has been retired."
+        )
     if runtime == "local" and local_backend(load_key("whisper")) == "whisperx":
         from importlib.util import find_spec
         if find_spec("whisperx") is None:
@@ -46,9 +55,22 @@ def transcribe():
     if runtime == "mai":
         from core.asr_backend.mai_asr import configured_credentials
         configured_credentials()
+    elif runtime == "deepgram":
+        from core.asr_backend.deepgram_asr import configured_credentials
+        configured_credentials()
+    elif runtime == "assembly":
+        from core.asr_backend.assembly_asr import configured_credentials
+        configured_credentials()
+    elif runtime == "zero":
+        from core.asr_backend.zero_asr import configured_credentials
+        configured_credentials()
+    elif runtime in ("replicate_parakeet", "replicate_whisper"):
+        from core.asr_backend.replicate_asr import configured_credentials
+        configured_credentials()
     # 1. prepare audio
     media_file, media_type = find_media_file()
     whisper = dict(load_key("whisper"))
+    whisper["runtime"] = runtime
     demucs = load_key("demucs")
     if runtime == "local":
         whisper["backend"] = local_backend(whisper)
@@ -90,6 +112,21 @@ def transcribe():
     elif runtime == "mai":
         from core.asr_backend.mai_asr import transcribe_audio_mai as ts, selected_provider
         rprint(f"[cyan]🎤 Transcribing audio with MAI-Transcribe-2 via {selected_provider()}...[/cyan]")
+    elif runtime == "deepgram":
+        from core.asr_backend.deepgram_asr import transcribe_audio_deepgram as ts
+        rprint("[cyan]🎤 Transcribing audio with Deepgram API...[/cyan]")
+    elif runtime == "assembly":
+        from core.asr_backend.assembly_asr import transcribe_audio_assembly as ts
+        rprint("[cyan]🎤 Transcribing audio with AssemblyAI API...[/cyan]")
+    elif runtime == "zero":
+        from core.asr_backend.zero_asr import transcribe_audio_zero as ts
+        rprint("[cyan]🎤 Transcribing audio with Gladia Zero API...[/cyan]")
+    elif runtime == "replicate_parakeet":
+        from core.asr_backend.replicate_asr import transcribe_audio_replicate_parakeet as ts
+        rprint("[cyan]🎤 Transcribing audio with Replicate Parakeet-TDT-0.6b-v2...[/cyan]")
+    elif runtime == "replicate_whisper":
+        from core.asr_backend.replicate_asr import transcribe_audio_replicate_whisper as ts
+        rprint("[cyan]🎤 Transcribing audio with Replicate WhisperX...[/cyan]")
     else:
         raise ValueError(f"Unsupported ASR runtime: {runtime}")
 

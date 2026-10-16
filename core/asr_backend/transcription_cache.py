@@ -23,7 +23,9 @@ def cache_key(media_file, whisper, demucs):
         for block in iter(lambda: source.read(1024 * 1024), b""):
             check_cancel()
             digest.update(block)
-    if whisper["runtime"] == "mai":
+    runtime = str(whisper.get("runtime", "local")).strip()
+    runtime_lower = runtime.lower()
+    if runtime_lower == "mai":
         from core.asr_backend.mai_asr import CACHE_IDENTITY, OPENROUTER_CACHE_IDENTITY
         # Credentials, Azure region, and local model packages do not change
         # MAI's output. Provider API/response contracts have separate identities.
@@ -34,6 +36,18 @@ def cache_key(media_file, whisper, demucs):
             "schema": SCHEMA, "media_md5": digest.hexdigest(),
             "runtime": "mai", "mai": (CACHE_IDENTITY if provider == "azure"
                                         else OPENROUTER_CACHE_IDENTITY),
+            "language": whisper["language"], "demucs": bool(demucs),
+        }
+        return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    if runtime_lower in ("deepgram", "assembly", "zero", "replicate_parakeet", "replicate_whisper"):
+        cloud_model = None
+        if runtime_lower == "deepgram":
+            cloud_model = whisper.get("deepgram_model", "nova-3")
+        elif runtime_lower == "assembly":
+            cloud_model = f"{whisper.get('assemblyai_model', 'universal')}:{whisper.get('assemblyai_lang', whisper.get('language'))}"
+        identity = {
+            "schema": SCHEMA, "media_md5": digest.hexdigest(),
+            "runtime": runtime_lower, "cloud_model": cloud_model,
             "language": whisper["language"], "demucs": bool(demucs),
         }
         return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()

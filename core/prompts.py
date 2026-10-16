@@ -2,9 +2,41 @@ import json
 from core.utils import *
 
 ## ================================================================
+# @ _3_1_split_nlp.py
+def get_punctuation_prompt(text: str, language: str = None):
+    lang = language or get_source_language()
+    return f"""
+## Role
+You are a speech transcript punctuation specialist in **{lang}**.
+
+## Task
+Restore sentence-ending punctuation (`.`, `?`, `!` or `。`, `？`, `！`) and internal commas into the given ASR transcript segment so that it can be split into complete, natural conversational sentences.
+
+## Rules
+1. **Strict Word Preservation**: NEVER change, add, delete, or reorder any word, character, or number from the input text. Only insert or fix punctuation marks.
+2. **Complete Natural Sentences**: Place a sentence-ending mark (`.`, `?`, `!`, `。`, `？`, `！`) at the end of every complete conversational sentence (one full thought).
+3. **Break Spoken Run-ons & Comma Splices**: In spoken transcripts, speakers often chain multiple independent clauses together using commas or filler conjunctions (`and`, `so`, `but`, `then`, `because`, `然后`, `所以`, `但是`, `而且`). Whenever the preceding clause already expresses a complete thought, end it with a period (`.` or `。`) instead of chaining a long run-on sentence with commas.
+4. **No Fragmentation**: Keep dependent clauses, short modifiers, and prepositional phrases attached to their main clause; do not put periods inside a single incomplete phrase.
+
+## INPUT
+<transcript>
+{text}
+</transcript>
+
+## Output in only JSON format and no other text
+```json
+{{
+    "restored": "The exact input transcript with proper punctuation restored."
+}}
+```
+
+Note: Start your answer with ```json and end with ```, do not add any other text.
+""".strip()
+
+## ================================================================
 # @ step4_splitbymeaning.py
-def get_split_prompt(sentence, num_parts = 2, word_limit = 20):
-    language = get_source_language()
+def get_split_prompt(sentence, num_parts = 2, word_limit = 20, language = None):
+    language = language or get_source_language()
     split_prompt = f"""
 ## Role
 You are a professional Netflix subtitle splitter in **{language}**.
@@ -43,11 +75,6 @@ Note: Start you answer with ```json and end with ```, do not add any other text.
 """.strip()
     return split_prompt
 
-"""{{
-    "analysis": "Brief analysis of the text structure",
-    "split": "Complete sentence with [br] tags at split positions"
-}}"""
-
 ## ================================================================
 # @ step4_1_summarize.py
 def get_summary_prompt(source_content, custom_terms_json=None):
@@ -56,33 +83,39 @@ def get_summary_prompt(source_content, custom_terms_json=None):
     
     # add custom terms note
     terms_note = ""
-    if custom_terms_json:
+    if custom_terms_json and custom_terms_json.get('terms'):
         terms_list = []
         for term in custom_terms_json['terms']:
-            terms_list.append(f"- {term['src']}: {term['tgt']} ({term['note']})")
-        terms_note = "\n### Existing Terms\nPlease exclude these terms in your extraction:\n" + "\n".join(terms_list)
+            terms_list.append(f"- {term['src']}: {term['tgt']} ({term.get('note', '')})")
+        terms_note = (
+            "\n### Reference & Existing Terms\n"
+            "Exclude exact matches already listed below, but DO extract any ASR spelling/phonetic variants "
+            "of these terms that appear in the text and map them to the same translation:\n"
+            + "\n".join(terms_list)
+        )
     
     summary_prompt = f"""
 ## Role
-You are a video translation expert and terminology consultant, specializing in {src_lang} comprehension and {tgt_lang} expression optimization.
+You are a video translation expert and terminology curator, specializing in {src_lang} ASR transcript analysis and {tgt_lang} localization.
 
 ## Task
-For the provided {src_lang} video text:
-1. Summarize main topic in two sentences
-2. Extract professional terms/names with {tgt_lang} translations (excluding existing terms)
-3. Provide brief explanation for each term
+For the provided {src_lang} video transcript:
+1. Summarize the main topic and core point in two sentences (`theme`).
+2. Extract only the essential terminology and ASR variants needed to prevent mistranslation or inconsistency (`terms`).
 
 {terms_note}
 
-Steps:
-1. Topic Summary:
-   - Quick scan for general understanding
-   - Write two sentences: first for main topic, second for key point
-2. Term Extraction:
-   - Mark professional terms and names (excluding those listed in Existing Terms)
-   - Provide {tgt_lang} translation or keep original
-   - Add brief explanation
-   - Extract less than 15 terms
+## Extraction Rules (Precision & Recall Balance)
+1. **What to Extract (Must meet at least one)**:
+   - **Proper Nouns & Entities**: Names of people, brands, studios, products, games, locations, specific weapons/skills/mechanisms.
+   - **Domain Jargon & Polysemous Terms**: Words that have an everyday meaning but carry a specialized meaning in this video's context (where literal translation would be wrong).
+   - **ASR Misrecognitions / Spelling Variants**: Terms in `<text>` that are phonetically misrecognized or misspelled by ASR. Extract the **exact surface form as written in `<text>`** in `src`, and provide the correct `{tgt_lang}` translation in `tgt`.
+   - **Technical Acronyms & Code Names**.
+2. **Counterfactual Exclusion Test (Strict Filter)**:
+   - Before extracting any term, ask: *"If this word is NOT in the glossary and a translator translates it literally, will it be wrong or inconsistent?"*
+   - If a literal translation is already unambiguous and accurate (e.g., generic words like `system`, `video`, `performance`, `database`, `algorithm`, `player`, `website`, `update`), **DO NOT extract it**.
+3. **Translation Requirement**:
+   - Provide the accurate `{tgt_lang}` translation in `tgt` (only universally kept acronyms like `AI`, `API`, `CPU`, `GPU` may stay in their original form).
 
 ## INPUT
 <text>
@@ -90,36 +123,20 @@ Steps:
 </text>
 
 ## Output in only JSON format and no other text
+```json
 {{
   "theme": "Two-sentence video summary",
   "terms": [
     {{
-      "src": "{src_lang} term",
-      "tgt": "{tgt_lang} translation or original", 
-      "note": "Brief explanation"
-    }},
-    ...
-  ]
-}}  
-
-## Example
-{{
-  "theme": "本视频介绍人工智能在医疗领域的应用现状。重点展示了AI在医学影像诊断和药物研发中的突破性进展。",
-  "terms": [
-    {{
-      "src": "Machine Learning",
-      "tgt": "机器学习",
-      "note": "AI的核心技术，通过数据训练实现智能决策"
-    }},
-    {{
-      "src": "CNN",
-      "tgt": "CNN",
-      "note": "卷积神经网络，用于医学图像识别的深度学习模型"
+      "src": "exact {src_lang} term or ASR variant in text",
+      "tgt": "{tgt_lang} translation", 
+      "note": "Brief context or note (mention standard spelling if ASR variant)"
     }}
   ]
 }}
+```
 
-Note: Start you answer with ```json and end with ```, do not add any other text.
+Note: Start your answer with ```json and end with ```, do not add any other text.
 """.strip()
     return summary_prompt
 

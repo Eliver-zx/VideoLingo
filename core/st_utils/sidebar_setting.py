@@ -222,8 +222,12 @@ def page_setting():
                 update_key("whisper.language", langs[lang])
                 st.rerun()
 
-        runtimes = ["local", "elevenlabs", "mai"]
-        configured_runtime = load_key("whisper.runtime")
+        runtimes = [
+            "local", "elevenlabs", "mai",
+            "deepgram", "assembly", "zero", "replicate_parakeet", "replicate_whisper",
+        ]
+        raw_runtime = str(load_key("whisper.runtime") or "")
+        configured_runtime = "zero" if raw_runtime == "Zero" else raw_runtime
         if configured_runtime not in runtimes:
             st.warning(t("The 302.ai WhisperX cloud service has been retired. Select Local or ElevenLabs to continue."))
         runtime = st.selectbox(
@@ -234,6 +238,11 @@ def page_setting():
                 "local": t("Local"),
                 "elevenlabs": t("ElevenLabs"),
                 "mai": t("MAI-Transcribe-2"),
+                "deepgram": "Deepgram",
+                "assembly": "AssemblyAI",
+                "zero": "Gladia Zero",
+                "replicate_parakeet": "Replicate Parakeet",
+                "replicate_whisper": "Replicate WhisperX",
             }[x],
             help=t(
                 "Local Qwen3-ASR runs best on an NVIDIA GPU or Apple Silicon (CPU works but is slow); cloud recognition requires a provider API key."
@@ -261,6 +270,17 @@ def page_setting():
                 st.warning(t("WhisperX is not installed. Follow the manual page (docs/pages/docs/whisperx-manual.en-US.md) and install the extra packages yourself, or set whisper.backend to qwen."))
         if runtime == "elevenlabs":
             config_input(t("ElevenLabs API"), "whisper.elevenlabs_api_key")
+        elif runtime == "deepgram":
+            config_input("Deepgram API Key", "whisper.deepgram_api_key")
+            config_input("Deepgram Model", "whisper.deepgram_model")
+        elif runtime == "assembly":
+            config_input("AssemblyAI API Key", "whisper.assembly_api_key")
+            config_input("AssemblyAI Lang", "whisper.assemblyai_lang")
+            config_input("AssemblyAI Model", "whisper.assemblyai_model")
+        elif runtime == "zero":
+            config_input("Gladia Zero API Key", "whisper.whisperzero_api_key")
+        elif runtime in ("replicate_parakeet", "replicate_whisper"):
+            config_input("Replicate API Key", "whisper.replicate_api_key")
         elif runtime == "mai":
             from core.asr_backend.mai_asr import detect_region
 

@@ -8,6 +8,7 @@ from core.task_runner import StopTask
 from core.utils import *
 from rich.console import Console
 from rich.table import Table
+from core.utils.config_utils import get_text_joiner
 from core.utils.models import _3_1_SPLIT_BY_NLP, _3_2_SPLIT_BY_MEANING
 console = Console()
 
@@ -15,13 +16,18 @@ def tokenize_sentence(sentence, nlp):
     doc = nlp(sentence)
     return [token.text for token in doc]
 
-def find_split_positions(original, modified):
+def _resolve_split_joiner(text: str, language: str = None) -> str:
+    if language is not None:
+        return get_text_joiner(text)
+    whisper_language = load_key("whisper.language")
+    lang = load_key("whisper.detected_language") if whisper_language == 'auto' else whisper_language
+    return get_joiner(lang)
+
+def find_split_positions(original, modified, language=None):
     split_positions = []
     parts = modified.split('[br]')
     start = 0
-    whisper_language = load_key("whisper.language")
-    language = load_key("whisper.detected_language") if whisper_language == 'auto' else whisper_language
-    joiner = get_joiner(language)
+    joiner = _resolve_split_joiner(original, language)
 
     for i in range(len(parts) - 1):
         max_similarity = 0
@@ -61,23 +67,24 @@ def pick_split(response_data):
             return split
     return None
 
-def mechanical_split(sentence, num_parts):
+def mechanical_split(sentence, num_parts, language=None):
     """Split into roughly equal parts without the LLM: at punctuation, else at a space."""
     lines, rest = [], sentence.strip()
+    joiner = _resolve_split_joiner(sentence, language)
     for parts_left in range(num_parts, 1, -1):
         target, window = len(rest) // parts_left, max(1, len(rest) // (parts_left * 3))
         nearby = range(max(1, target - window), min(len(rest) - 1, target + window) + 1)
         cuts = [i for i in nearby if rest[i - 1] in BREAK_MARKS] or [i for i in nearby if rest[i].isspace()]
-        if not cuts and get_joiner(get_source_language()) == " ":
+        if not cuts and joiner == " ":
             break  # never cut inside a word
         cut = min(cuts, key=lambda i: abs(i - target)) if cuts else target
         lines.append(rest[:cut].strip())
         rest = rest[cut:].strip()
     return '\n'.join(line for line in lines + [rest] if line)
 
-def split_sentence(sentence, num_parts, word_limit=20, index=-1, retry_attempt=0):
+def split_sentence(sentence, num_parts, word_limit=20, index=-1, retry_attempt=0, language=None):
     """Split a long sentence using GPT and return the result as a string."""
-    split_prompt = get_split_prompt(sentence, num_parts, word_limit)
+    split_prompt = get_split_prompt(sentence, num_parts, word_limit) if language is None else get_split_prompt(sentence, num_parts, word_limit, language=language)
     def valid_split(response_data):
         if pick_split(response_data) is None:
             return {"status": "error", "message": "Split failed, no [br] found"}
@@ -90,9 +97,9 @@ def split_sentence(sentence, num_parts, word_limit=20, index=-1, retry_attempt=0
     except Exception as e:
         # One sentence the model cannot split should not stop the whole video
         console.print(f"[yellow]⚠️ LLM split failed ({e}), splitting mechanically: {sentence}[/yellow]")
-        return mechanical_split(sentence, num_parts)
+        return mechanical_split(sentence, num_parts, language=language)
     best_split = pick_split(response_data)
-    split_points = find_split_positions(sentence, best_split)
+    split_points = find_split_positions(sentence, best_split, language=language)
     # split the sentence based on the split points
     for i, split_point in enumerate(split_points):
         if i == 0:

@@ -1,11 +1,13 @@
+import inspect
+import re
 import pandas as pd
 from typing import List, Tuple
 import concurrent.futures
 
 from core._1_ytdlp import find_subtitle_file
-from core._3_2_split_meaning import split_sentence
+from core._3_2_split_meaning import split_sentence as _default_split_sentence
 from core.task_runner import StopTask
-from core.prompts import get_align_prompt
+from core.prompts import get_align_prompt as _default_get_align_prompt
 from rich.panel import Panel
 from rich.console import Console
 from rich.table import Table
@@ -13,6 +15,18 @@ from core.utils import *
 from core.utils.config_utils import get_text_joiner
 from core.utils.models import *
 console = Console()
+
+split_sentence = _default_split_sentence
+get_align_prompt = _default_get_align_prompt
+
+_LEADING_PUNCT_RE = re.compile(r'^[\s，。、“”‘’！!？?：:；;（）()【】\[\]《》<>…—\-·]+')
+_CLAUSE_PUNCT = set(',;:，、；：—')
+_BREAK_CONJUNCTIONS = {
+    'and', 'but', 'or', 'so', 'because', 'since', 'although', 'though',
+    'while', 'when', 'where', 'which', 'that', 'who', 'if', 'unless',
+    'until', 'before', 'after', 'whether', 'as', 'yet', 'nor',
+    'to', 'for', 'with', 'in', 'on', 'at', 'from', 'by', 'about',
+}
 
 # ! You can modify your own weights here
 # Chinese and Japanese 2.5 characters, Korean 2 characters, Thai 1.5 characters, full-width symbols 2 characters, other English-based and half-width symbols 1 character
@@ -71,11 +85,142 @@ def align_subs(src_sub: str, tr_sub: str, src_part: str) -> Tuple[List[str], Lis
     
     return src_parts, tr_parts, tr_remerged
 
+def _find_spaced_cut(words: List[str], weights: List[float], start_idx: int, end_idx: int, target_ratio: float) -> int:
+    """Find a phrase-aware word cut index in (start_idx, end_idx) near target_ratio."""
+    if end_idx - start_idx <= 1:
+        return start_idx + 1
+    seg_weights = weights[start_idx:end_idx]
+    total_w = sum(seg_weights) or float(end_idx - start_idx)
+    target_w = target_ratio * total_w
+
+    cum = 0.0
+    ideal_cut = start_idx + 1
+    min_diff = float('inf')
+    for idx in range(start_idx + 1, end_idx):
+        cum += weights[idx - 1]
+        diff = abs(cum - target_w)
+        if diff < min_diff:
+            min_diff = diff
+            ideal_cut = idx
+
+    window = 3
+    low = max(start_idx + 1, ideal_cut - window)
+    high = min(end_idx - 1, ideal_cut + window)
+
+    best_cut = ideal_cut
+    best_score = -float('inf')
+    for cut in range(low, high + 1):
+        prev_word = words[cut - 1]
+        next_word = words[cut]
+        if prev_word.endswith('-') or next_word.startswith('-'):
+            continue
+        dist_penalty = abs(cut - ideal_cut) * 0.35
+        bonus = 0.0
+        if prev_word and prev_word[-1] in _CLAUSE_PUNCT:
+            bonus = 2.0
+        else:
+            clean_next = re.sub(r'^[^\w]+|[^\w]+$', '', next_word).lower()
+            if clean_next in _BREAK_CONJUNCTIONS:
+                bonus = 1.1
+        score = bonus - dist_penalty
+        if score > best_score:
+            best_score = score
+            best_cut = cut
+    return best_cut
+
+def align_source_by_ratio(src_sub: str, tr_sub: str, tr_split: str) -> Tuple[List[str], List[str], str]:
+    """Split source sentence locally according to target-language split parts and phrase boundaries."""
+    tr_parts = [p.strip() for p in tr_split.split('\n') if p.strip()]
+    tr_remerged = join_words(tr_parts, get_text_joiner(''.join(tr_parts))) if tr_parts else str(tr_sub)
+    if len(tr_parts) < 2:
+        return [src_sub], [tr_sub], str(tr_sub)
+
+    tr_lens = [max(1.0, calc_len(p)) for p in tr_parts]
+    total_tr_len = sum(tr_lens)
+    ratios = [length / total_tr_len for length in tr_lens]
+    num_parts = len(tr_parts)
+
+    src_joiner = get_text_joiner(src_sub)
+    if src_joiner == " ":
+        src_words = src_sub.split()
+        if len(src_words) < num_parts:
+            return [src_sub], [tr_sub], tr_remerged
+        weights = [max(1.0, calc_len(w)) for w in src_words]
+        src_parts = []
+        start_idx = 0
+        rem_ratio = 1.0
+        for part_idx in range(num_parts - 1):
+            parts_left = num_parts - part_idx
+            max_end = len(src_words) - (parts_left - 1)
+            rel_ratio = ratios[part_idx] / rem_ratio if rem_ratio > 0 else 1.0 / parts_left
+            cut_idx = _find_spaced_cut(src_words, weights, start_idx, len(src_words), rel_ratio)
+            cut_idx = min(max(start_idx + 1, cut_idx), max_end)
+            src_parts.append(" ".join(src_words[start_idx:cut_idx]))
+            start_idx = cut_idx
+            rem_ratio = max(1e-6, rem_ratio - ratios[part_idx])
+        src_parts.append(" ".join(src_words[start_idx:]))
+    else:
+        src_chars = list(src_sub.strip())
+        if len(src_chars) < num_parts:
+            return [src_sub], [tr_sub], tr_remerged
+        weights = [max(1.0, calc_len(c)) for c in src_chars]
+        src_parts = []
+        start_idx = 0
+        rem_ratio = 1.0
+        for part_idx in range(num_parts - 1):
+            parts_left = num_parts - part_idx
+            max_end = len(src_chars) - (parts_left - 1)
+            rel_ratio = ratios[part_idx] / rem_ratio if rem_ratio > 0 else 1.0 / parts_left
+            seg_w = sum(weights[start_idx:])
+            target_w = rel_ratio * seg_w
+            cum = 0.0
+            ideal_cut = start_idx + 1
+            min_diff = float('inf')
+            for idx in range(start_idx + 1, max_end + 1):
+                cum += weights[idx - 1]
+                diff = abs(cum - target_w)
+                if diff < min_diff:
+                    min_diff = diff
+                    ideal_cut = idx
+            window = 4
+            low = max(start_idx + 1, ideal_cut - window)
+            high = min(max_end, ideal_cut + window)
+            punct_cuts = [i for i in range(low, high + 1) if src_chars[i - 1] in _CLAUSE_PUNCT]
+            cut_idx = min(punct_cuts, key=lambda i: abs(i - ideal_cut)) if punct_cuts else ideal_cut
+            src_parts.append("".join(src_chars[start_idx:cut_idx]).strip())
+            start_idx = cut_idx
+            rem_ratio = max(1e-6, rem_ratio - ratios[part_idx])
+        src_parts.append("".join(src_chars[start_idx:]).strip())
+
+    if any(not p.strip() for p in src_parts) or len(src_parts) != len(tr_parts):
+        return [src_sub], [tr_sub], tr_remerged
+
+    table = Table(title="🔗 Aligned parts")
+    table.add_column("Language", style="cyan")
+    table.add_column("Parts", style="magenta")
+    table.add_row("SRC_LANG", "\n".join(src_parts))
+    table.add_row("TARGET_LANG", "\n".join(tr_parts))
+    console.print(table)
+
+    return src_parts, tr_parts, tr_remerged
+
+def _call_split_sentence(text: str, num_parts: int = 2, language: str = None) -> str:
+    if language is not None:
+        try:
+            sig = inspect.signature(split_sentence)
+            if "language" in sig.parameters:
+                return split_sentence(text, num_parts=num_parts, language=language)
+        except (TypeError, ValueError):
+            pass
+    return split_sentence(text, num_parts=num_parts)
+
 def split_align_subs(src_lines: List[str], tr_lines: List[str]):
     subtitle_set = load_key("subtitle")
     MAX_SUB_LENGTH = subtitle_set["max_length"]
     TARGET_SUB_MULTIPLIER = subtitle_set["target_multiplier"]
     remerged_tr_lines = tr_lines.copy()
+    target_language = load_key_or("target_language", None)
+    use_legacy_align = (get_align_prompt is not _default_get_align_prompt)
     
     to_split = []
     for i, (src, tr) in enumerate(zip(src_lines, tr_lines)):
@@ -91,13 +236,21 @@ def split_align_subs(src_lines: List[str], tr_lines: List[str]):
     
     @except_handler("Error in split_align_subs")
     def process(i):
-        split_src = split_sentence(src_lines[i], num_parts=2).strip()
-        if len([part for part in split_src.split('\n') if part.strip()]) < 2:
-            console.print(f"[yellow]⚠️ Line {i} could not be split, keeping it as is[/yellow]")
-            return
-        src_parts, tr_parts, tr_remerged = align_subs(src_lines[i], tr_lines[i], split_src)
+        if use_legacy_align:
+            split_src = _call_split_sentence(src_lines[i], num_parts=2).strip()
+            if len([part for part in split_src.split('\n') if part.strip()]) < 2:
+                console.print(f"[yellow]⚠️ Line {i} could not be split, keeping it as is[/yellow]")
+                return
+            src_parts, tr_parts, tr_remerged = align_subs(src_lines[i], tr_lines[i], split_src)
+        else:
+            tr_clean = _LEADING_PUNCT_RE.sub('', str(tr_lines[i])).strip() or str(tr_lines[i]).strip()
+            split_tr = _call_split_sentence(tr_clean, num_parts=2, language=target_language).strip()
+            if len([part for part in split_tr.split('\n') if part.strip()]) < 2:
+                console.print(f"[yellow]⚠️ Line {i} could not be split, keeping it as is[/yellow]")
+                return
+            src_parts, tr_parts, tr_remerged = align_source_by_ratio(str(src_lines[i]), str(tr_lines[i]), split_tr)
         # Source and translation must stay in step: a line is split on both sides or not at all
-        if not tr_parts or len(src_parts) != len(tr_parts):
+        if not tr_parts or len(src_parts) < 2 or len(src_parts) != len(tr_parts):
             console.print(f"[yellow]⚠️ Line {i} was aligned into a different number of parts, keeping it as is[/yellow]")
             return
         src_lines[i] = src_parts
