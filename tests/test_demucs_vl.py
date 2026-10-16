@@ -11,7 +11,6 @@ import numpy as np
 import pytest
 
 pytest.importorskip("torch")
-pytest.importorskip("demucs.api")
 
 from core.asr_backend import demucs_vl
 from core.asr_backend.audio_preprocess import normalize_audio_volume
@@ -130,3 +129,54 @@ def test_long_audio_is_separated_in_chunks(raw_mp3, fake_demucs, monkeypatch):
     assert shapes == [7 * 44100, 8 * 44100, 8 * 44100, samples - 17 * 44100]
     assert [open(stem, "rb").read() for stem in (_VOCAL_AUDIO_FILE, _BACKGROUND_AUDIO_FILE)] == whole
     assert sorted(os.listdir("output/audio")) == ["background.mp3", "raw.mp3", "vocal.mp3"]
+
+
+def test_audio_separator_stems_are_sample_aligned_with_raw(raw_mp3, tmp_path, monkeypatch):
+    """Non-Demucs models (mdx, scnet, mel_band_roformer) preserve <= 1 sample alignment."""
+    import sys
+    import types
+    import soundfile as sf
+
+    class FakeModelInstance:
+        def __init__(self, output_dir):
+            self.output_dir = output_dir
+
+    class FakeFileSeparator:
+        def __init__(self, model_file_dir=None, output_format="WAV", sample_rate=44100):
+            # Real python-audio-separator defaults output_dir to os.getcwd()
+            self.output_dir = os.getcwd()
+            self.model_instance = None
+
+        def load_model(self, model_filename):
+            self.model_filename = model_filename
+            # Real python-audio-separator freezes self.output_dir into model_instance on load_model
+            self.model_instance = FakeModelInstance(self.output_dir)
+
+        def separate(self, input_wav):
+            data, sr = sf.read(input_wav, dtype="float32", always_2d=True)
+            # Real python-audio-separator writes using model_instance.output_dir and returns relative filenames
+            # with the model name appended (including 'Vocal' in Kim_Vocal_2 or vocals_mel_band_roformer).
+            assert self.model_instance is not None
+            out_dir = self.model_instance.output_dir
+            model_stem = os.path.splitext(self.model_filename)[0]
+            inst_rel = f"chunk_in_(Instrumental)_{model_stem}.wav"
+            vocal_rel = f"chunk_in_(Vocals)_{model_stem}.wav"
+            sf.write(os.path.join(out_dir, inst_rel), data * 0.2, sr, subtype="FLOAT")
+            sf.write(os.path.join(out_dir, vocal_rel), data * 0.8, sr, subtype="FLOAT")
+            return [inst_rel, vocal_rel]
+
+    fake_pkg = types.ModuleType("audio_separator")
+    fake_mod = types.ModuleType("audio_separator.separator")
+    fake_mod.Separator = FakeFileSeparator  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "audio_separator", fake_pkg)
+    monkeypatch.setitem(sys.modules, "audio_separator.separator", fake_mod)
+
+    demucs_vl.demucs_audio(model_key="mel_band_roformer")
+
+    raw = load_audio_segment(_RAW_AUDIO_FILE, 0, 20)
+    for stem in (_VOCAL_AUDIO_FILE, _BACKGROUND_AUDIO_FILE):
+        decoded = load_audio_segment(stem, 0, 20)
+        assert abs(lag(raw, decoded)) <= 1, stem
+        assert abs(len(decoded) - len(raw)) <= SR // 100
+
+

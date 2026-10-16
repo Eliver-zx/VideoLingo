@@ -8,7 +8,6 @@ from core.utils.models import *
 import pandas as pd
 import soundfile as sf
 console = Console()
-from core.utils.models import *
 
 def time_to_samples(time_str, sr):
     """Unified time conversion function"""
@@ -24,9 +23,13 @@ def extract_audio(audio_data, sr, start_time, end_time, out_file):
     sf.write(out_file, audio_data[start:end], sr)
 
 def extract_refer_audio_main():
-    if find_spec("demucs") is not None:
-        from core.asr_backend.demucs_vl import demucs_audio
+    from core.asr_backend.demucs_vl import demucs_audio, separation_backend_package
+    pkg = separation_backend_package()
+    if find_spec(pkg) is not None:
         demucs_audio()  # Dubbing normally keeps the original background track.
+        reference_audio = _VOCAL_AUDIO_FILE
+    elif pkg != "demucs" and find_spec("demucs") is not None:
+        demucs_audio(model_key="htdemucs")
         reference_audio = _VOCAL_AUDIO_FILE
     else:
         rprint(Panel(
@@ -35,9 +38,18 @@ def extract_refer_audio_main():
             title="Info", border_style="yellow",
         ))
         reference_audio = _RAW_AUDIO_FILE
-    if os.path.exists(os.path.join(_AUDIO_REFERS_DIR, '1.wav')):
-        rprint(Panel("Reference audio already exists, skipping extraction", title="Info", border_style="blue"))
-        return
+    first_refer = os.path.join(_AUDIO_REFERS_DIR, '1.wav')
+    if os.path.exists(first_refer):
+        try:
+            ref_up_to_date = (
+                not os.path.exists(reference_audio)
+                or os.path.getmtime(first_refer) >= os.path.getmtime(reference_audio)
+            )
+        except OSError:
+            ref_up_to_date = True
+        if ref_up_to_date:
+            rprint(Panel("Reference audio already exists, skipping extraction", title="Info", border_style="blue"))
+            return
 
     # Create output directory
     os.makedirs(_AUDIO_REFERS_DIR, exist_ok=True)

@@ -332,3 +332,193 @@ def test_align_timestamp_recomputes_duration_after_gap_and_overlap_smoothing():
     assert res.loc[1, "duration"] == pytest.approx(1.6)
 
 
+# ------------------------------------------------------------------
+# 5. Vocal Separation Models (HTDemucs, MDX-Net, SCNet, Mel-Band-RoFormer)
+# ------------------------------------------------------------------
+
+def test_vocal_separation_model_resolution_and_backend_package(monkeypatch):
+    from core.asr_backend import demucs_vl
+
+    monkeypatch.setattr(demucs_vl, "load_key_or", lambda k, d=None: "mel_band_roformer")
+    assert demucs_vl.resolve_separation_model() == "mel_band_roformer"
+    assert demucs_vl.separation_backend_package() == "audio_separator"
+    assert demucs_vl.separation_backend_package("htdemucs") == "demucs"
+    assert demucs_vl.separation_backend_package("mdx") == "audio_separator"
+    assert demucs_vl.separation_backend_package("scnet") == "torch"
+
+    assert demucs_vl._classify_stem_filename("chunk_in_(Instrumental)_Kim_Vocal_2.wav") == "instrumental"
+    assert demucs_vl._classify_stem_filename("chunk_in_(Vocals)_Kim_Vocal_2.wav") == "vocals"
+    assert demucs_vl._classify_stem_filename("chunk_in_(Instrumental)_vocals_mel_band_roformer.wav") == "instrumental"
+    assert demucs_vl._classify_stem_filename("chunk_in_(Vocals)_vocals_mel_band_roformer.wav") == "vocals"
+
+    with pytest.raises(ValueError, match="vocal_separation_model"):
+        demucs_vl.resolve_separation_model("unknown_model")
+
+
+def test_audio_separator_adapter_separates_and_matches_sample_length(tmp_path, monkeypatch):
+    import os
+    import sys
+    import types
+    import numpy as np
+    import soundfile as sf
+    import torch
+    from core.asr_backend import demucs_vl
+
+    loaded = {}
+
+    class FakeModelInstance:
+        def __init__(self, output_dir):
+            self.output_dir = output_dir
+
+    class FakeFileSeparator:
+        def __init__(self, model_file_dir=None, output_format="WAV", sample_rate=44100):
+            loaded["init"] = (model_file_dir, output_format, sample_rate)
+            self.output_dir = os.getcwd()
+            self.model_instance = None
+
+        def load_model(self, model_filename):
+            loaded["model"] = model_filename
+            self.model_instance = FakeModelInstance(self.output_dir)
+
+        def separate(self, input_wav):
+            data, sr = sf.read(input_wav, dtype="float32", always_2d=True)
+            assert self.model_instance is not None
+            # Verify model_instance.output_dir was synced away from os.getcwd()
+            out_dir = self.model_instance.output_dir
+            assert out_dir != os.getcwd()
+            model_stem = os.path.splitext(loaded["model"])[0]
+            # Realistic order/names: vocals first, instrumental second with 'Vocal' in model name
+            vocal_rel = f"chunk_in_(Vocals)_{model_stem}.wav"
+            inst_rel = f"chunk_in_(Instrumental)_{model_stem}.wav"
+            padded = np.vstack([data, np.zeros((12, data.shape[1]), dtype=np.float32)])
+            sf.write(os.path.join(out_dir, vocal_rel), padded * 0.75, sr, subtype="FLOAT")
+            sf.write(os.path.join(out_dir, inst_rel), padded * 0.25, sr, subtype="FLOAT")
+            return [vocal_rel, inst_rel]
+
+    fake_pkg = types.ModuleType("audio_separator")
+    fake_mod = types.ModuleType("audio_separator.separator")
+    fake_mod.Separator = FakeFileSeparator  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "audio_separator", fake_pkg)
+    monkeypatch.setitem(sys.modules, "audio_separator.separator", fake_mod)
+
+    adapter = demucs_vl.AudioSeparatorAdapter(
+        model_filename="Kim_Vocal_2.onnx",
+        model_dir=str(tmp_path / "models"),
+    )
+    assert loaded["model"] == "Kim_Vocal_2.onnx"
+
+    wav = torch.ones((2, 4410), dtype=torch.float32) * 0.5
+    _, outputs = adapter.separate_tensor(wav, 44100)
+    assert outputs["vocals"].shape == (2, 4410)
+    assert outputs["other"].shape == (2, 4410)
+    assert torch.allclose(outputs["vocals"], wav * 0.75, atol=1e-5)
+    assert torch.allclose(outputs["other"], wav * 0.25, atol=1e-5)
+
+
+def test_native_scnet_forward_and_adapter_contract(tmp_path, monkeypatch):
+    import torch
+    from core.asr_backend import scnet_vl
+
+    # Tiny SCNet config to verify the full STFT -> SDblock -> DualPathRNN -> SUlayer -> iSTFT pipeline
+    tiny_cfg = {
+        "sources": ["drums", "bass", "other", "vocals"],
+        "audio_channels": 2,
+        "dims": [4, 8, 16],
+        "nfft": 512,
+        "hop_size": 128,
+        "win_size": 512,
+        "normalized": True,
+        "band_SR": [0.225, 0.372, 0.403],
+        "band_stride": [1, 2, 4],
+        "band_kernel": [3, 2, 4],
+        "conv_depths": [1, 1, 1],
+        "compress": 2,
+        "conv_kernel": 3,
+        "num_dplayer": 2,
+        "expand": 1,
+    }
+    model = scnet_vl.SCNet(**tiny_cfg)
+    ckpt = tmp_path / "tiny_scnet.ckpt"
+    torch.save({"state_dict": model.state_dict()}, str(ckpt))
+
+    monkeypatch.setattr(scnet_vl, "SCNET_LARGE_CONFIG", tiny_cfg)
+    monkeypatch.setattr(scnet_vl.SCNetSeparatorAdapter, "chunk_size", 2048)
+    adapter = scnet_vl.SCNetSeparatorAdapter(model_filename="tiny_scnet.ckpt", model_dir=str(tmp_path))
+
+    wav = torch.randn((2, 3000), dtype=torch.float32) * 0.2
+    _, outputs = adapter.separate_tensor(wav, 44100)
+    assert set(outputs.keys()) == {"drums", "bass", "other", "vocals"}
+    for stem in outputs.values():
+        assert stem.shape == (2, 3000)
+        assert torch.isfinite(stem).all()
+
+
+def test_refer_audio_uses_selected_audio_separator_backend_and_refreshes_on_newer_vocal(tmp_path, monkeypatch):
+    import os
+    import time
+    import numpy as np
+    import core._9_refer_audio as refer
+    from core.asr_backend import demucs_vl
+
+    refers = tmp_path / "refers"
+    vocal_file = tmp_path / "vocal.mp3"
+    vocal_file.write_bytes(b"vocal track")
+    monkeypatch.setattr(refer, "_AUDIO_REFERS_DIR", str(refers))
+    monkeypatch.setattr(refer, "_VOCAL_AUDIO_FILE", str(vocal_file))
+    monkeypatch.setattr(refer, "find_spec", lambda name: object() if name == "audio_separator" else None)
+    monkeypatch.setattr(demucs_vl, "separation_backend_package", lambda model_key=None: "audio_separator")
+
+    called = []
+    monkeypatch.setattr(demucs_vl, "demucs_audio", lambda model_key=None: called.append(model_key or "configured"))
+    monkeypatch.setattr(refer.pd, "read_excel", lambda path: pd.DataFrame(
+        {"number": [1], "start_time": ["00:00:00,000"], "end_time": ["00:00:01,000"]}
+    ))
+    read_calls = []
+    monkeypatch.setattr(refer.sf, "read", lambda path: (read_calls.append(path) or np.zeros(16000, dtype="float32"), 16000))
+
+    refer.extract_refer_audio_main()
+    assert called == ["configured"]
+    assert len(read_calls) == 1
+    assert (refers / "1.wav").exists()
+
+    # Second call with unchanged vocal.mp3 skips re-extraction
+    refer.extract_refer_audio_main()
+    assert len(read_calls) == 1
+
+    # Updating vocal.mp3 (e.g. after switching vocal_separation_model) triggers re-extraction
+    future = os.path.getmtime(refers / "1.wav") + 10.0
+    os.utime(vocal_file, (future, future))
+    time.sleep(0.01)
+    refer.extract_refer_audio_main()
+    assert len(read_calls) == 2
+
+
+def test_cache_key_differentiates_vocal_separation_models_when_demucs_enabled(tmp_path):
+    media = tmp_path / "sample.wav"
+    media.write_bytes(b"audio payload")
+    base_whisper = {"runtime": "local", "backend": "qwen", "model": "large-v3", "language": "en"}
+
+    # When demucs=False, vocal_separation_model does not change cache key
+    k_off_default = transcription_cache.cache_key(str(media), base_whisper, False)
+    k_off_roformer = transcription_cache.cache_key(
+        str(media), {**base_whisper, "vocal_separation_model": "mel_band_roformer"}, False
+    )
+    assert k_off_default == k_off_roformer
+
+    # When demucs=True, htdemucs matches legacy key without vocal_separation_model, while roformer/mdx/scnet differ
+    k_on_legacy = transcription_cache.cache_key(str(media), base_whisper, True)
+    k_on_htdemucs = transcription_cache.cache_key(
+        str(media), {**base_whisper, "vocal_separation_model": "htdemucs"}, True
+    )
+    k_on_roformer = transcription_cache.cache_key(
+        str(media), {**base_whisper, "vocal_separation_model": "mel_band_roformer"}, True
+    )
+    k_on_scnet = transcription_cache.cache_key(
+        str(media), {**base_whisper, "vocal_separation_model": "scnet"}, True
+    )
+    assert k_on_legacy == k_on_htdemucs
+    assert k_on_roformer != k_on_htdemucs
+    assert k_on_scnet != k_on_roformer
+
+
+

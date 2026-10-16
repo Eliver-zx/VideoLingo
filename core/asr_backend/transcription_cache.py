@@ -23,6 +23,14 @@ def cache_key(media_file, whisper, demucs):
         for block in iter(lambda: source.read(1024 * 1024), b""):
             check_cancel()
             digest.update(block)
+    sep_model = str(whisper.get("vocal_separation_model", "htdemucs") or "htdemucs").strip().lower()
+    sep_extra = {}
+    if bool(demucs) and sep_model != "htdemucs":
+        try:
+            audio_sep_ver = version("audio-separator")
+        except PackageNotFoundError:
+            audio_sep_ver = None
+        sep_extra = {"vocal_separation_model": sep_model, "audio_separator_version": audio_sep_ver}
     runtime = str(whisper.get("runtime", "local")).strip()
     runtime_lower = runtime.lower()
     if runtime_lower == "mai":
@@ -37,6 +45,7 @@ def cache_key(media_file, whisper, demucs):
             "runtime": "mai", "mai": (CACHE_IDENTITY if provider == "azure"
                                         else OPENROUTER_CACHE_IDENTITY),
             "language": whisper["language"], "demucs": bool(demucs),
+            **sep_extra,
         }
         return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     if runtime_lower in ("deepgram", "assembly", "zero", "replicate_parakeet", "replicate_whisper"):
@@ -49,6 +58,7 @@ def cache_key(media_file, whisper, demucs):
             "schema": SCHEMA, "media_md5": digest.hexdigest(),
             "runtime": runtime_lower, "cloud_model": cloud_model,
             "language": whisper["language"], "demucs": bool(demucs),
+            **sep_extra,
         }
         return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     packages = {}
@@ -72,6 +82,7 @@ def cache_key(media_file, whisper, demucs):
         # Local backend + Qwen size/engine so WhisperX and Qwen results never collide.
         "backend": backend, "qwen_model": whisper.get("qwen_model"),
         "qwen_engine": whisper.get("qwen_engine"),
+        **sep_extra,
     }
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 

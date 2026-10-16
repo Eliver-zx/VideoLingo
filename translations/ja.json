@@ -231,5 +231,7 @@
     "Fixed voice": "固定の声",
     "Another voice of fish.audio": "fish.audio の別の声",
     "Voice ID or the address of its page": "声の ID、またはそのページのアドレス",
-    "Open a voice on fish.audio and copy the address of its page": "fish.audio で声を開き、そのページのアドレスをコピーしてください"
+    "Open a voice on fish.audio and copy the address of its page": "fish.audio で声を開き、そのページのアドレスをコピーしてください",
+    "Vocal separation model": "ボーカル分離モデル",
+    "Used for dubbing reference/background separation and optional ASR vocal enhancement.": "吹き替え用の参照音声・BGM分離および音声認識前のボーカル強調に使用します。"
 }

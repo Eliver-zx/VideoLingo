@@ -231,5 +231,7 @@
     "Fixed voice": "Fixed voice",
     "Another voice of fish.audio": "Another voice of fish.audio",
     "Voice ID or the address of its page": "Voice ID or the address of its page",
-    "Open a voice on fish.audio and copy the address of its page": "Open a voice on fish.audio and copy the address of its page"
+    "Open a voice on fish.audio and copy the address of its page": "Open a voice on fish.audio and copy the address of its page",
+    "Vocal separation model": "Vocal separation model",
+    "Used for dubbing reference/background separation and optional ASR vocal enhancement.": "Used for dubbing reference/background separation and optional ASR vocal enhancement."
 }

@@ -231,5 +231,7 @@
     "Fixed voice": "Voz fija",
     "Another voice of fish.audio": "Otra voz de fish.audio",
     "Voice ID or the address of its page": "ID de la voz o la dirección de su página",
-    "Open a voice on fish.audio and copy the address of its page": "Abra una voz en fish.audio y copie la dirección de su página"
+    "Open a voice on fish.audio and copy the address of its page": "Abra una voz en fish.audio y copie la dirección de su página",
+    "Vocal separation model": "Modelo de separación vocal",
+    "Used for dubbing reference/background separation and optional ASR vocal enhancement.": "Se utiliza para separar la voz de referencia/fondo en el doblaje y mejorar el reconocimiento."
 }

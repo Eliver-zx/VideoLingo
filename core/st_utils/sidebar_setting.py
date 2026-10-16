@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import time
 import streamlit as st
 import requests
@@ -350,14 +351,51 @@ def page_setting():
             update_key("translation_style", translation_style, add_missing=True)
             st.rerun()
 
-        demucs_available = importlib.util.find_spec("demucs") is not None
-        if not demucs_available and load_key("demucs"):
+        sep_models = {
+            "htdemucs": "HTDemucs (Fast / Classic)",
+            "mdx": "MDX-Net (Kim_Vocal_2)",
+            "scnet": "SCNet-Large (Balanced)",
+            "mel_band_roformer": "Mel-Band-RoFormer (SOTA)",
+        }
+        configured_sep_model = str(load_key_or("vocal_separation_model", "htdemucs") or "htdemucs").strip().lower()
+        if configured_sep_model not in sep_models:
+            configured_sep_model = "htdemucs"
+        selected_sep_model = st.selectbox(
+            t("Vocal separation model"),
+            options=list(sep_models.keys()),
+            index=list(sep_models.keys()).index(configured_sep_model),
+            format_func=lambda k: sep_models[k],
+            help=t("Used for dubbing reference/background separation and optional ASR vocal enhancement."),
+        )
+        if selected_sep_model != configured_sep_model:
+            update_key("vocal_separation_model", selected_sep_model, add_missing=True)
+            import shutil
+            from core.utils.models import _AUDIO_REFERS_DIR, _BACKGROUND_AUDIO_FILE, _VOCAL_AUDIO_FILE
+            for stem_path in (_VOCAL_AUDIO_FILE, _BACKGROUND_AUDIO_FILE):
+                if os.path.exists(stem_path):
+                    try:
+                        os.remove(stem_path)
+                    except OSError:
+                        pass
+            if os.path.exists(_AUDIO_REFERS_DIR):
+                shutil.rmtree(_AUDIO_REFERS_DIR, ignore_errors=True)
+            st.rerun()
+
+        sep_pkg_map = {
+            "htdemucs": "demucs",
+            "scnet": "torch",
+            "mdx": "audio_separator",
+            "mel_band_roformer": "audio_separator",
+        }
+        sep_pkg = sep_pkg_map.get(selected_sep_model, "demucs")
+        sep_available = importlib.util.find_spec(sep_pkg) is not None
+        if not sep_available and load_key("demucs"):
             update_key("demucs", False)
         demucs = st.toggle(
             t("Vocal separation enhance"),
             value=load_key("demucs"),
-            disabled=not demucs_available,
-            help=t("Vocal separation is unavailable in this installation") if not demucs_available else t(
+            disabled=not sep_available,
+            help=t("Vocal separation is unavailable in this installation") if not sep_available else t(
                 "Recommended for videos with loud background noise, but will increase processing time"
             ),
         )

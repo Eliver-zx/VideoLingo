@@ -24,13 +24,17 @@ def prepare_audio(media_file, media_type, demucs):
     else:
         prepare_audio_for_asr(media_file)
 
-    # Demucs vocal separation:
+    # Vocal separation:
     if not demucs:
         return _RAW_AUDIO_FILE
     from importlib.util import find_spec
-    if find_spec("demucs") is None:
-        raise RuntimeError("Vocal separation is not installed. Turn it off in settings or install Demucs separately.")
-    from core.asr_backend.demucs_vl import demucs_audio
+    from core.asr_backend.demucs_vl import demucs_audio, separation_backend_package
+    pkg = separation_backend_package()
+    if find_spec(pkg) is None:
+        raise RuntimeError(
+            f"Vocal separation backend '{pkg}' is not installed. "
+            "Turn vocal separation off in settings or install the required package."
+        )
     demucs_audio()
     return normalize_audio_volume(_VOCAL_AUDIO_FILE, _VOCAL_AUDIO_FILE, format="mp3")
 
@@ -72,6 +76,11 @@ def transcribe():
     whisper = dict(load_key("whisper"))
     whisper["runtime"] = runtime
     demucs = load_key("demucs")
+    if demucs:
+        from core.asr_backend.demucs_vl import resolve_separation_model
+        whisper["vocal_separation_model"] = resolve_separation_model(
+            load_key_or("vocal_separation_model", "htdemucs")
+        )
     if runtime == "local":
         whisper["backend"] = local_backend(whisper)
         if whisper["backend"] == "qwen":
