@@ -4,8 +4,10 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 from core.task_runner import StopTask
-from core.utils import *
+from core.utils import ask_gpt, check_cancel, load_key
 console = Console()
+
+LAST_DIRECT_BY_INDEX: dict[int, list[str]] = {}
 
 def valid_translate_result(result: object, required_keys: list, required_sub_keys: list):
     if not isinstance(result, dict):
@@ -57,6 +59,7 @@ def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_
     for idx, i in enumerate(faith_result):
         faith_result[i].setdefault("origin", line_list[idx] if idx < len(line_list) else "")
         faith_result[i]["direct"] = faith_result[i]["direct"].replace('\n', ' ')
+    LAST_DIRECT_BY_INDEX[index] = [faith_result[i]["direct"].strip() for i in faith_result]
 
     # If reflect_translate is False or not set, use faithful translation directly
     reflect_translate = load_key('reflect_translate')

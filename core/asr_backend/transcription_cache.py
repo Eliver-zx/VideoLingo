@@ -48,16 +48,28 @@ def cache_key(media_file, whisper, demucs):
             **sep_extra,
         }
         return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
-    if runtime_lower in ("deepgram", "assembly", "zero", "replicate_parakeet", "replicate_whisper"):
+    if runtime_lower in ("elevenlabs", "deepgram", "assembly", "zero", "replicate_parakeet", "replicate_whisper"):
         cloud_model = None
         if runtime_lower == "deepgram":
             cloud_model = whisper.get("deepgram_model", "nova-3")
         elif runtime_lower == "assembly":
             cloud_model = f"{whisper.get('assemblyai_model', 'universal')}:{whisper.get('assemblyai_lang', whisper.get('language'))}"
+        elif runtime_lower == "elevenlabs":
+            cloud_model = whisper.get("model", "scribe_v1")
+        extra_pkg = {}
+        if runtime_lower == "elevenlabs" and "model" in whisper:
+            packages = {}
+            for name in ("whisperx", "faster-whisper", "qwen-asr", "mlx-audio", "transformers", "demucs", "silero-vad"):
+                try:
+                    packages[name] = version(name)
+                except PackageNotFoundError:
+                    packages[name] = None
+            extra_pkg = {"packages": packages}
         identity = {
             "schema": SCHEMA, "media_md5": digest.hexdigest(),
             "runtime": runtime_lower, "cloud_model": cloud_model,
             "language": whisper["language"], "demucs": bool(demucs),
+            **extra_pkg,
             **sep_extra,
         }
         return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()

@@ -48,16 +48,18 @@ DEMUCS_REQUIREMENT = "demucs>=4.1.0,<5"
 
 
 def run(cmd: list[str], retries: int = 0, env: dict[str, str] | None = None) -> None:
+    returncode = 1
     for attempt in range(retries + 1):
         print("  > " + " ".join(str(x) for x in cmd), flush=True)
         proc = subprocess.run(cmd, cwd=ROOT, env=env)
-        if proc.returncode == 0:
+        returncode = proc.returncode
+        if returncode == 0:
             return
         if attempt < retries:
             delay = min(20, 3 * (attempt + 1))
             print(f"  Command failed, retrying in {delay}s ({attempt + 1}/{retries})...")
             time.sleep(delay)
-    raise subprocess.CalledProcessError(proc.returncode, cmd)
+    raise subprocess.CalledProcessError(returncode, cmd)
 
 
 def pip_install(packages: list[str], retries: int = 2, extra_args: list[str] | None = None) -> None:
@@ -381,8 +383,9 @@ def install_spacy(force: bool = False) -> None:
 def install_demucs(force: bool = False, require: bool = False) -> None:
     print("\n[6/6] Install Demucs (optional)")
     from packaging.version import Version
-    if not force and package_version("demucs") is not None and Version("4.1.0") <= Version(package_version("demucs")) < Version("5") and import_ok("demucs.api"):
-        print(f"  demucs {package_version('demucs')} already installed.")
+    demucs_ver = package_version("demucs")
+    if not force and demucs_ver is not None and Version("4.1.0") <= Version(demucs_ver) < Version("5") and import_ok("demucs.api"):
+        print(f"  demucs {demucs_ver} already installed.")
         return
     if intel_mac():
         message = "Demucs is not installed automatically on Intel macOS: its sphn dependency has no x86_64 wheel. Vocal separation will be unavailable."
@@ -483,7 +486,7 @@ def health_check(quiet: bool = False, require_demucs: bool = False, check_state:
                  torch_backend: str = "auto", quick: bool = False) -> int:
     errors: list[str] = []
     warnings: list[str] = []
-    if sys.version_info[:2] != (3, 12):
+    if sys.version_info[:2] not in ((3, 12), (3, 13)):
         errors.append("VideoLingo uses Python 3.12; rerun setup_env.py")
     torch_version, vision_version = torch_versions()
     try:
@@ -623,7 +626,7 @@ def launch_streamlit() -> int:
 
 
 def install_all(args: argparse.Namespace) -> int:
-    if sys.version_info[:2] != (3, 12):
+    if sys.version_info[:2] not in ((3, 12), (3, 13)):
         print("ERROR: VideoLingo uses Python 3.12. Run setup_env.py first.")
         return 1
     reason = unsupported_platform()

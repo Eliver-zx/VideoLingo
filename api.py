@@ -1,35 +1,97 @@
-"""Local, single-user API. Start from the repository root with uv run start.py --api."""
+"""Local Web UI + SSE + REST API server for VideoLingo."""
+from __future__ import annotations
+
+import asyncio
+from functools import partial
+import json
+import os
 from pathlib import Path
+import platform
+import queue
 import shutil
+import subprocess
 import sys
 from threading import Lock
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from core.pipeline import get_steps
+from core.task_runner import TaskRunner
+from core.utils.config_utils import (
+    CONFIG_PATH,
+    ensure_config_schema,
+    load_key,
+    task_config_context,
+    update_key,
+    update_keys,
+    yaml,
+)
+from core.workspace import (
+    TaskWorkspace,
+    create_task_workspace,
+    list_task_workspaces,
+    load_global_glossary,
+    promote_terms_to_global,
+    save_global_glossary,
+    workspace_context,
+)
 
 
 def _configure_utf8_console():
     """Allow Rich and task threads to print Unicode on Windows."""
     for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
 
 
 _configure_utf8_console()
 
-from core.pipeline import get_steps
-from core.task_runner import TaskRunner
-from core.utils.config_utils import load_key, update_key
-
-app = FastAPI(title="VideoLingo", description="One operation at a time, using config.yaml and output/.")
+app = FastAPI(title="VideoLingo", description="Serial multi-task workspace with SSE and zero-copy local media import.")
 runner = TaskRunner()
 operation_lock = Lock()
 OUTPUT = Path("output")
+WEBUI_HTML_PATH = Path(__file__).resolve().parent / "core" / "webui" / "index.html"
 
+_sse_subscribers: list[queue.Queue[dict[str, Any]]] = []
+_sse_lock = Lock()
+
+
+def _on_runner_event(payload: dict[str, Any]) -> None:
+    task_id = payload.get("task_id")
+    if task_id:
+        ws = TaskWorkspace(OUTPUT / task_id) if (OUTPUT / task_id).is_dir() else None
+        if ws and ws.manifest_path.is_file():
+            try:
+                ws.update_manifest(
+                    execution={
+                        "state": payload.get("state"),
+                        "current_step": payload.get("step"),
+                        "step_index": payload.get("step_index", -1),
+                        "total_steps": payload.get("total_steps", 0),
+                        "progress": payload.get("progress", 0.0),
+                        "pause_reason": payload.get("pause_message"),
+                        "error": payload.get("error"),
+                    }
+                )
+            except Exception:
+                pass
+    with _sse_lock:
+        for q in list(_sse_subscribers):
+            try:
+                q.put_nowait(payload)
+            except queue.Full:
+                pass
+
+
+runner.add_listener(_on_runner_event)
+
+
+# ─── Request Models ───
 
 class InputRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -45,6 +107,43 @@ class RunRequest(BaseModel):
     target_language: str | None = Field(default=None, min_length=1)
     source_language: str | None = Field(default=None, min_length=1)
 
+
+class CreateTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: str = Field(min_length=1)
+    subtitles: str | None = None
+    title: str | None = None
+    source_language: str | None = None
+    target_language: str | None = None
+    stage: Literal["transcribe", "subtitles", "dubbing", "all"] = "subtitles"
+    dubbing: bool = False
+    autorun: bool = True
+
+
+class InvalidateStageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    stage: str = Field(min_length=1)
+    autorun: bool = False
+    run_stage: Literal["transcribe", "subtitles", "dubbing", "all"] = "subtitles"
+
+
+class TermsUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    terms: list[dict[str, Any]]
+    summary: str | None = None
+
+
+class UtterancesUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    utterances: list[dict[str, Any]]
+
+
+class ConfigUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    updates: dict[str, Any]
+
+
+# ─── Shared Helpers ───
 
 def require_idle():
     if runner.is_active:
@@ -70,6 +169,416 @@ def subtitle_file(path):
         raise HTTPException(422, str(exc)) from exc
     return path
 
+
+def _wrap_workspace_steps(
+    ws: TaskWorkspace,
+    steps: list[tuple[str, Any]],
+    config_override: dict[str, Any] | None = None,
+) -> list[tuple[str, Any]]:
+    def _run_step(fn, overrides):
+        with workspace_context(ws.root), task_config_context(overrides):
+            return fn()
+
+    return [(label, partial(_run_step, fn, config_override)) for label, fn in steps]
+
+
+def _resolve_workspace(task_id: str) -> TaskWorkspace:
+    if task_id == "output" and OUTPUT.is_dir():
+        return TaskWorkspace(OUTPUT)
+    task_dir = (OUTPUT / task_id).resolve()
+    if task_dir.parent != OUTPUT.resolve() or not task_dir.is_dir():
+        raise HTTPException(404, f"Task workspace not found: {task_id}")
+    return TaskWorkspace(task_dir)
+
+
+def _workspace_summary(ws: TaskWorkspace) -> dict[str, Any]:
+    manifest = ws.load_manifest()
+    files = sorted(p.name for p in ws.root.glob("*") if p.is_file() and not p.name.startswith("."))
+    if (ws.root / "audio" / "dub.wav").is_file():
+        files.append("audio/dub.wav")
+    if runner.active_task_id == ws.task_id:
+        manifest["execution"] = {
+            **manifest.get("execution", {}),
+            "state": runner.state,
+            "current_step": runner.current_label or None,
+            "step_index": runner.current_step,
+            "total_steps": runner.total_steps,
+            "progress": runner.progress,
+            "pause_reason": runner.pause_message or None,
+            "error": runner.error_msg or None,
+        }
+    manifest["files"] = files
+    return manifest
+
+
+# ─── Web UI & SSE Endpoints ───
+
+@app.get("/", response_class=HTMLResponse)
+def webui_index():
+    if not WEBUI_HTML_PATH.is_file():
+        raise HTTPException(404, "Web UI HTML not found")
+    return HTMLResponse(WEBUI_HTML_PATH.read_text(encoding="utf-8"))
+
+
+@app.get("/api/events")
+async def sse_events():
+    q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=128)
+    with _sse_lock:
+        _sse_subscribers.append(q)
+
+    async def event_generator():
+        try:
+            init_payload = {
+                "type": "connected",
+                "state": runner.state,
+                "active_task_id": runner.active_task_id,
+                "progress": runner.progress,
+            }
+            yield f"data: {json.dumps(init_payload, ensure_ascii=False)}\n\n"
+            while True:
+                try:
+                    event = q.get_nowait()
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                except queue.Empty:
+                    await asyncio.sleep(0.4)
+                    yield 'data: {"type": "heartbeat"}\n\n'
+        finally:
+            with _sse_lock:
+                if q in _sse_subscribers:
+                    _sse_subscribers.remove(q)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/dialogs/pick-files")
+def pick_local_files():
+    """Open native OS file picker for zero-copy local video selection."""
+    if platform.system() == "Darwin":
+        script = (
+            'set chosenFiles to choose file with prompt "Select video/audio files for VideoLingo" '
+            'with multiple selections allowed\n'
+            'set posixPaths to {}\n'
+            'repeat with aFile in chosenFiles\n'
+            '  set end of posixPaths to POSIX path of aFile\n'
+            'end repeat\n'
+            'set AppleScript\'s text item delimiters to "\\n"\n'
+            'return posixPaths as text'
+        )
+        proc = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            return {"paths": []}
+        paths = [p.strip() for p in (proc.stdout or "").splitlines() if p.strip()]
+        return {"paths": paths}
+    return {"paths": []}
+
+
+# ─── Multi-Task Workspace & Queue Endpoints ───
+
+@app.get("/api/tasks")
+def list_tasks():
+    workspaces = list_task_workspaces(OUTPUT)
+    return {"tasks": [_workspace_summary(ws) for ws in workspaces]}
+
+
+@app.get("/api/tasks/{task_id}")
+def get_task(task_id: str):
+    ws = _resolve_workspace(task_id)
+    return _workspace_summary(ws)
+
+
+@app.post("/api/tasks", status_code=202)
+def create_task(request: CreateTaskRequest):
+    parsed = urlparse(request.source)
+    overrides: dict[str, Any] = {}
+    if request.source_language:
+        overrides["whisper.language"] = request.source_language
+        if request.source_language != "auto":
+            overrides["whisper.detected_language"] = request.source_language
+    if request.target_language:
+        overrides["target_language"] = request.target_language
+
+    sub_path = subtitle_file(request.subtitles) if request.subtitles else None
+
+    if parsed.scheme in {"http", "https"}:
+        if not parsed.netloc:
+            raise HTTPException(422, "Invalid URL")
+        ws = create_task_workspace(request.title or "youtube_video", base_dir=OUTPUT)
+        manifest = ws.load_manifest()
+        manifest["title"] = request.title or request.source
+        manifest["origin"] = {
+            "kind": "youtube",
+            "source_path": None,
+            "original_filename": None,
+            "url": request.source,
+            "mount_mode": "yt-dlp",
+        }
+        manifest["config_override"] = overrides
+        ws.save_manifest(manifest)
+
+        def _dl():
+            from core._1_ytdlp import download_video_ytdlp
+            download_video_ytdlp(request.source, save_path=str(ws.root), resolution=load_key("ytb_resolution"))
+
+        dl_steps = [("Download video", _dl)]
+        if request.autorun:
+            needs_dub = request.stage == "dubbing" or (request.stage == "all" and request.dubbing)
+            dl_steps.extend(get_steps(request.stage, needs_dub))
+        runner.enqueue(_wrap_workspace_steps(ws, dl_steps, overrides), task_id=ws.task_id)
+        return _workspace_summary(ws)
+
+    src_path = Path(request.source).resolve()
+    if not src_path.is_file():
+        raise HTTPException(422, f"Source file does not exist: {src_path}")
+    formats = load_key("allowed_video_formats") + load_key("allowed_audio_formats")
+    if src_path.suffix.lower() == ".srt":
+        src_path = subtitle_file(src_path)
+    elif src_path.suffix.lower().lstrip(".") not in formats:
+        raise HTTPException(422, "Unsupported media format")
+
+    ws = create_task_workspace(request.title or src_path.stem, base_dir=OUTPUT)
+    ws.init_from_local_file(
+        src_path,
+        subtitle_path=sub_path,
+        title=request.title or src_path.stem,
+        config_override=overrides,
+    )
+    if request.autorun:
+        needs_dub = request.stage == "dubbing" or (request.stage == "all" and request.dubbing)
+        steps = _wrap_workspace_steps(ws, get_steps(request.stage, needs_dub), overrides)
+        runner.enqueue(steps, task_id=ws.task_id)
+    return _workspace_summary(ws)
+
+
+@app.post("/api/tasks/upload", status_code=202)
+def upload_task(
+    file: UploadFile = File(...),
+    source_language: str = Form("en"),
+    target_language: str = Form("简体中文"),
+    stage: Literal["transcribe", "subtitles", "dubbing", "all"] = Form("subtitles"),
+    autorun: bool = Form(True),
+):
+    raw_name = file.filename or "uploaded_video.mp4"
+    ext = Path(raw_name).suffix.lower() or ".mp4"
+    stem = Path(raw_name).stem or "video"
+    ws = create_task_workspace(stem, base_dir=OUTPUT)
+    dst_name = "source.srt" if ext == ".srt" else f"source{ext}"
+    dst_path = ws.root / dst_name
+    with open(dst_path, "wb") as out_f:
+        shutil.copyfileobj(file.file, out_f)
+
+    overrides = {"whisper.language": source_language, "target_language": target_language}
+    if source_language != "auto":
+        overrides["whisper.detected_language"] = source_language
+    ws.init_from_local_file(dst_path, title=stem, config_override=overrides)
+    if autorun:
+        needs_dub = stage in ("all", "dubbing")
+        steps = _wrap_workspace_steps(ws, get_steps(stage, needs_dub), overrides)
+        runner.enqueue(steps, task_id=ws.task_id)
+    return _workspace_summary(ws)
+
+
+@app.post("/api/tasks/{task_id}/run", status_code=202)
+def run_task(task_id: str, request: RunRequest):
+    ws = _resolve_workspace(task_id)
+    manifest = ws.load_manifest()
+    overrides = dict(manifest.get("config_override") or {})
+    if request.target_language:
+        overrides["target_language"] = request.target_language
+    if request.source_language:
+        overrides["whisper.language"] = request.source_language
+        if request.source_language != "auto":
+            overrides["whisper.detected_language"] = request.source_language
+    manifest["config_override"] = overrides
+    ws.save_manifest(manifest)
+
+    needs_dubbing = request.stage == "dubbing" or (request.stage == "all" and request.dubbing)
+    steps = _wrap_workspace_steps(ws, get_steps(request.stage, needs_dubbing), overrides)
+    started_now = runner.enqueue(steps, task_id=ws.task_id)
+    return {"accepted": True, "started_immediately": started_now, "task_id": ws.task_id}
+
+
+@app.post("/api/tasks/{task_id}/pause")
+def pause_task(task_id: str):
+    _resolve_workspace(task_id)
+    runner.pause("Paused by user")
+    return {"state": runner.state}
+
+
+@app.post("/api/tasks/{task_id}/resume")
+def resume_task(task_id: str):
+    _resolve_workspace(task_id)
+    if runner.state != "paused":
+        raise HTTPException(409, "No task is paused.")
+    runner.resume()
+    return {"state": runner.state}
+
+
+@app.post("/api/tasks/{task_id}/stop")
+def stop_task(task_id: str):
+    _resolve_workspace(task_id)
+    runner.stop()
+    return {"state": runner.state}
+
+
+@app.post("/api/tasks/{task_id}/invalidate")
+def invalidate_task_stage(task_id: str, request: InvalidateStageRequest):
+    ws = _resolve_workspace(task_id)
+    try:
+        invalidated = ws.invalidate_from_stage(request.stage)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if request.autorun:
+        overrides = dict(ws.load_manifest().get("config_override") or {})
+        needs_dub = request.run_stage in ("dubbing", "all")
+        steps = _wrap_workspace_steps(ws, get_steps(request.run_stage, needs_dub), overrides)
+        runner.enqueue(steps, task_id=ws.task_id)
+    return {"invalidated": invalidated}
+
+
+@app.get("/api/tasks/{task_id}/terms")
+def get_task_terms(task_id: str):
+    ws = _resolve_workspace(task_id)
+    if ws.terms_path.is_file():
+        return ws.load_terms()
+    legacy_path = ws.log_dir / "terminology.json"
+    if legacy_path.is_file():
+        try:
+            data = json.loads(legacy_path.read_text(encoding="utf-8"))
+            return {"summary": data.get("theme", ""), "terms": data.get("terms", [])}
+        except Exception:
+            pass
+    return {"summary": "", "terms": []}
+
+
+@app.put("/api/tasks/{task_id}/terms")
+def update_task_terms(task_id: str, request: TermsUpdateRequest):
+    ws = _resolve_workspace(task_id)
+    current = get_task_terms(task_id)
+    summary = request.summary if request.summary is not None else current.get("summary", "")
+    ws.save_terms(summary, request.terms)
+
+    # Also keep legacy terminology.json synchronized for pipeline compatibility
+    loaded = ws.load_terms()
+    legacy_payload = {
+        "theme": loaded["summary"],
+        "terms": [
+            {
+                "src": t["src"],
+                "tgt": t["tgt"],
+                "note": t.get("note", ""),
+                "aliases": t.get("aliases", []),
+                "fix_source": t.get("fix_source", False),
+            }
+            for t in loaded["terms"]
+        ],
+    }
+    legacy_path = ws.log_dir / "terminology.json"
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_text(json.dumps(legacy_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    to_promote = [t for t in request.terms if t.get("promote_to_global")]
+    promoted = promote_terms_to_global(to_promote) if to_promote else 0
+    return {"saved": len(loaded["terms"]), "promoted_to_global": promoted}
+
+
+@app.get("/api/tasks/{task_id}/utterances")
+def get_task_utterances(task_id: str):
+    ws = _resolve_workspace(task_id)
+    utts = ws.load_utterances()
+    if utts:
+        return {"utterances": utts}
+    trans_xlsx = ws.log_dir / "translation_results.xlsx"
+    if trans_xlsx.is_file():
+        import pandas as pd
+        df = pd.read_excel(trans_xlsx)
+        rows = []
+        for idx, row in df.iterrows():
+            src_val = row.get("Source")
+            tgt_val = row.get("Translation")
+            src = "" if src_val is None or bool(pd.isna(src_val)) else str(src_val).strip()
+            tgt = "" if tgt_val is None or bool(pd.isna(tgt_val)) else str(tgt_val).strip()
+            rows.append({"id": idx, "start": 0.0, "end": 0.0, "src": src, "tgt": tgt, "tts_text": tgt})
+        return {"utterances": rows}
+    return {"utterances": []}
+
+
+@app.put("/api/tasks/{task_id}/utterances")
+def update_task_utterances(task_id: str, request: UtterancesUpdateRequest):
+    ws = _resolve_workspace(task_id)
+    ws.save_utterances(request.utterances)
+    if request.utterances:
+        meaning_txt = ws.log_dir / "split_by_meaning.txt"
+        if meaning_txt.is_file():
+            src_lines = [str(u.get("src") or "").strip() for u in request.utterances]
+            meaning_txt.write_text("\n".join(src_lines) + "\n", encoding="utf-8")
+        trans_xlsx = ws.log_dir / "translation_results.xlsx"
+        if trans_xlsx.is_file():
+            import pandas as pd
+            df = pd.read_excel(trans_xlsx)
+            if len(df) == len(request.utterances):
+                df["Source"] = [str(u.get("src") or "").strip() for u in request.utterances]
+                df["Translation"] = [str(u.get("tgt") or "").strip() for u in request.utterances]
+                df.to_excel(trans_xlsx, index=False)
+    return {"saved": len(request.utterances)}
+
+
+@app.delete("/api/tasks/{task_id}")
+def delete_task(task_id: str):
+    ws = _resolve_workspace(task_id)
+    if runner.active_task_id == ws.task_id and runner.is_active:
+        raise HTTPException(409, "Cannot delete an active task; stop it first.")
+    shutil.rmtree(ws.root)
+    return {"deleted": ws.task_id}
+
+
+@app.get("/api/tasks/{task_id}/files/{name:path}")
+def get_task_file(task_id: str, name: str):
+    ws = _resolve_workspace(task_id)
+    root_resolved = ws.root.resolve()
+    path = (ws.root / name).resolve()
+    if (
+        not path.is_relative_to(root_resolved)
+        or path == root_resolved
+        or any(part.startswith(".") for part in path.relative_to(root_resolved).parts)
+        or not path.is_file()
+    ):
+        raise HTTPException(404, "Task file not found")
+    title = ws.load_manifest().get("title") or ws.task_id
+    safe_title = "".join(c for c in str(title) if c not in '<>:"/\\|?*').strip() or "video"
+    dl_name = f"{safe_title}_{path.name}" if path.name.startswith("output_") else path.name
+    return FileResponse(path, filename=dl_name)
+
+
+@app.get("/api/glossary")
+def get_global_glossary():
+    return {"terms": load_global_glossary()}
+
+
+@app.put("/api/glossary")
+def put_global_glossary(request: TermsUpdateRequest):
+    save_global_glossary(request.terms)
+    return {"saved": len(request.terms)}
+
+
+@app.get("/api/config")
+def get_config():
+    ensure_config_schema(CONFIG_PATH)
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        data = yaml.load(f)
+    return dict(data or {})
+
+
+@app.put("/api/config")
+def put_config(request: ConfigUpdateRequest):
+    update_keys(request.updates, add_missing=True)
+    return {"updated": list(request.updates.keys())}
+
+
+# ─── Legacy Single-Output Endpoints (Preserved for Existing API Callers & Tests) ───
 
 def prepare_input(source, existing, subtitles=None):
     from core._1_ytdlp import (download_video_ytdlp, write_input_manifest,
@@ -206,4 +715,5 @@ def archive():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    port = int(os.environ.get("VIDEOLINGO_API_PORT", "8501"))
+    uvicorn.run(app, host="127.0.0.1", port=port)

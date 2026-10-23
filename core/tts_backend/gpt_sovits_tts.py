@@ -1,10 +1,11 @@
 from pathlib import Path
 import requests
-import os, sys
+import sys
 import subprocess
 import socket
 import time
-from core.utils import *
+from core.utils import check_cancel, load_key, rprint
+from core.utils.models import resolve_task_path
 
 def check_lang(text_lang, prompt_lang):
     # only support zh and en
@@ -51,6 +52,20 @@ def gpt_sovits_tts(text, text_lang, save_path, ref_audio_path, prompt_lang, prom
         raise ValueError(f"GPT-SoVITS request failed: HTTP {response.status_code} {response.text[:200]}")
     return save_audio(response, save_path, current_dir)
 
+def _fallback_ref_audio_and_text(current_dir: Path, task_df, default_text: str):
+    first_num = 1
+    fallback_text = default_text
+    if task_df is not None and not task_df.empty:
+        if 1 in task_df['number'].values:
+            first_num = 1
+            fallback_text = task_df.loc[task_df['number'] == 1, 'origin'].values[0]
+        else:
+            first_num = int(task_df.iloc[0]['number'])
+            fallback_text = task_df.iloc[0]['origin']
+    rel_ref = resolve_task_path(f"output/audio/refers/{first_num}.wav")
+    return (Path(rel_ref) if Path(rel_ref).is_absolute() else current_dir / rel_ref), fallback_text
+
+
 def gpt_sovits_tts_for_videolingo(text, save_as, number, task_df):
     start_gpt_sovits_server()
     TARGET_LANGUAGE = load_key("target_language")
@@ -84,7 +99,11 @@ def gpt_sovits_tts_for_videolingo(text, save_as, number, task_df):
         prompt_text = content
     elif REFER_MODE in [2, 3]:
         # Check if the reference audio file exists
-        ref_audio_path = current_dir / ("output/audio/refers/1.wav" if REFER_MODE == 2 else f"output/audio/refers/{number}.wav")
+        if REFER_MODE == 2:
+            ref_audio_path, prompt_text = _fallback_ref_audio_and_text(current_dir, task_df, prompt_text)
+        else:
+            rel_ref = resolve_task_path(f"output/audio/refers/{number}.wav")
+            ref_audio_path = Path(rel_ref) if Path(rel_ref).is_absolute() else (current_dir / rel_ref)
         if not ref_audio_path.exists():
             # If the file does not exist, try to extract the reference audio
             try:
@@ -94,6 +113,8 @@ def gpt_sovits_tts_for_videolingo(text, save_as, number, task_df):
             except Exception as e:
                 rprint(f"[bold red]Failed to extract reference audio: {str(e)}[/bold red]")
                 raise
+            if not ref_audio_path.exists():
+                ref_audio_path, prompt_text = _fallback_ref_audio_and_text(current_dir, task_df, prompt_text)
     else:
         raise ValueError("Invalid REFER_MODE. Choose 1, 2, or 3.")
 
@@ -102,8 +123,8 @@ def gpt_sovits_tts_for_videolingo(text, save_as, number, task_df):
     except ValueError:
         if REFER_MODE != 3:
             raise
-        rprint(f"[bold red]TTS request failed, switching back to mode 2 and retrying[/bold red]")
-        ref_audio_path = current_dir / "output/audio/refers/1.wav"
+        rprint("[bold red]TTS request failed, switching back to mode 2 and retrying[/bold red]")
+        ref_audio_path, prompt_text = _fallback_ref_audio_and_text(current_dir, task_df, prompt_text)
         gpt_sovits_tts(text, TARGET_LANGUAGE, save_as, ref_audio_path, prompt_lang, prompt_text)
 
 
@@ -173,14 +194,9 @@ def start_gpt_sovits_server():
         # Open the command in a new window on Windows
         process = subprocess.Popen(cmd, cwd=gpt_sovits_dir, creationflags=subprocess.CREATE_NEW_CONSOLE)
     elif sys.platform == "darwin":  # macOS
-        print("Please manually start the GPT-SoVITS server at http://127.0.0.1:9880, refer to api_v2.py.")
-        while True:
-            user_input = input("Have you started the server? (y/n): ").lower()
-            if user_input == 'y':
-                process = None
-                break
-            elif user_input == 'n':
-                raise Exception("Please start the server before continuing.")
+        raise RuntimeError(
+            "GPT-SoVITS server is not running on port 9880; please start it first (e.g. via api_v2.py)."
+        )
     else:
         raise OSError("Unsupported operating system. Only Windows and macOS are supported.")
 

@@ -4,8 +4,8 @@ import os
 import requests
 from pydub import AudioSegment
 from core.asr_backend.audio_preprocess import normalize_audio_volume
-from core.utils import *
-from core.utils.models import *
+from core.utils import load_key, rprint
+from core.utils.models import _AUDIO_REFERS_DIR, resolve_task_path
 
 UPLOADED_REFER_URL = None
 
@@ -63,19 +63,19 @@ def _merge_audio(files, output: str) -> bool:
         combined.export(output, format="wav", parameters=["-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1"])
         
         if os.path.getsize(output) == 0:
-            rprint(f"[red]Output file size is 0")
+            rprint("[red]Output file size is 0")
             return False
             
-        rprint(f"[green]Successfully merged audio files")
+        rprint("[green]Successfully merged audio files")
         return True
         
     except Exception as e:
         rprint(f"[red]Failed to merge audio: {str(e)}")
         return False
     
-def _get_ref_audio(task_df, min_duration=8, max_duration=14.5) -> str:
+def _get_ref_audio(task_df, min_duration=8, max_duration=14.5) -> str | None:
     """Get reference audio, ensuring the combined audio duration is > min_duration and < max_duration"""
-    rprint(f"[blue]🎯 Starting reference audio selection process...")
+    rprint("[blue]🎯 Starting reference audio selection process...")
     
     duration = 0
     selected = []
@@ -95,21 +95,28 @@ def _get_ref_audio(task_df, min_duration=8, max_duration=14.5) -> str:
         if duration > min_duration and duration < max_duration:
             break
     
+    if not selected and task_df is not None and not task_df.empty:
+        longest_idx = task_df['duration'].idxmax()
+        longest_row = task_df.loc[longest_idx]
+        selected = [longest_row]
+        duration = float(longest_row['duration'])
+
     if not selected:
         rprint(f"[red]❌ No valid segments found (could not reach minimum {min_duration}s duration)")
         return None
         
     rprint(f"[blue]📊 Selected {len(selected)} segments, total duration: {duration:.2f}s")
     
-    audio_files = [f"{_AUDIO_REFERS_DIR}/{row['number']}.wav" for row in selected]
+    refers_dir = resolve_task_path(_AUDIO_REFERS_DIR)
+    audio_files = [f"{refers_dir}/{row['number']}.wav" for row in selected]
     rprint(f"[yellow]🎵 Audio files to merge: {audio_files}")
     
-    combined_audio = f"{_AUDIO_REFERS_DIR}/refer.wav"
+    combined_audio = f"{refers_dir}/refer.wav"
     success = _merge_audio(audio_files, combined_audio)
     
     if not success:
-        rprint(f"[red]❌ Error: Failed to merge audio files")
-        return False
+        rprint("[red]❌ Error: Failed to merge audio files")
+        return None
     
     rprint(f"[green]✅ Successfully created combined audio: {combined_audio}")
     
@@ -121,9 +128,14 @@ def f5_tts_for_videolingo(text: str, save_as: str, number: int, task_df):
     # Only process the reference audio if we haven't uploaded it yet
     if UPLOADED_REFER_URL is None:
         refer_path = _get_ref_audio(task_df)
-        normalized_refer_path = normalize_audio_volume(refer_path, f"{_AUDIO_REFERS_DIR}/refer_normalized.wav")
+        if not refer_path:
+            raise RuntimeError("Failed to prepare reference audio for F5-TTS")
+        refers_dir = resolve_task_path(_AUDIO_REFERS_DIR)
+        normalized_refer_path = normalize_audio_volume(refer_path, f"{refers_dir}/refer_normalized.wav")
         UPLOADED_REFER_URL = upload_file_to_302(normalized_refer_path)
-        rprint(f"[green]✅ Reference audio uploaded, URL cached for reuse")
+        if not UPLOADED_REFER_URL:
+            raise RuntimeError("Failed to upload reference audio for F5-TTS")
+        rprint("[green]✅ Reference audio uploaded, URL cached for reuse")
     
     return _f5_tts(text=text, refer_url=UPLOADED_REFER_URL, save_path=save_as)
 

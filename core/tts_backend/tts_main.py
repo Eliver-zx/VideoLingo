@@ -12,7 +12,7 @@ from core.tts_backend.sf_cosyvoice2 import cosyvoice_tts_for_videolingo
 from core.tts_backend.custom_tts import custom_tts
 from core.prompts import get_correct_text_prompt
 from core.tts_backend._302_f5tts import f5_tts_for_videolingo
-from core.utils import *
+from core.utils import ask_gpt, load_key, rprint
 
 def clean_text_for_tts(text):
     """Remove problematic characters for TTS"""
@@ -23,12 +23,12 @@ def clean_text_for_tts(text):
 
 def tts_main(text, save_as, number, task_df):
     text = clean_text_for_tts(text)
-    # Check if text is empty or single character, single character voiceovers are prone to bugs
-    cleaned_text = re.sub(r'[^\w\s]', '', text).strip()
-    if not cleaned_text or len(cleaned_text) <= 1:
+    # Check if text is empty or punctuation-only
+    cleaned_text = re.sub(r'[^\w\s\u0300-\u036f\u0900-\u097f\u0e00-\u0e7f]', '', text).strip()
+    if not cleaned_text:
         silence = AudioSegment.silent(duration=100)  # 100ms = 0.1s
         silence.export(save_as, format="wav")
-        rprint(f"Created silent audio for empty/single-char text: {save_as}")
+        rprint(f"Created silent audio for empty text: {save_as}")
         return
     
     # Skip if file exists
@@ -76,6 +76,8 @@ def tts_main(text, save_as, number, task_df):
                     silence.export(save_as, format="wav")
                     return
                 print(f"Attempt {attempt + 1} failed, retrying...")
+        except NotImplementedError:
+            raise
         except Exception as e:
             if attempt == max_retries - 1:
                 raise Exception(f"Failed to generate audio after {max_retries} attempts: {str(e)}")

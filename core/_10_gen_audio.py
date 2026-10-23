@@ -12,8 +12,8 @@ from rich.console import Console
 from rich.progress import Progress
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from core.utils import *
-from core.utils.models import *
+from core.utils import check_cancel, load_key, rprint
+from core.utils.models import _8_1_AUDIO_TASK, _10_DUB_TRUNCATED, _AUDIO_SEGS_DIR, _AUDIO_TMP_DIR, resolve_task_path
 from core.asr_backend.audio_preprocess import get_audio_duration
 from core.tts_backend.tts_main import tts_main
 
@@ -77,14 +77,33 @@ def truncate_audio(audio_file: str, keep_seconds: float) -> None:
         audio = audio[:keep_ms].fade_out(min(50, keep_ms))
     audio.export(audio_file, format="wav")
 
+def trim_edge_silence(audio_file: str, silence_thresh: float = -45.0, guard_ms: int = 30) -> None:
+    """Trim leading and trailing silence below `silence_thresh` dBFS, keeping `guard_ms` margin at edges."""
+    if not os.path.exists(audio_file):
+        return
+    try:
+        from pydub.silence import detect_leading_silence
+        audio = AudioSegment.from_file(audio_file)
+        if len(audio) <= guard_ms * 2 or audio.rms == 0:
+            return
+        lead_ms = detect_leading_silence(audio, silence_threshold=silence_thresh, chunk_size=10)
+        trail_ms = detect_leading_silence(audio.reverse(), silence_threshold=silence_thresh, chunk_size=10)
+        start_ms = max(0, lead_ms - guard_ms)
+        end_ms = min(len(audio), len(audio) - max(0, trail_ms - guard_ms))
+        if end_ms - start_ms >= 50 and (start_ms > 0 or end_ms < len(audio)):
+            audio[start_ms:end_ms].export(audio_file, format="wav")
+    except Exception:
+        pass
+
 def process_row(row: pd.Series, tasks_df: pd.DataFrame) -> Tuple[int, float]:
     """Helper function for processing single row data"""
-    number = row['number']
+    number: int = row.get('number')  # type: ignore[assignment]
     lines = parse_task_literal(row['lines'])
-    real_dur = 0
+    real_dur = 0.0
     for line_index, line in enumerate(lines):
-        temp_file = TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}")
+        temp_file = resolve_task_path(TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}"))
         tts_main(line, temp_file, number, tasks_df)
+        trim_edge_silence(temp_file)
         real_dur += get_audio_duration(temp_file)
     return number, real_dur
 
@@ -138,7 +157,7 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
     rprint("[bold green]✨ TTS audio generation completed![/bold green]")
     return tasks_df
 
-def process_chunk(chunk_df: pd.DataFrame, accept: float, min_speed: float, max_speed: float = None) -> tuple[float, bool]:
+def process_chunk(chunk_df: pd.DataFrame, accept: float, min_speed: float, max_speed: float | None = None) -> tuple[float, bool]:
     """Process audio chunk and calculate speed factor"""
     chunk_durs = chunk_df['real_dur'].sum()
     tol_durs = chunk_df['tol_dur'].sum()
@@ -181,10 +200,11 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
     
     tasks_df['new_sub_times'] = None
     
-    for index, row in tasks_df.iterrows():
+    for pos_idx in range(len(tasks_df)):
+        row = tasks_df.iloc[pos_idx]
         if row['cut_off'] == 1:
             check_cancel()
-            chunk_df = tasks_df.iloc[chunk_start:index+1].reset_index(drop=True)
+            chunk_df = tasks_df.iloc[chunk_start:pos_idx+1].reset_index(drop=True)
             speed_factor, keep_gaps = process_chunk(chunk_df, accept, min_speed, max_speed)
             placed = []  # (main DataFrame index, line index, audio file, text) in timeline order
             
@@ -192,7 +212,8 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
             chunk_start_time = parse_df_srt_time(chunk_df.iloc[0]['start_time'])
             chunk_end_time = parse_df_srt_time(chunk_df.iloc[-1]['end_time']) + chunk_df.iloc[-1]['tolerance'] # 加上tolerance才是这一块的结束
             cur_time = chunk_start_time
-            for i, row in chunk_df.iterrows():
+            for i in range(len(chunk_df)):
+                row = chunk_df.iloc[i]
                 # If i is not 0, which is not the first row of the chunk, cur_time needs to be added with the gap of the previous row, remember to divide by speed_factor
                 if i != 0 and keep_gaps:
                     cur_time += chunk_df.iloc[i-1]['gap']/speed_factor
@@ -201,8 +222,8 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
                 lines = parse_task_literal(row['lines'])
                 for line_index, line in enumerate(lines):
                     # 🔄 Step2: Start speed change and save as OUTPUT_FILE_TEMPLATE
-                    temp_file = TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}")
-                    output_file = OUTPUT_FILE_TEMPLATE.format(f"{number}_{line_index}")
+                    temp_file = resolve_task_path(TEMP_FILE_TEMPLATE.format(f"{number}_{line_index}"))
+                    output_file = resolve_task_path(OUTPUT_FILE_TEMPLATE.format(f"{number}_{line_index}"))
                     adjust_audio_speed(temp_file, output_file, speed_factor)
                     ad_dur = get_audio_duration(output_file)
                     new_sub_times.append([float(cur_time), float(cur_time+ad_dur)])
@@ -210,14 +231,14 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
                 # 🔄 Step3: Find corresponding main DataFrame index and update new_sub_times
                 main_df_idx = tasks_df[tasks_df['number'] == row['number']].index[0]
                 tasks_df.at[main_df_idx, 'new_sub_times'] = new_sub_times
-                placed += [(main_df_idx, line_index, OUTPUT_FILE_TEMPLATE.format(f"{number}_{line_index}"), line)
+                placed += [(main_df_idx, line_index, resolve_task_path(OUTPUT_FILE_TEMPLATE.format(f"{number}_{line_index}")), line)
                            for line_index, line in enumerate(lines)]
                 # 🎯 Step4: Choose emoji based on speed_factor and accept comparison
                 emoji = "⚡" if speed_factor <= accept else "⚠️"
-                rprint(f"[cyan]{emoji} Processed chunk {chunk_start} to {index} with speed factor {speed_factor}[/cyan]")
+                rprint(f"[cyan]{emoji} Processed chunk {chunk_start} to {pos_idx} with speed factor {speed_factor}[/cyan]")
             # 🔄 Step5: What still exceeds the chunk at the highest speed is truncated, from the end
             if cur_time > chunk_end_time:
-                rprint(f"[yellow]⚠️ Chunk {chunk_start} to {index} exceeds by {cur_time - chunk_end_time:.3f}s at speed factor {speed_factor}, truncating[/yellow]")
+                rprint(f"[yellow]⚠️ Chunk {chunk_start} to {pos_idx} exceeds by {cur_time - chunk_end_time:.3f}s at speed factor {speed_factor}, truncating[/yellow]")
                 for main_df_idx, line_index, audio_file, line in reversed(placed):
                     times = tasks_df.at[main_df_idx, 'new_sub_times']
                     start, end = times[line_index]
@@ -235,7 +256,7 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
                         "kept_seconds": round(float(chunk_end_time - new_start), 3),
                         "speed_factor": float(speed_factor),
                     })
-            chunk_start = index+1
+            chunk_start = pos_idx+1
     
     save_truncated_log(truncated)
     rprint("[bold green]✅ Audio chunks processing completed![/bold green]")
@@ -243,15 +264,16 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
 
 def save_truncated_log(truncated: list) -> None:
     """List the lines whose dubbing was cut so they can be shortened by hand"""
-    if os.path.exists(TRUNCATED_LOG):
-        os.remove(TRUNCATED_LOG)
+    log_path = resolve_task_path(TRUNCATED_LOG)
+    if os.path.exists(log_path):
+        os.remove(log_path)
     if not truncated:
         return
     truncated = sorted(reversed(truncated), key=lambda item: item["number"])  # chunks were walked backwards
-    os.makedirs(os.path.dirname(TRUNCATED_LOG), exist_ok=True)
-    with open(TRUNCATED_LOG, 'w', encoding='utf-8') as f:
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    with open(log_path, 'w', encoding='utf-8') as f:
         json.dump(truncated, f, ensure_ascii=False, indent=4)
-    rprint(f"[yellow]⚠️ {len(truncated)} dubbed line(s) did not fit their time slot and were truncated, see `{TRUNCATED_LOG}`:[/yellow]")
+    rprint(f"[yellow]⚠️ {len(truncated)} dubbed line(s) did not fit their time slot and were truncated, see `{log_path}`:[/yellow]")
     for item in truncated:
         rprint(f"[yellow]   #{item['number']} kept {item['kept_seconds']}s of {item['spoken_seconds']}s: {item['line']}[/yellow]")
 
@@ -260,11 +282,12 @@ def gen_audio() -> None:
     rprint("[bold magenta]🚀 Starting audio generation process...[/bold magenta]")
     
     # 🎯 Step1: Create necessary directories
-    os.makedirs(_AUDIO_TMP_DIR, exist_ok=True)
-    os.makedirs(_AUDIO_SEGS_DIR, exist_ok=True)
+    os.makedirs(resolve_task_path(_AUDIO_TMP_DIR), exist_ok=True)
+    os.makedirs(resolve_task_path(_AUDIO_SEGS_DIR), exist_ok=True)
     
     # 📝 Step2: Load task file
-    tasks_df = pd.read_excel(_8_1_AUDIO_TASK)
+    audio_task_path = resolve_task_path(_8_1_AUDIO_TASK)
+    tasks_df = pd.read_excel(audio_task_path)
     rprint("[green]📊 Loaded task file successfully[/green]")
     
     # 🔊 Step3: Generate TTS audio
@@ -274,7 +297,7 @@ def gen_audio() -> None:
     tasks_df = merge_chunks(tasks_df)
     
     # 💾 Step5: Save results
-    tasks_df.to_excel(_8_1_AUDIO_TASK, index=False)
+    tasks_df.to_excel(audio_task_path, index=False)
     rprint("[bold green]🎉 Audio generation completed successfully![/bold green]")
 
 if __name__ == "__main__":

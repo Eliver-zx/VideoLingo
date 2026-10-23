@@ -5,11 +5,10 @@ from rich.console import Console
 from rich.panel import Panel
 from core.prompts import get_subtitle_trim_prompt
 from core.tts_backend.estimate_duration import init_estimator, estimate_duration
-from core.utils import *
-from core.utils.models import *
+from core.utils import ask_gpt, check_file_exists, load_key, rprint
+from core.utils.models import _8_1_AUDIO_TASK, resolve_task_path
 
 console = Console()
-speed_factor = load_key("speed_factor")
 
 TRANS_SUBS_FOR_AUDIO_FILE = 'output/audio/trans_subs_for_audio.srt'
 SRC_SUBS_FOR_AUDIO_FILE = 'output/audio/src_subs_for_audio.srt'
@@ -19,7 +18,9 @@ def check_len_then_trim(text, duration):
     global ESTIMATOR
     if ESTIMATOR is None:
         ESTIMATOR = init_estimator()
-    estimated_duration = estimate_duration(text, ESTIMATOR) / speed_factor['max']
+    estimator = ESTIMATOR
+    speed_factor = load_key("speed_factor")
+    estimated_duration = estimate_duration(text, estimator) / speed_factor['max']
     
     console.print(f"Subtitle text: {text}, "
                   f"[bold green]Estimated reading duration: {estimated_duration:.2f} seconds[/bold green]")
@@ -51,11 +52,12 @@ def time_diff_seconds(t1, t2, base_date):
 
 def process_srt():
     """Process srt file, generate audio tasks"""
-    
-    with open(TRANS_SUBS_FOR_AUDIO_FILE, 'r', encoding='utf-8') as file:
+    trans_subs_path = resolve_task_path(TRANS_SUBS_FOR_AUDIO_FILE)
+    src_subs_path = resolve_task_path(SRC_SUBS_FOR_AUDIO_FILE)
+    with open(trans_subs_path, 'r', encoding='utf-8') as file:
         content = file.read()
     
-    with open(SRC_SUBS_FOR_AUDIO_FILE, 'r', encoding='utf-8') as src_file:
+    with open(src_subs_path, 'r', encoding='utf-8') as src_file:
         src_content = src_file.read()
     
     subtitles = []
@@ -85,8 +87,10 @@ def process_srt():
             # Remove content within parentheses (including English and Chinese parentheses)
             text = re.sub(r'\([^)]*\)', '', text).strip()
             text = re.sub(r'（[^）]*）', '', text).strip()
-            # Remove '-' character, can continue to add illegal characters that cause errors
-            text = text.replace('-', '')
+            text = re.sub(r'\([^)]*$|（[^）]*$', '', text).strip()
+            text = re.sub(r'^[^(]*\)|^[^（]*）', '', text).strip()
+            # Remove dialogue dashes while preserving intra-word hyphens like "hands-on"
+            text = re.sub(r'(?<!\w)-|-(?!\w)', '', text).strip()
 
             # Add the original text from src_subs_for_audio.srt
             origin = src_subtitles.get(number, '')
@@ -95,9 +99,20 @@ def process_srt():
             rprint(Panel(f"Unable to parse subtitle block '{block}', error: {str(e)}, skipping this subtitle block.", title="Error", border_style="red"))
             continue
         
-        subtitles.append({'number': number, 'start_time': start_time, 'end_time': end_time, 'duration': duration, 'text': text, 'origin': origin})
+        subtitles.append({
+            'number': number,
+            'start_time': start_time,
+            'end_time': end_time,
+            'raw_start_time': start_time,
+            'raw_end_time': end_time,
+            'duration': duration,
+            'text': text,
+            'origin': origin,
+        })
     
     df = pd.DataFrame(subtitles)
+    if df.empty:
+        return df
     
     i = 0
     MIN_SUB_DUR = load_key("min_subtitle_duration")
@@ -109,14 +124,18 @@ def process_srt():
                 df.loc[i, 'text'] += ' ' + df.loc[i+1, 'text']
                 df.loc[i, 'origin'] += ' ' + df.loc[i+1, 'origin']
                 df.loc[i, 'end_time'] = df.loc[i+1, 'end_time']
+                df.loc[i, 'raw_end_time'] = df.loc[i+1, 'raw_end_time']
                 df.loc[i, 'duration'] = time_diff_seconds(df.loc[i, 'start_time'],df.loc[i, 'end_time'],today)
                 df = df.drop(i+1).reset_index(drop=True)
             else:
                 if i < len(df) - 1:  # Not the last audio
                     rprint(f"[bold blue]Extending subtitle {i+1} duration to {MIN_SUB_DUR} seconds[/bold blue]")
-                    df.loc[i, 'end_time'] = (datetime.datetime.combine(today, df.loc[i, 'start_time']) + 
-                                            datetime.timedelta(seconds=MIN_SUB_DUR)).time()
-                    df.loc[i, 'duration'] = MIN_SUB_DUR
+                    extended_dt = datetime.datetime.combine(today, df.loc[i, 'start_time']) + datetime.timedelta(seconds=MIN_SUB_DUR)
+                    next_start_dt = datetime.datetime.combine(today, df.loc[i + 1, 'start_time'])
+                    clamped_dt = min(extended_dt, next_start_dt)
+                    clamped_end = max(df.loc[i, 'end_time'], clamped_dt.time())
+                    df.loc[i, 'end_time'] = clamped_end
+                    df.loc[i, 'duration'] = time_diff_seconds(df.loc[i, 'start_time'], df.loc[i, 'end_time'], today)
                 else:
                     rprint(f"[bold red]The last subtitle {i+1} duration is less than {MIN_SUB_DUR} seconds, but not extending[/bold red]")
                 i += 1
@@ -125,6 +144,8 @@ def process_srt():
     
     df['start_time'] = df['start_time'].apply(lambda x: x.strftime('%H:%M:%S.%f')[:-3])
     df['end_time'] = df['end_time'].apply(lambda x: x.strftime('%H:%M:%S.%f')[:-3])
+    df['raw_start_time'] = df['raw_start_time'].apply(lambda x: x.strftime('%H:%M:%S.%f')[:-3])
+    df['raw_end_time'] = df['raw_end_time'].apply(lambda x: x.strftime('%H:%M:%S.%f')[:-3])
 
     ##! No longer perform secondary trim
     # check and trim subtitle length, for twice to ensure the subtitle length is within the limit, 允许tolerance
@@ -136,8 +157,9 @@ def process_srt():
 def gen_audio_task_main():
     df = process_srt()
     console.print(df)
-    df.to_excel(_8_1_AUDIO_TASK, index=False)
-    rprint(Panel(f"Successfully generated {_8_1_AUDIO_TASK}", title="Success", border_style="green"))
+    out_path = resolve_task_path(_8_1_AUDIO_TASK)
+    df.to_excel(out_path, index=False)
+    rprint(Panel(f"Successfully generated {out_path}", title="Success", border_style="green"))
 
 if __name__ == '__main__':
     gen_audio_task_main()

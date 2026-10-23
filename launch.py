@@ -1,5 +1,9 @@
 """VideoLingo Enhanced Launcher - Pre-flight checks + logging."""
-import subprocess, sys, os, shutil, socket
+import os
+import shutil
+import socket
+import subprocess
+import sys
 from pathlib import Path
 from datetime import datetime
 from runtime_libraries import configure_ffmpeg
@@ -34,16 +38,16 @@ def main():
     log(f"Python: {sys.version.split()[0]} ({sys.executable})")
 
     # Packages
-    for pkg, imp in [("streamlit", None), ("json_repair", "json_repair")]:
+    for pkg, imp in [("fastapi", None), ("uvicorn", None), ("json_repair", "json_repair")]:
         if not check_package(pkg, imp):
-            errors.append(f"{pkg} not installed. Run: python install.py")
+            errors.append(f"{pkg} not installed. Run: python installer.py")
 
     # torch + CUDA
     import platform
     apple_silicon = platform.system() == "Darwin" and platform.machine() == "arm64"
     torch_ver = check_package("torch")
     if torch_ver:
-        import torch
+        import torch  # type: ignore[import-not-found]
         if torch.cuda.is_available():
             log(f"torch: {torch_ver}, cuda: {torch.version.cuda}, gpu: {torch.cuda.get_device_name(0)}")
         elif apple_silicon:
@@ -62,9 +66,10 @@ def main():
         warnings.append(f"{qwen} not installed. Local Qwen ASR will fail. Run: python installer.py")
 
     # Port
+    port = int(os.environ.get("VIDEOLINGO_API_PORT", "8501"))
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        if s.connect_ex(("127.0.0.1", 8501)) == 0:
-            warnings.append("Port 8501 in use. Close other app or use --server.port 8502")
+        if s.connect_ex(("127.0.0.1", port)) == 0:
+            warnings.append(f"Port {port} in use. Close other app or set VIDEOLINGO_API_PORT={port + 1}")
 
     # Log everything
     for w in warnings:
@@ -86,17 +91,16 @@ def main():
         print()
 
     # Launch
-    log("Launching Streamlit...")
+    log("Launching VideoLingo Web UI (FastAPI + SSE)...")
     os.environ["PYTHONWARNINGS"] = "ignore"
     try:
         proc = subprocess.run(
-            [sys.executable, "-m", "streamlit", "run", "st.py",
-             "--logger.level", "error"],
+            [sys.executable, "api.py"],
             cwd=str(SCRIPT_DIR),
         )
         if proc.returncode != 0:
-            log(f"Streamlit exited with code {proc.returncode}")
-            print(f"\n  Streamlit crashed (code {proc.returncode}). See: {LOG_FILE}\n")
+            log(f"VideoLingo server exited with code {proc.returncode}")
+            print(f"\n  VideoLingo server crashed (code {proc.returncode}). See: {LOG_FILE}\n")
             sys.exit(proc.returncode)
     except KeyboardInterrupt:
         log("Stopped by user")

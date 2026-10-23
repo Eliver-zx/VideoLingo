@@ -42,7 +42,8 @@ def is_healthy(python: Path) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Install if needed, then start VideoLingo")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--api", action="store_true", help="start the local HTTP API instead of the web UI")
+    mode.add_argument("--api", action="store_true", help="start the FastAPI + SSE web UI / HTTP server (default)")
+    mode.add_argument("--streamlit", action="store_true", help="start the legacy Streamlit web UI")
     mode.add_argument("--check", action="store_true", help="check the environment without installing or launching")
     args = parser.parse_args()
 
@@ -75,7 +76,7 @@ def main() -> int:
         print("ERROR: VideoLingo's Python environment was not created.")
         return 1
 
-    command = ["api.py"] if args.api else ["-m", "streamlit", "run", "st.py"]
+    command = ["-m", "streamlit", "run", "st.py"] if args.streamlit else ["api.py"]
     return subprocess.run([str(python), *command], cwd=ROOT).returncode
 
 

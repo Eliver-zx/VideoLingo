@@ -3,8 +3,10 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import os
+from pathlib import Path
 import re
 import threading
+from typing import Any
 from difflib import SequenceMatcher
 
 import pandas as pd
@@ -17,7 +19,13 @@ from core.utils import (
     load_key_or,
     rprint,
 )
-from core.utils.models import _3_2_SPLIT_BY_MEANING, _4_1_TERMINOLOGY
+from core.utils.models import _3_2_SPLIT_BY_MEANING, _4_1_TERMINOLOGY, resolve_task_path
+from core.workspace import (
+    GLOBAL_GLOSSARY_CSV,
+    TaskWorkspace,
+    get_active_workspace,
+    load_global_glossary,
+)
 
 try:
     from rapidfuzz import fuzz as _rf_fuzz  # type: ignore[import-not-found]
@@ -27,6 +35,7 @@ except ImportError:
 CUSTOM_TERMS_PATH = "custom_terms.xlsx"
 OPTIONAL_CSV_TERMS_PATH = "Term.csv"
 OPTIONAL_JSON_TERMS_PATH = "term-map.json"
+GLOBAL_GLOSSARY_PATH = str(GLOBAL_GLOSSARY_CSV)
 
 # ~15 minutes of speech: ~2,500 English words (~14,000 ASCII chars at weight 1.0)
 # or ~4,000 Chinese characters (at weight 3.5 -> 14,000 weighted chars).
@@ -318,7 +327,8 @@ def split_summary_chunks(
 
 def combine_chunks() -> str:
     """Combine sentence lines from ``_3_2_SPLIT_BY_MEANING`` into a single text string."""
-    with open(_3_2_SPLIT_BY_MEANING, "r", encoding="utf-8") as file:
+    meaning_path = resolve_task_path(_3_2_SPLIT_BY_MEANING)
+    with open(meaning_path, "r", encoding="utf-8") as file:
         sentences = [line.strip() for line in file if line.strip()]
     combined_text = " ".join(sentences)
     limit = load_key_or("summary_length", None)
@@ -327,22 +337,74 @@ def combine_chunks() -> str:
     return combined_text
 
 
-def load_custom_terms() -> list[dict[str, str]]:
-    """Load user-defined glossary terms from ``custom_terms.xlsx`` and optional local term files.
+def _normalize_aliases(raw_aliases: Any, src: str = "") -> list[str]:
+    if not raw_aliases:
+        return []
+    if isinstance(raw_aliases, str):
+        items = [x.strip() for x in re.split(r"[,;|/，；｜]", raw_aliases) if x.strip()]
+    elif isinstance(raw_aliases, (list, tuple, set)):
+        items = [str(x).strip() for x in raw_aliases if str(x).strip()]
+    else:
+        return []
+    src_low = src.strip().lower()
+    return list(dict.fromkeys(a for a in items if a.lower() != src_low and a.lower() != "nan"))
 
-    Precedence (highest first): ``custom_terms.xlsx`` > ``Term.csv`` > ``term-map.json``.
+
+def load_custom_terms() -> list[dict[str, Any]]:
+    """Load user-defined glossary terms from ``glossary/custom_terms.csv``, ``custom_terms.xlsx``,
+    and optional local term files.
+
+    Precedence (highest first): ``glossary/custom_terms.csv`` / ``custom_terms.xlsx`` > ``Term.csv`` > ``term-map.json``.
     """
-    merged: dict[str, dict[str, str]] = {}
+    merged: dict[str, dict[str, Any]] = {}
 
-    def _add_term(src: object, tgt: object, note: object = "") -> None:
+    def _add_term(
+        src: object,
+        tgt: object,
+        note: object = "",
+        aliases: Any = None,
+        fix_source: bool = False,
+        source: str = "custom",
+    ) -> None:
         s = str(src).strip()
         t = str(tgt).strip()
         n = "" if (note is None or note != note) else str(note).strip()
         if not s or not t or s.lower() == "nan" or t.lower() == "nan":
             return
+        alias_list = _normalize_aliases(aliases, s)
         key = s.lower()
         if key not in merged:
-            merged[key] = {"src": s, "tgt": t, "note": n}
+            merged[key] = {
+                "src": s,
+                "tgt": t,
+                "note": n,
+                "aliases": alias_list,
+                "fix_source": bool(fix_source),
+                "source": source,
+            }
+        else:
+            existing_aliases = merged[key].get("aliases") or []
+            merged[key]["aliases"] = list(dict.fromkeys([*existing_aliases, *alias_list]))
+            if not merged[key].get("note") and n:
+                merged[key]["note"] = n
+
+    use_global = (
+        GLOBAL_GLOSSARY_PATH != str(GLOBAL_GLOSSARY_CSV)
+        or CUSTOM_TERMS_PATH == "custom_terms.xlsx"
+    )
+    if use_global and os.path.exists(GLOBAL_GLOSSARY_PATH):
+        try:
+            for item in load_global_glossary(GLOBAL_GLOSSARY_PATH):
+                _add_term(
+                    item.get("src", ""),
+                    item.get("tgt", ""),
+                    item.get("note", ""),
+                    aliases=item.get("aliases"),
+                    fix_source=bool(item.get("fix_source", False)),
+                    source="global_kb",
+                )
+        except Exception as exc:
+            rprint(f"[yellow]⚠️ Could not read {GLOBAL_GLOSSARY_PATH}: {exc}[/yellow]")
 
     if os.path.exists(CUSTOM_TERMS_PATH):
         try:
@@ -350,7 +412,8 @@ def load_custom_terms() -> list[dict[str, str]]:
             for _, row in df.iterrows():
                 if len(row) >= 2:
                     note_val = row.iloc[2] if len(row) >= 3 else ""
-                    _add_term(row.iloc[0], row.iloc[1], note_val)
+                    aliases_val = row.get("aliases", "") if hasattr(row, "get") else ""
+                    _add_term(row.iloc[0], row.iloc[1], note_val, aliases=aliases_val)
         except Exception as exc:
             rprint(f"[yellow]⚠️ Could not read {CUSTOM_TERMS_PATH}: {exc}[/yellow]")
 
@@ -377,7 +440,12 @@ def load_custom_terms() -> list[dict[str, str]]:
                     if isinstance(v, str):
                         _add_term(k, v, "")
                     elif isinstance(v, dict):
-                        _add_term(k, v.get("tgt", ""), v.get("note", ""))
+                        _add_term(
+                            k,
+                            v.get("tgt", ""),
+                            v.get("note", ""),
+                            aliases=v.get("aliases"),
+                        )
         except Exception as exc:
             rprint(
                 f"[yellow]⚠️ Could not read {OPTIONAL_JSON_TERMS_PATH}: {exc}[/yellow]"
@@ -393,12 +461,13 @@ def _file_mtime(path: str) -> float | None:
         return None
 
 
-def _build_term_index(terms: list[dict[str, str]]) -> dict:
-    """Build fast lookup structures for exact, stemmed, and N-gram fuzzy matching."""
-    cjk_or_symbol_map: dict[str, dict[str, str]] = {}
-    word_boundary_res: list[tuple[re.Pattern[str], dict[str, str]]] = []
-    stem_ngram_map: dict[tuple[str, ...], dict[str, str]] = {}
-    fuzzy_entries: list[tuple[str, int, dict[str, str]]] = []
+def _build_term_index(terms: list[dict[str, Any]]) -> dict:
+    """Build fast lookup structures for exact, stemmed, alias, and N-gram fuzzy matching."""
+    cjk_or_symbol_map: dict[str, dict[str, Any]] = {}
+    word_boundary_res: list[tuple[re.Pattern[str], dict[str, Any]]] = []
+    stem_ngram_map: dict[tuple[str, ...], dict[str, Any]] = {}
+    fuzzy_entries: list[tuple[str, int, dict[str, Any]]] = []
+    by_k: dict[int, list[dict[str, Any]]] = {}
     max_k = 1
 
     for term in terms:
@@ -407,34 +476,55 @@ def _build_term_index(terms: list[dict[str, str]]) -> dict:
             continue
         tgt = str(term.get("tgt", "")).strip()
         note = str(term.get("note", "")).strip()
-        entry = {"src": src, "tgt": tgt, "note": note}
-        src_lower = src.lower()
+        aliases = _normalize_aliases(term.get("aliases"), src)
+        entry: dict[str, Any] = {
+            "src": src,
+            "tgt": tgt,
+            "note": note,
+            "aliases": aliases,
+            "fix_source": bool(term.get("fix_source", False)),
+            "source": str(term.get("source") or "task"),
+        }
 
-        # Substring matching is ONLY safe for CJK terms; ASCII/Latin terms require word boundaries
-        if _CJK_RE.search(src_lower):
-            if src_lower not in cjk_or_symbol_map:
-                cjk_or_symbol_map[src_lower] = entry
-        elif re.search(r"[^a-z0-9\s]", src_lower):
-            # Terms with symbols like "C++", "C#", ".NET", "x86_64"
-            pattern = re.compile(
-                rf"(?<![a-z0-9]){re.escape(src_lower)}(?![a-z0-9])", re.IGNORECASE
-            )
-            word_boundary_res.append((pattern, entry))
+        for surface in [src, *aliases]:
+            surf_lower = surface.strip().lower()
+            if not surf_lower:
+                continue
 
-        raw_toks, stem_toks = _tokenize_and_normalize(src)
-        if stem_toks:
-            k = len(stem_toks)
-            if k > max_k:
-                max_k = k
-            key_tuple = tuple(stem_toks)
-            if key_tuple not in stem_ngram_map:
-                stem_ngram_map[key_tuple] = entry
-            norm_str = " ".join(raw_toks)
-            if len(norm_str) >= 5 or (k >= 2 and len(norm_str) >= 4):
-                fuzzy_entries.append((norm_str, k, entry))
+            # Substring matching is ONLY safe for CJK terms; ASCII/Latin terms require word boundaries
+            if _CJK_RE.search(surf_lower):
+                if surf_lower not in cjk_or_symbol_map:
+                    cjk_or_symbol_map[surf_lower] = entry
+            elif re.search(r"[^a-z0-9\s]", surf_lower):
+                # Terms with symbols like "C++", "C#", ".NET", "x86_64"
+                pattern = re.compile(
+                    rf"(?<![a-z0-9]){re.escape(surf_lower)}(?![a-z0-9])", re.IGNORECASE
+                )
+                word_boundary_res.append((pattern, entry))
+
+            raw_toks, stem_toks = _tokenize_and_normalize(surface)
+            if stem_toks:
+                k = len(stem_toks)
+                if k > max_k:
+                    max_k = k
+                key_tuple = tuple(stem_toks)
+                if key_tuple not in stem_ngram_map:
+                    stem_ngram_map[key_tuple] = entry
+                norm_str = " ".join(raw_toks)
+                by_k.setdefault(k, []).append(
+                    {
+                        "surface": surface,
+                        "norm": norm_str,
+                        "stem_tokens": key_tuple,
+                        "entry": entry,
+                    }
+                )
+                if len(norm_str) >= 5 or (k >= 2 and len(norm_str) >= 4):
+                    fuzzy_entries.append((norm_str, k, entry))
 
     return {
         "terms": terms,
+        "by_k": by_k,
         "cjk_or_symbol_map": cjk_or_symbol_map,
         "word_boundary_res": word_boundary_res,
         "stem_ngram_map": stem_ngram_map,
@@ -447,11 +537,17 @@ def _get_term_index() -> dict:
     """Return the cached term index, rebuilding automatically if any source file changed."""
     global _CACHED_INDEX_KEY, _CACHED_INDEX_DATA
 
-    abs_json = os.path.abspath(_4_1_TERMINOLOGY)
+    term_json_path = resolve_task_path(_4_1_TERMINOLOGY)
+    terms_contract_path = str(Path(term_json_path).with_name("terms.json"))
+    abs_json = os.path.abspath(term_json_path)
+    abs_terms_contract = os.path.abspath(terms_contract_path)
+    abs_global = os.path.abspath(GLOBAL_GLOSSARY_PATH)
     abs_xlsx = os.path.abspath(CUSTOM_TERMS_PATH)
     abs_csv = os.path.abspath(OPTIONAL_CSV_TERMS_PATH)
     abs_map = os.path.abspath(OPTIONAL_JSON_TERMS_PATH)
     json_mtime = _file_mtime(abs_json)
+    contract_mtime = _file_mtime(abs_terms_contract)
+    global_mtime = _file_mtime(abs_global)
     xlsx_mtime = _file_mtime(abs_xlsx)
     csv_mtime = _file_mtime(abs_csv)
     map_mtime = _file_mtime(abs_map)
@@ -459,6 +555,10 @@ def _get_term_index() -> dict:
     cache_key = (
         abs_json,
         json_mtime,
+        abs_terms_contract,
+        contract_mtime,
+        abs_global,
+        global_mtime,
         abs_xlsx,
         xlsx_mtime,
         abs_csv,
@@ -471,45 +571,58 @@ def _get_term_index() -> dict:
         if _CACHED_INDEX_KEY == cache_key and _CACHED_INDEX_DATA is not None:
             return _CACHED_INDEX_DATA
 
-        merged_by_src: dict[str, dict[str, str]] = {}
+        merged_by_src: dict[str, dict[str, Any]] = {}
 
-        # Load terminology.json first, then overlay custom_terms unless terminology.json
-        # was edited more recently (e.g. during pause_before_translate).
+        def _merge_json_terms(file_path: str) -> None:
+            if not os.path.exists(file_path):
+                return
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                return
+            for item in data.get("terms", []) if isinstance(data, dict) else []:
+                if isinstance(item, dict) and item.get("src"):
+                    src_str = str(item.get("src", "")).strip()
+                    key = src_str.lower()
+                    prev = merged_by_src.get(key, {})
+                    prev_aliases = prev.get("aliases") or []
+                    new_aliases = _normalize_aliases(item.get("aliases"), src_str)
+                    merged_by_src[key] = {
+                        "src": src_str,
+                        "tgt": str(item.get("tgt", "")).strip(),
+                        "note": str(item.get("note", "") or prev.get("note", "")).strip(),
+                        "aliases": list(dict.fromkeys([*prev_aliases, *new_aliases])),
+                        "fix_source": bool(item.get("fix_source", prev.get("fix_source", False))),
+                        "source": str(item.get("source") or prev.get("source") or "task"),
+                    }
+
         custom_list = load_custom_terms()
-        custom_mtimes = [m for m in (xlsx_mtime, csv_mtime, map_mtime) if m is not None]
+        custom_mtimes = [m for m in (global_mtime, xlsx_mtime, csv_mtime, map_mtime) if m is not None]
         latest_custom_mtime = max(custom_mtimes) if custom_mtimes else 0.0
-        json_is_newer = json_mtime is not None and json_mtime > latest_custom_mtime
+        task_mtimes = [m for m in (json_mtime, contract_mtime) if m is not None]
+        latest_task_mtime = max(task_mtimes) if task_mtimes else 0.0
+        json_is_newer = bool(task_mtimes) and latest_task_mtime > latest_custom_mtime
 
         if not json_is_newer:
-            # Custom terms override terminology.json
-            if os.path.exists(_4_1_TERMINOLOGY):
-                with open(_4_1_TERMINOLOGY, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                for item in data.get("terms", []):
-                    if isinstance(item, dict) and item.get("src"):
-                        key = str(item["src"]).strip().lower()
-                        merged_by_src[key] = {
-                            "src": str(item.get("src", "")).strip(),
-                            "tgt": str(item.get("tgt", "")).strip(),
-                            "note": str(item.get("note", "")).strip(),
-                        }
+            _merge_json_terms(terms_contract_path)
+            _merge_json_terms(term_json_path)
             for item in custom_list:
-                merged_by_src[item["src"].lower()] = item
+                key = item["src"].lower()
+                prev = merged_by_src.get(key, {})
+                merged_by_src[key] = {
+                    **item,
+                    "aliases": list(dict.fromkeys([*(prev.get("aliases") or []), *(item.get("aliases") or [])])),
+                }
         else:
-            # terminology.json was edited more recently (e.g. pause_before_translate)
             for item in custom_list:
-                merged_by_src[item["src"].lower()] = item
-            if os.path.exists(_4_1_TERMINOLOGY):
-                with open(_4_1_TERMINOLOGY, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                for item in data.get("terms", []):
-                    if isinstance(item, dict) and item.get("src"):
-                        key = str(item["src"]).strip().lower()
-                        merged_by_src[key] = {
-                            "src": str(item.get("src", "")).strip(),
-                            "tgt": str(item.get("tgt", "")).strip(),
-                            "note": str(item.get("note", "")).strip(),
-                        }
+                merged_by_src[item["src"].lower()] = dict(item)
+            if contract_mtime is not None and (json_mtime is None or contract_mtime >= json_mtime):
+                _merge_json_terms(term_json_path)
+                _merge_json_terms(terms_contract_path)
+            else:
+                _merge_json_terms(terms_contract_path)
+                _merge_json_terms(term_json_path)
 
         index_data = _build_term_index(list(merged_by_src.values()))
         _CACHED_INDEX_KEY = cache_key
@@ -610,7 +723,7 @@ def _extract_chunk_summary(
 
 def _merge_terminology_results(
     chunk_results: list[tuple[int, dict]],
-    custom_terms_list: list[dict[str, str]],
+    custom_terms_list: list[dict[str, Any]],
 ) -> dict:
     """Deterministically unify terminology across chunks and authoritative custom terms."""
     chunk_results_sorted = sorted(chunk_results, key=lambda x: x[0])
@@ -622,7 +735,7 @@ def _merge_terminology_results(
             themes.append(t)
     combined_theme = " ".join(themes[:2]) if themes else ""
 
-    by_src_lower: dict[str, dict[str, str]] = {}
+    by_src_lower: dict[str, dict[str, Any]] = {}
     by_stem_key: dict[tuple[str, ...], str] = {}
 
     for term in custom_terms_list:
@@ -632,7 +745,15 @@ def _merge_terminology_results(
         if not src or not tgt:
             continue
         s_low = src.lower()
-        by_src_lower[s_low] = {"src": src, "tgt": tgt, "note": note}
+        aliases = _normalize_aliases(term.get("aliases"), src)
+        entry: dict[str, Any] = {"src": src, "tgt": tgt, "note": note}
+        if aliases:
+            entry["aliases"] = aliases
+        if term.get("fix_source"):
+            entry["fix_source"] = True
+        if term.get("source"):
+            entry["source"] = str(term["source"])
+        by_src_lower[s_low] = entry
         _, stems = _tokenize_and_normalize(src)
         if stems:
             by_stem_key[tuple(stems)] = tgt
@@ -647,12 +768,16 @@ def _merge_terminology_results(
             if not src or not tgt:
                 continue
             s_low = src.lower()
+            aliases = _normalize_aliases(raw_term.get("aliases"), src)
             _, stems = _tokenize_and_normalize(src)
             stem_tuple = tuple(stems) if stems else ()
 
             if s_low in by_src_lower:
                 if not by_src_lower[s_low].get("note") and note:
                     by_src_lower[s_low]["note"] = note
+                if aliases:
+                    prev_a = by_src_lower[s_low].get("aliases") or []
+                    by_src_lower[s_low]["aliases"] = list(dict.fromkeys([*prev_a, *aliases]))
                 continue
 
             if stem_tuple and stem_tuple in by_stem_key:
@@ -660,7 +785,10 @@ def _merge_terminology_results(
             elif stem_tuple:
                 by_stem_key[stem_tuple] = tgt
 
-            by_src_lower[s_low] = {"src": src, "tgt": tgt, "note": note}
+            entry = {"src": src, "tgt": tgt, "note": note}
+            if aliases:
+                entry["aliases"] = aliases
+            by_src_lower[s_low] = entry
 
     return {
         "theme": combined_theme,
@@ -672,7 +800,9 @@ def _merge_terminology_results(
 # Kept on a retry, so that the edits of `pause_before_translate` are not overwritten
 @check_file_exists(_4_1_TERMINOLOGY)
 def get_summary():
-    with open(_3_2_SPLIT_BY_MEANING, "r", encoding="utf-8") as f:
+    meaning_path = resolve_task_path(_3_2_SPLIT_BY_MEANING)
+    term_json_path = resolve_task_path(_4_1_TERMINOLOGY)
+    with open(meaning_path, "r", encoding="utf-8") as f:
         sentences = [line.strip() for line in f if line.strip()]
 
     custom_terms_list = load_custom_terms()
@@ -718,12 +848,23 @@ def get_summary():
 
     summary = _merge_terminology_results(chunk_results, custom_terms_list)
 
-    os.makedirs(os.path.dirname(_4_1_TERMINOLOGY), exist_ok=True)
-    with open(_4_1_TERMINOLOGY, "w", encoding="utf-8") as f:
+    os.makedirs(os.path.dirname(term_json_path) or ".", exist_ok=True)
+    with open(term_json_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=4)
 
+    ws = (
+        get_active_workspace()
+        if str(_4_1_TERMINOLOGY).startswith("output/")
+        else TaskWorkspace(
+            Path(term_json_path).parent.parent
+            if Path(term_json_path).parent.name == "log"
+            else Path(term_json_path).parent
+        )
+    )
+    ws.save_terms(summary.get("theme", ""), summary.get("terms", []))
+
     rprint(
-        f"💾 Summary log saved to → `{_4_1_TERMINOLOGY}` ({len(summary['terms'])} terms)"
+        f"💾 Summary log saved to → `{term_json_path}` ({len(summary['terms'])} terms)"
     )
 
 

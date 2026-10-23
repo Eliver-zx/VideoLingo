@@ -1,11 +1,14 @@
-import os, subprocess
-import pandas as pd
 import math
+import os
+from pathlib import Path
+import re
+import subprocess
 from typing import Dict, List, Tuple
+import pandas as pd
 from pydub import AudioSegment
-from core.utils import *
-from core.utils.models import *
-from pydub import AudioSegment
+from core.utils import load_key_or, update_key
+from core.utils.models import _2_CLEANED_CHUNKS, _AUDIO_DIR, _RAW_AUDIO_FILE, resolve_task_path
+from core.workspace import TaskWorkspace, get_active_workspace
 from pydub.silence import detect_silence
 from pydub.utils import mediainfo
 from rich import print as rprint
@@ -55,6 +58,7 @@ def raw_audio_settings():
 
 def _raw_audio_command(input_file: str):
     sample_rate, bitrate = raw_audio_settings()
+    raw_out = globals().get('resolve_task_path', lambda p: p)(_RAW_AUDIO_FILE)
     if _ffmpeg_has_encoder('libmp3lame'):
         return [
             'ffmpeg', '-y', '-i', input_file, '-vn',
@@ -62,7 +66,7 @@ def _raw_audio_command(input_file: str):
             '-af', 'aresample=async=1:first_pts=0',
             '-c:a', 'libmp3lame', '-b:a', bitrate,
             '-ar', str(sample_rate), '-ac', '1',
-            '-metadata', 'encoding=UTF-8', _RAW_AUDIO_FILE
+            '-metadata', 'encoding=UTF-8', raw_out
         ]
     # Fallback: conda-forge ffmpeg often lacks libmp3lame.
     # Output as WAV (PCM) which all ffmpeg builds support.
@@ -73,7 +77,7 @@ def _raw_audio_command(input_file: str):
         'ffmpeg', '-y', '-i', input_file, '-vn',
         '-af', 'aresample=async=1:first_pts=0',
         '-c:a', 'pcm_s16le', '-ar', str(sample_rate), '-ac', '1',
-        '-f', 'wav', _RAW_AUDIO_FILE
+        '-f', 'wav', raw_out
     ]
 
 def normalize_audio_volume(audio_path, output_path, target_db = -20.0, format = "wav", peak_ceiling_db = -1.0):
@@ -94,18 +98,24 @@ def normalize_audio_volume(audio_path, output_path, target_db = -20.0, format = 
     return output_path
 
 def convert_video_to_audio(video_file: str):
-    os.makedirs(_AUDIO_DIR, exist_ok=True)
-    if not os.path.exists(_RAW_AUDIO_FILE):
-        rprint(f"[blue]🎬➡️🎵 Converting to high quality audio with FFmpeg ......[/blue]")
+    resolve = globals().get('resolve_task_path', lambda p: p)
+    audio_dir = resolve(_AUDIO_DIR)
+    raw_file = resolve(_RAW_AUDIO_FILE)
+    os.makedirs(audio_dir, exist_ok=True)
+    if not os.path.exists(raw_file):
+        rprint("[blue]🎬➡️🎵 Converting to high quality audio with FFmpeg ......[/blue]")
         subprocess.run(_raw_audio_command(video_file), check=True, stderr=subprocess.PIPE)
-        rprint(f"[green]🎬➡️🎵 Converted <{video_file}> to <{_RAW_AUDIO_FILE}> with FFmpeg\n[/green]")
+        rprint(f"[green]🎬➡️🎵 Converted <{video_file}> to <{raw_file}> with FFmpeg\n[/green]")
 
 def prepare_audio_for_asr(audio_file: str):
-    os.makedirs(_AUDIO_DIR, exist_ok=True)
-    if not os.path.exists(_RAW_AUDIO_FILE):
-        rprint(f"[blue]🎵 Preparing uploaded audio for ASR with FFmpeg ......[/blue]")
+    resolve = globals().get('resolve_task_path', lambda p: p)
+    audio_dir = resolve(_AUDIO_DIR)
+    raw_file = resolve(_RAW_AUDIO_FILE)
+    os.makedirs(audio_dir, exist_ok=True)
+    if not os.path.exists(raw_file):
+        rprint("[blue]🎵 Preparing uploaded audio for ASR with FFmpeg ......[/blue]")
         subprocess.run(_raw_audio_command(audio_file), check=True, stderr=subprocess.PIPE)
-        rprint(f"[green]🎵 Prepared <{audio_file}> as <{_RAW_AUDIO_FILE}>\n[/green]")
+        rprint(f"[green]🎵 Prepared <{audio_file}> as <{raw_file}>\n[/green]")
 
 def get_audio_duration(audio_file: str) -> float:
     """Get the duration of an audio file using ffmpeg."""
@@ -135,7 +145,8 @@ def split_audio(audio_file: str, target_len: float = 30*60, win: float = 60) -> 
 
     while pos < duration:
         if duration - pos <= target_len:
-            segments.append((pos, duration)); break
+            segments.append((pos, duration))
+            break
 
         threshold = pos + target_len
         ws, we = int((threshold - win) * 1000), int((threshold + win) * 1000)
@@ -156,10 +167,19 @@ def split_audio(audio_file: str, target_len: float = 30*60, win: float = 60) -> 
             rprint(f"[yellow]⚠️ No valid silence regions found for {audio_file} at {threshold}s, using threshold[/yellow]")
             split_at = threshold
             
-        segments.append((pos, split_at)); pos = split_at
+        segments.append((pos, split_at))
+        pos = split_at
 
     rprint(f"[green]🎙️ Audio split completed {len(segments)} segments[/green]")
     return segments
+
+def _split_segment_text_into_tokens(seg_text: str) -> list[str]:
+    tokens = re.findall(
+        r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\u0e00-\u0e7f][，。、？！：；,.?!\"'”’）)\]]*|[^\s\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\u0e00-\u0e7f]+",
+        seg_text,
+    )
+    return tokens or [seg_text]
+
 
 def process_transcription(result: Dict) -> pd.DataFrame:
     all_words = []
@@ -169,29 +189,60 @@ def process_transcription(result: Dict) -> pd.DataFrame:
 
         words = segment.get('words')
         if not words:
-            # Some ASR backends (e.g. ElevenLabs without word-level timestamps)
-            # return segments without per-word entries. Synthesize a single
-            # word from the segment text so downstream alignment still works.
+            # Synthesize token-level entries with interpolated timestamps when an ASR
+            # backend returns segment text without per-word timestamps.
             seg_text = (segment.get('text') or '').strip()
             if not seg_text:
                 continue
-            words = [{
-                'word': seg_text,
-                'start': segment.get('start'),
-                'end': segment.get('end'),
-            }]
+            tokens = _split_segment_text_into_tokens(seg_text)
+            seg_start = segment.get('start')
+            seg_end = segment.get('end')
+            if seg_start is None and seg_end is None:
+                words = [{'word': tok} for tok in tokens]
+            else:
+                s_val = float(seg_start if seg_start is not None else (all_words[-1]['end'] if all_words else 0.0))
+                e_val = float(seg_end if seg_end is not None else s_val)
+                weights = [max(1, len(re.sub(r"[^\w\s]", "", tok))) for tok in tokens]
+                total_w = sum(weights) or len(tokens)
+                done = 0
+                words = []
+                for tok, w in zip(tokens, weights):
+                    w_start = s_val + (e_val - s_val) * done / total_w
+                    done += w
+                    w_end = s_val + (e_val - s_val) * done / total_w
+                    words.append({
+                        'word': tok,
+                        'start': round(w_start, 3),
+                        'end': round(w_end, 3),
+                    })
 
         for word in words:
             # Check word length
-            if len(word["word"]) > 30:
-                rprint(f"[yellow]⚠️ Warning: Detected word longer than 30 characters, skipping: {word['word']}[/yellow]")
+            if len(word["word"]) > 80:
+                rprint(f"[yellow]⚠️ Warning: Detected word longer than 80 characters, skipping: {word['word']}[/yellow]")
                 continue
                 
             # ! For French, we need to convert guillemets to empty strings
             word["word"] = word["word"].replace('»', '').replace('«', '')
             
-            if 'start' not in word and 'end' not in word:
-                if all_words:
+            has_start = 'start' in word and word['start'] is not None
+            has_end = 'end' in word and word['end'] is not None
+            if not has_start or not has_end:
+                if has_start and not has_end:
+                    all_words.append({
+                        'text': f'{word["word"]}',
+                        'start': word['start'],
+                        'end': word['start'],
+                        'speaker_id': speaker_id,
+                    })
+                elif has_end and not has_start:
+                    all_words.append({
+                        'text': f'{word["word"]}',
+                        'start': all_words[-1]['end'] if all_words else word['end'],
+                        'end': word['end'],
+                        'speaker_id': speaker_id,
+                    })
+                elif all_words:
                     # Assign the end time of the previous word as the start and end time of the current word
                     word_dict = {
                         'text': word["word"],
@@ -202,7 +253,7 @@ def process_transcription(result: Dict) -> pd.DataFrame:
                     all_words.append(word_dict)
                 else:
                     # If it's the first word, look next for a timestamp then assign it to the current word
-                    next_word = next((w for w in segment['words'] if 'start' in w and 'end' in w), None)
+                    next_word = next((w for w in (segment.get('words') or words) if 'start' in w and 'end' in w and w['start'] is not None and w['end'] is not None), None)
                     if next_word:
                         word_dict = {
                             'text': word["word"],
@@ -217,7 +268,7 @@ def process_transcription(result: Dict) -> pd.DataFrame:
                 # Normal case, with start and end times
                 word_dict = {
                     'text': f'{word["word"]}',
-                    'start': word.get('start', all_words[-1]['end'] if all_words else 0),
+                    'start': word['start'],
                     'end': word['end'],
                     'speaker_id': speaker_id
                 }
@@ -227,24 +278,41 @@ def process_transcription(result: Dict) -> pd.DataFrame:
     return pd.DataFrame(all_words)
 
 def save_results(df: pd.DataFrame):
-    os.makedirs('output/log', exist_ok=True)
+    cleaned_path = resolve_task_path(_2_CLEANED_CHUNKS)
+    os.makedirs(os.path.dirname(cleaned_path) or 'output/log', exist_ok=True)
 
     # Remove rows where 'text' is empty
     initial_rows = len(df)
-    df = df[df['text'].str.len() > 0]
+    df = pd.DataFrame(df[df['text'].str.len() > 0]).copy()
     removed_rows = initial_rows - len(df)
     if removed_rows > 0:
         rprint(f"[blue]ℹ️ Removed {removed_rows} row(s) with empty text.[/blue]")
     
-    # Check for and remove words longer than 20 characters
-    long_words = df[df['text'].str.len() > 30]
+    # Check for and remove words longer than 80 characters
+    long_words = df[df['text'].str.len() > 80]
     if not long_words.empty:
-        rprint(f"[yellow]⚠️ Warning: Detected {len(long_words)} word(s) longer than 30 characters. These will be removed.[/yellow]")
-        df = df[df['text'].str.len() <= 30]
+        rprint(f"[yellow]⚠️ Warning: Detected {len(long_words)} word(s) longer than 80 characters. These will be removed.[/yellow]")
+        df = pd.DataFrame(df[df['text'].str.len() <= 80]).copy()
+
+    word_records = [
+        {
+            "text": str(row.get("text", "")).strip('"').strip(),
+            "start": float(row.get("start") or 0.0),
+            "end": float(row.get("end") or 0.0),
+            "speaker_id": None if bool(pd.isna(row.get("speaker_id"))) else row.get("speaker_id"),
+        }
+        for _, row in df.iterrows()
+    ]
+    ws = (
+        get_active_workspace()
+        if str(_2_CLEANED_CHUNKS).startswith("output/")
+        else TaskWorkspace(Path(cleaned_path).parent.parent if Path(cleaned_path).parent.name == "log" else Path(cleaned_path).parent)
+    )
+    ws.save_words(word_records)
     
     df['text'] = df['text'].apply(lambda x: f'"{x}"')
-    df.to_excel(_2_CLEANED_CHUNKS, index=False)
-    rprint(f"[green]📊 Excel file saved to {_2_CLEANED_CHUNKS}[/green]")
+    df.to_excel(cleaned_path, index=False)
+    rprint(f"[green]📊 Excel file saved to {cleaned_path}[/green]")
 
 def save_language(language: str):
     update_key("whisper.detected_language", language)

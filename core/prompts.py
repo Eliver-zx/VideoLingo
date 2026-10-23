@@ -1,5 +1,5 @@
 import json
-from core.utils import *
+from core.utils import get_source_language, load_key, load_key_or
 
 ## ================================================================
 # @ _3_1_split_nlp.py
@@ -17,6 +17,7 @@ Restore sentence-ending punctuation (`.`, `?`, `!` or `。`, `？`, `！`) and i
 2. **Complete Natural Sentences**: Place a sentence-ending mark (`.`, `?`, `!`, `。`, `？`, `！`) at the end of every complete conversational sentence (one full thought).
 3. **Break Spoken Run-ons & Comma Splices**: In spoken transcripts, speakers often chain multiple independent clauses together using commas or filler conjunctions (`and`, `so`, `but`, `then`, `because`, `然后`, `所以`, `但是`, `而且`). Whenever the preceding clause already expresses a complete thought, end it with a period (`.` or `。`) instead of chaining a long run-on sentence with commas.
 4. **No Fragmentation**: Keep dependent clauses, short modifiers, and prepositional phrases attached to their main clause; do not put periods inside a single incomplete phrase.
+5. **Acoustic Pause Markers (`‖`)**: The symbol `‖` in the input indicates a spoken acoustic pause (>= 0.4s). Use `‖` as a cue for placing a period or comma at natural clause boundaries, and **do not include `‖` in the output**.
 
 ## INPUT
 <transcript>

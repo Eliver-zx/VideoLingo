@@ -1,9 +1,12 @@
-import os,sys
 import glob
 import json
+import os
 import re
-import subprocess
-from core.utils import *
+import sys
+from typing import Any
+from core.utils import load_key, rprint
+from core.utils.models import resolve_task_path
+from core.workspace import TaskWorkspace, probe_media_metadata  # noqa: F401
 
 OUTPUT_DIR = "output"
 INPUT_MANIFEST = "input_manifest.json"
@@ -20,14 +23,11 @@ def sanitize_filename(filename):
 
 def update_ytdlp():
     try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"])
-        if 'yt_dlp' in sys.modules:
-            del sys.modules['yt_dlp']
-        rprint("[green]yt-dlp updated[/green]")
-    except subprocess.CalledProcessError as e:
-        rprint("[yellow]Warning: Failed to update yt-dlp: {e}[/yellow]")
-    from yt_dlp import YoutubeDL
-    return YoutubeDL
+        from yt_dlp import YoutubeDL
+        return YoutubeDL
+    except Exception as e:
+        rprint(f"[yellow]Warning: Failed to import yt-dlp: {e}[/yellow]")
+        raise
 
 def needs_cookies(error):
     """True when the site refused the download until the user is signed in."""
@@ -35,8 +35,11 @@ def needs_cookies(error):
     return any(hint in message for hint in ("sign in to confirm", "--cookies", "login required"))
 
 def download_video_ytdlp(url, save_path='output', resolution='1080'):
+    _resolve = globals().get("resolve_task_path")
+    if _resolve is not None and save_path == 'output':
+        save_path = _resolve(save_path)
     os.makedirs(save_path, exist_ok=True)
-    ydl_opts = {
+    ydl_opts: dict[str, Any] = {
         'format': 'bestvideo+bestaudio/best' if resolution == 'best' else f'bestvideo[height<={resolution}]+bestaudio/best[height<={resolution}]',
         'outtmpl': f'{save_path}/%(title)s.%(ext)s',
         'noplaylist': True,
@@ -61,10 +64,16 @@ def download_video_ytdlp(url, save_path='output', resolution='1080'):
             raise ValueError(f"Cookies file not found: {cookies_path}")
         ydl_opts["cookiefile"] = cookies_path
 
-    # Get YoutubeDL class after updating
+    # Get YoutubeDL class
     YoutubeDL = update_ytdlp()
-    with YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    info = {}
+    with YoutubeDL(ydl_opts) as ydl:  # type: ignore[arg-type]
+        if hasattr(ydl, "extract_info"):
+            extracted = ydl.extract_info(url, download=True)
+            if isinstance(extracted, dict):
+                info = extracted
+        else:
+            ydl.download([url])
     
     # Check and rename files after download
     for file in os.listdir(save_path):
@@ -76,7 +85,38 @@ def download_video_ytdlp(url, save_path='output', resolution='1080'):
     media_file = find_video_files(save_path)
     write_input_manifest(media_file, "video", save_path)
 
+    _ws_cls = globals().get("TaskWorkspace")
+    _probe = globals().get("probe_media_metadata")
+    if _ws_cls is not None and (info or os.path.isfile(media_file)):
+        ws = _ws_cls(save_path)
+        meta = _probe(media_file) if (_probe is not None and os.path.isfile(media_file)) else {}
+        title = str(info.get("title") or os.path.splitext(os.path.basename(media_file))[0] or "video")
+        duration_sec = float(info.get("duration") or meta.get("duration_sec") or 0.0)
+        ws.update_manifest(
+            title=title,
+            origin={
+                "kind": "url",
+                "source_path": None,
+                "original_filename": os.path.basename(media_file),
+                "url": url,
+                "mount_mode": "download",
+            },
+            media={
+                "type": "video",
+                "filename": os.path.basename(media_file),
+                "input_subtitle": None,
+                "width": meta.get("width", 0),
+                "height": meta.get("height", 0),
+                "rotation": meta.get("rotation", 0),
+                "display_width": meta.get("display_width", 0),
+                "display_height": meta.get("display_height", 0),
+                "duration_sec": duration_sec,
+                "has_audio": meta.get("has_audio", True),
+            },
+        )
+
 def write_input_manifest(media_file: str, media_type: str, save_path='output', subtitle_file=None):
+    save_path = resolve_task_path(save_path) if save_path == 'output' else save_path
     os.makedirs(save_path, exist_ok=True)
     manifest_path = os.path.join(save_path, INPUT_MANIFEST)
     media_path = media_file.replace("\\", "/") if sys.platform.startswith('win') else media_file
@@ -87,6 +127,7 @@ def write_input_manifest(media_file: str, media_type: str, save_path='output', s
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
 def _read_input_manifest(save_path='output'):
+    save_path = resolve_task_path(save_path) if save_path == 'output' else save_path
     manifest_path = os.path.join(save_path, INPUT_MANIFEST)
     if not os.path.exists(manifest_path):
         return None
@@ -100,6 +141,10 @@ def _read_input_manifest(save_path='output'):
 
 def find_subtitle_file(save_path='output'):
     """The subtitles of the user that take the place of the recognition, or None."""
+    save_path = resolve_task_path(save_path) if save_path == 'output' else save_path
+    sub = TaskWorkspace(save_path).resolve_subtitle_file()
+    if sub:
+        return sub
     manifest_path = os.path.join(save_path, INPUT_MANIFEST)
     if not os.path.exists(manifest_path):
         return None
@@ -108,6 +153,7 @@ def find_subtitle_file(save_path='output'):
     return subtitle_file if subtitle_file and os.path.exists(subtitle_file) else None
 
 def find_video_files(save_path='output'):
+    save_path = resolve_task_path(save_path) if save_path == 'output' else save_path
     video_files = [file for file in glob.glob(save_path + "/*") if os.path.isfile(file) and os.path.splitext(file)[1][1:].lower() in load_key("allowed_video_formats")]
     # change \\ to /, this happen on windows
     if sys.platform.startswith('win'):
@@ -122,6 +168,7 @@ def find_video_files(save_path='output'):
     return video_files[0]
 
 def find_audio_files(save_path='output'):
+    save_path = resolve_task_path(save_path) if save_path == 'output' else save_path
     audio_files = [file for file in glob.glob(save_path + "/*") if os.path.splitext(file)[1][1:].lower() in load_key("allowed_audio_formats")]
     if sys.platform.startswith('win'):
         audio_files = [file.replace("\\", "/") for file in audio_files]
@@ -147,6 +194,11 @@ def _safe_find_audio_file(save_path='output'):
         raise
 
 def find_media_file(save_path='output'):
+    save_path = resolve_task_path(save_path) if save_path == 'output' else save_path
+    try:
+        return TaskWorkspace(save_path).resolve_media_file()
+    except ValueError:
+        pass
     manifest = _read_input_manifest(save_path)
     if manifest:
         return manifest
@@ -171,6 +223,6 @@ if __name__ == '__main__':
     # Example usage
     url = input('Please enter the URL of the video you want to download: ')
     resolution = input('Please enter the desired resolution (360/480/720/1080, default 1080): ')
-    resolution = int(resolution) if resolution.isdigit() else 1080
+    resolution = str(int(resolution)) if resolution.isdigit() else '1080'
     download_video_ytdlp(url, resolution=resolution)
     print(f"🎥 Video has been downloaded to {find_video_files()}")

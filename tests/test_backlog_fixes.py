@@ -383,58 +383,54 @@ def test_check_api_without_key(monkeypatch, tmp_path):
 
 
 # ------------------------------------------------------------------
-# split_by_mark: long videos are tokenized in batches (#238)
+# _3_1_split_nlp: long videos are processed in overlapping windows (#238)
 # ------------------------------------------------------------------
 
 def test_batch_words_stays_below_the_byte_limit_and_cuts_after_sentences():
-    from core.spacy_utils.split_by_mark import batch_words
+    from core._3_1_split_nlp import build_overlapping_windows
 
-    words = [word for i in range(300) for word in ("これは", "とても", "長い", f"文{i}", "です。")]
-
-    batches = batch_words(words, max_bytes=1000)
-
-    assert [word for batch in batches for word in batch] == words
-    assert len(batches) > 1
-    assert all(sum(len(word.encode("utf-8")) + 1 for word in batch) <= 1000 for batch in batches)
-    assert all(batch[-1].endswith("。") for batch in batches)
+    windows = build_overlapping_windows(1500, chunk_words=400, overlap_words=30)
+    assert len(windows) > 1
+    assert windows[0][2] == 0
+    assert windows[-1][3] == 1500
+    for i in range(len(windows) - 1):
+        assert windows[i][3] == windows[i + 1][2]
 
 
 def test_batch_words_without_punctuation_and_short_input():
-    from core.spacy_utils.split_by_mark import batch_words
+    from core._3_1_split_nlp import build_overlapping_windows
 
-    words = ["word"] * 1000
-
-    assert batch_words(["short", "text."]) == [["short", "text."]]
-    assert batch_words([]) == []
-    batches = batch_words(words, max_bytes=100)
-    assert [word for batch in batches for word in batch] == words
-    assert all(len(batch) == 20 for batch in batches)
+    assert build_overlapping_windows(0) == []
+    assert build_overlapping_windows(2) == [(0, 2, 0, 2)]
+    windows = build_overlapping_windows(1000, chunk_words=100, overlap_words=20)
+    assert windows[0][2] == 0 and windows[-1][3] == 1000
 
 
 def test_split_by_mark_handles_text_longer_than_the_tokenizer_limit(tmp_path, monkeypatch):
-    import sys
-    import spacy
-    import core.spacy_utils.split_by_mark  # noqa: F401  (the package re-exports the function under this name)
-    module = sys.modules["core.spacy_utils.split_by_mark"]
+    from core import _3_1_split_nlp
 
-    nlp = spacy.blank("en")
-    nlp.add_pipe("sentencizer")
     seen = []
 
-    def limited_nlp(text):
-        seen.append(len(text.encode("utf-8")))
+    def fake_ask_gpt(prompt, **kwargs):
+        seen.append(len(prompt.encode("utf-8")))
         assert seen[-1] <= 49149
-        return nlp(text)
+        raise RuntimeError("use existing punctuation fallback")
 
     words = [word for i in range(6000) for word in ("This", "is", "sentence", "number", f"{i}.")]
-    output = tmp_path / "split_by_mark.txt"
-    monkeypatch.setattr(module, "SPLIT_BY_MARK_FILE", str(output))
-    monkeypatch.setattr(module, "load_key", lambda key: "en")
-    monkeypatch.setattr(module.pd, "read_excel", lambda path: pd.DataFrame({"text": words}))
+    nlp_out = tmp_path / "split_by_nlp.txt"
+    meaning_out = tmp_path / "split_by_meaning.txt"
+    cleaned_xlsx = tmp_path / "cleaned_chunks.xlsx"
+    pd.DataFrame({"text": words}).to_excel(cleaned_xlsx, index=False)
 
-    module.split_by_mark(limited_nlp)
+    monkeypatch.setattr(_3_1_split_nlp, "_2_CLEANED_CHUNKS", str(cleaned_xlsx))
+    monkeypatch.setattr(_3_1_split_nlp, "_3_1_SPLIT_BY_NLP", str(nlp_out))
+    monkeypatch.setattr(_3_1_split_nlp, "_3_2_SPLIT_BY_MEANING", str(meaning_out))
+    monkeypatch.setattr(_3_1_split_nlp, "get_source_language", lambda: "en")
+    monkeypatch.setattr(_3_1_split_nlp, "ask_gpt", fake_ask_gpt)
 
-    lines = output.read_text(encoding="utf-8").splitlines()
+    _3_1_split_nlp.split_by_spacy()
+
+    lines = nlp_out.read_text(encoding="utf-8").splitlines()
     assert len(seen) > 1
     assert lines == [f"This is sentence number {i}." for i in range(6000)]
 

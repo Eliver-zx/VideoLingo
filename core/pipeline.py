@@ -1,4 +1,4 @@
-"""The single processing plan used by the UI and API."""
+"""The single processing plan used by the Web UI and API."""
 from functools import partial
 from importlib import import_module
 import json
@@ -6,9 +6,27 @@ from pathlib import Path
 
 from core.task_runner import TaskRunner
 from core.utils.config_utils import load_key, load_key_or
-from core.utils.models import (_4_1_TERMINOLOGY, _4_2_TRANSLATION, _5_SPLIT_SUB, _10_DUB_TRUNCATED,
-                               _TEXT_DONE_MARKER, _AUDIO_DONE_MARKER)
+from core.utils.models import (
+    _4_1_TERMINOLOGY,
+    _4_2_TRANSLATION,
+    _5_SPLIT_SUB,
+    _10_DUB_TRUNCATED,
+    _TEXT_DONE_MARKER,
+    _AUDIO_DONE_MARKER,
+    resolve_task_path,
+)
 
+
+VALID_TTS_METHODS = (
+    "openai_tts",
+    "sf_fish_tts",
+    "fish_audio",
+    "f5tts",
+    "edge_tts",
+    "gpt_sovits",
+    "custom_tts",
+    "sf_cosyvoice2",
+)
 
 # Labels remain translation keys; only the UI translates them.
 SUBTITLE_STEPS = [
@@ -46,8 +64,9 @@ INVALID_TRANSLATION = "`output/log/translation_results.xlsx` can not be used aft
 
 def terminology_error():
     """What is wrong with the terminology file, or None when the translation can use it."""
+    term_path = Path(resolve_task_path(_4_1_TERMINOLOGY))
     try:
-        terminology = json.loads(Path(_4_1_TERMINOLOGY).read_text(encoding="utf-8"))
+        terminology = json.loads(term_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         return str(e)
     terms = terminology.get("terms") if isinstance(terminology, dict) else None
@@ -62,7 +81,8 @@ def terminology_error():
 def review_terminology():
     """Optional checkpoint `pause_before_translate`: the task waits until the user resumes it."""
     runner = TaskRunner._current
-    if runner is None or not load_key("pause_before_translate") or Path(_4_2_TRANSLATION).exists():
+    trans_path = Path(resolve_task_path(_4_2_TRANSLATION))
+    if runner is None or not load_key("pause_before_translate") or trans_path.exists():
         return
     message = REVIEW_TERMINOLOGY
     while True:
@@ -78,7 +98,8 @@ def review_terminology():
 def read_translation():
     """The source lines and the translated lines of the translation results, empty cells as ''."""
     import pandas as pd
-    df = pd.read_excel(_4_2_TRANSLATION)
+    trans_path = resolve_task_path(_4_2_TRANSLATION)
+    df = pd.read_excel(trans_path)
     return [["" if pd.isna(value) else str(value).strip() for value in df[column]] for column in ("Source", "Translation")]
 
 
@@ -99,7 +120,8 @@ def translation_error(source, translation):
 def review_translation():
     """Optional checkpoint `pause_after_translate`: the task waits until the user resumes it."""
     runner = TaskRunner._current
-    if runner is None or not load_key_or("pause_after_translate", False) or Path(_5_SPLIT_SUB).exists():
+    split_sub_path = Path(resolve_task_path(_5_SPLIT_SUB))
+    if runner is None or not load_key_or("pause_after_translate", False) or split_sub_path.exists():
         return
     source, translation = read_translation()
     message = REVIEW_TRANSLATION
@@ -115,24 +137,24 @@ def review_translation():
 
 def check_tts_method():
     """The method of an older config.yaml may be gone, such as azure_tts."""
-    from core.st_utils.tts_settings import PROVIDERS
     method = load_key("tts_method")
-    if not any(method in methods for methods in PROVIDERS.values()):
+    if method not in VALID_TTS_METHODS:
         raise ValueError(f"The dubbing method `{method}` is not available any more. "
                          "Select another one in the dubbing settings and retry.")
 
 
 def truncated_dubbing_lines():
     """The lines whose dubbing was cut at the end, as the dubbing has listed them."""
+    trunc_path = Path(resolve_task_path(_10_DUB_TRUNCATED))
     try:
-        return json.loads(Path(_10_DUB_TRUNCATED).read_text(encoding="utf-8"))
+        return json.loads(trunc_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
 
 
 def _execute(calls, clear_marker=None):
     if clear_marker:
-        Path(clear_marker).unlink(missing_ok=True)
+        Path(resolve_task_path(clear_marker)).unlink(missing_ok=True)
     for call in calls:
         TaskRunner.check_cancel()
         module, function = call.split('.')
@@ -141,8 +163,9 @@ def _execute(calls, clear_marker=None):
 
 def _finish(marker):
     TaskRunner.check_cancel()
-    Path(marker).parent.mkdir(parents=True, exist_ok=True)
-    Path(marker).touch()
+    resolved = Path(resolve_task_path(marker))
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.touch()
 
 
 def get_steps(stage="subtitles", dubbing=False):

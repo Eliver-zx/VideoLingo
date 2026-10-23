@@ -3,7 +3,8 @@ from pathlib import Path
 import base64
 import io
 from pydub import AudioSegment
-from core.utils import *
+from core.utils import except_handler, load_key
+from core.utils.models import resolve_task_path
 
 # The API answers 400 to a large reference: send mono 24 kHz and no more than 15 s
 MAX_REFERENCE_SECONDS = 15
@@ -31,13 +32,15 @@ def cosyvoice_tts_for_videolingo(text, save_as, number, task_df):
     prompt_text = task_df.loc[task_df['number'] == number, 'origin'].values[0]
     API_KEY = load_key("sf_cosyvoice2.api_key")
     # 设置参考音频路径
-    current_dir = Path.cwd()
-    ref_audio_path = current_dir / f"output/audio/refers/{number}.wav"
+    ref_audio_path = Path(resolve_task_path(f"output/audio/refers/{number}.wav")).resolve()
     
-    # 如果参考音频不存在，使用第一个音频作为备选
+    # 如果参考音频不存在，尝试提取或回退到第一个可用参考音频并同步对应的参考文本
     if not ref_audio_path.exists():
-        ref_audio_path = current_dir / "output/audio/refers/1.wav"
-        if not ref_audio_path.exists():
+        first_num = 1 if (task_df is not None and not task_df.empty and 1 in task_df['number'].values) else (
+            int(task_df.iloc[0]['number']) if task_df is not None and not task_df.empty else 1
+        )
+        fallback_path = Path(resolve_task_path(f"output/audio/refers/{first_num}.wav")).resolve()
+        if not fallback_path.exists():
             try:
                 from core._9_refer_audio import extract_refer_audio_main
                 print(f"参考音频文件不存在，尝试提取: {ref_audio_path}")
@@ -45,6 +48,10 @@ def cosyvoice_tts_for_videolingo(text, save_as, number, task_df):
             except Exception as e:
                 print(f"提取参考音频失败: {str(e)}")
                 raise
+        if not ref_audio_path.exists():
+            ref_audio_path = fallback_path
+            if task_df is not None and not task_df.empty and first_num in task_df['number'].values:
+                prompt_text = task_df.loc[task_df['number'] == first_num, 'origin'].values[0]
 
     reference_base64, prompt_text = prepare_reference(ref_audio_path, prompt_text)
     client = OpenAI(api_key=API_KEY, base_url="https://api.siliconflow.cn/v1")

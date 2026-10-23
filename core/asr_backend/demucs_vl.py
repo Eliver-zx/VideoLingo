@@ -1,3 +1,6 @@
+# pyright: reportPrivateImportUsage=false
+from __future__ import annotations
+
 import gc
 import os
 import re
@@ -15,7 +18,13 @@ from torch.cuda import is_available as is_cuda_available
 
 from core.asr_backend.audio_preprocess import _ffmpeg_has_encoder
 from core.utils.config_utils import load_key_or
-from core.utils.models import *
+from core.utils.models import (
+    _AUDIO_DIR,
+    _BACKGROUND_AUDIO_FILE,
+    _RAW_AUDIO_FILE,
+    _VOCAL_AUDIO_FILE,
+    resolve_task_path,
+)
 
 try:
     from demucs.api import Separator as _DemucsSeparator  # type: ignore[import-not-found]
@@ -281,14 +290,19 @@ def separate_in_chunks(separator, pcm_file, pcm_channels, samplerate, channels, 
         gc.collect()
 
 def demucs_audio(model_key: Optional[str] = None):
-    if os.path.exists(_VOCAL_AUDIO_FILE) and os.path.exists(_BACKGROUND_AUDIO_FILE):
-        rprint(f"[yellow]⚠️ {_VOCAL_AUDIO_FILE} and {_BACKGROUND_AUDIO_FILE} already exist, skip vocal separation.[/yellow]")
+    vocal_audio_path = resolve_task_path(_VOCAL_AUDIO_FILE)
+    bg_audio_path = resolve_task_path(_BACKGROUND_AUDIO_FILE)
+    audio_dir_path = resolve_task_path(_AUDIO_DIR)
+    raw_audio_path = resolve_task_path(_RAW_AUDIO_FILE)
+
+    if os.path.exists(vocal_audio_path) and os.path.exists(bg_audio_path):
+        rprint(f"[yellow]⚠️ {vocal_audio_path} and {bg_audio_path} already exist, skip vocal separation.[/yellow]")
         return
 
     resolved = resolve_separation_model(model_key)
     spec = VOCAL_SEPARATION_MODELS[resolved]
     console = Console()
-    os.makedirs(_AUDIO_DIR, exist_ok=True)
+    os.makedirs(audio_dir_path, exist_ok=True)
 
     console.print(f"🤖 Loading <{spec['model']}> vocal separation model...")
     if spec["backend"] == "demucs":
@@ -313,10 +327,10 @@ def demucs_audio(model_key: Optional[str] = None):
     console.print("🎵 Separating audio...")
     # The stems are written next to their final place and moved there when they are
     # complete, so an interrupted run does not leave half a track behind.
-    with tempfile.TemporaryDirectory(dir=_AUDIO_DIR) as tmp:
+    with tempfile.TemporaryDirectory(dir=audio_dir_path) as tmp:
         pcm_file = Path(tmp) / "raw.f32le"
         vocal_file, background_file = Path(tmp) / "vocal.mp3", Path(tmp) / "background.mp3"
-        pcm_channels = decode_pcm(_RAW_AUDIO_FILE, pcm_file, samplerate)
+        pcm_channels = decode_pcm(raw_audio_path, pcm_file, samplerate)
         vocal_writer = StemWriter(vocal_file, samplerate, audio_channels)
         background_writer = StemWriter(background_file, samplerate, audio_channels)
         try:
@@ -328,8 +342,8 @@ def demucs_audio(model_key: Optional[str] = None):
                     writer.close()
         for writer in (vocal_writer, background_writer):
             writer.close()
-        os.replace(vocal_file, _VOCAL_AUDIO_FILE)
-        os.replace(background_file, _BACKGROUND_AUDIO_FILE)
+        os.replace(vocal_file, vocal_audio_path)
+        os.replace(background_file, bg_audio_path)
 
     # Clean up memory
     del model, separator

@@ -1,11 +1,13 @@
 import datetime
+import json
+import os
 import re
 import pandas as pd
 from core._8_1_audio_task import time_diff_seconds
 from core.asr_backend.audio_preprocess import get_audio_duration
 from core.tts_backend.estimate_duration import init_estimator, estimate_duration
-from core.utils import *
-from core.utils.models import *
+from core.utils import load_key, rprint
+from core.utils.models import _3_UTTERANCES_JSON, _8_1_AUDIO_TASK, _RAW_AUDIO_FILE, resolve_task_path
 
 SRC_SRT = "output/src.srt"
 TRANS_SRT = "output/trans.srt"
@@ -15,6 +17,8 @@ ESTIMATOR = None
 def clean_line(text):
     """A line of the subtitles without the remarks in brackets and without the dashes of a dialogue."""
     text = re.sub(r'\([^)]*\)|（[^）]*）', '', text)
+    text = re.sub(r'\([^)]*$|（[^）]*$', '', text)
+    text = re.sub(r'^[^(]*\)|^[^（]*）', '', text)
     # A hyphen inside a word is a part of the word: "hands-on"
     return re.sub(r'(?<!\w)-|-(?!\w)', '', text).strip()
 
@@ -38,6 +42,8 @@ def merge_rows(df, start_idx, merge_count):
     }
     
     while merge_count < MAX_MERGE_COUNT and (start_idx + merge_count) < len(df):
+        if df.iloc[start_idx + merge_count - 1]['cut_off'] == 1:
+            break
         next_row = df.iloc[start_idx + merge_count]
         merged['est_dur'] += next_row['est_dur']
         merged['tol_dur'] += next_row['tol_dur']
@@ -56,9 +62,8 @@ def merge_rows(df, start_idx, merge_count):
         
         merge_count += 1
     
-    # If no suitable merge point is found
-    if merge_count >= MAX_MERGE_COUNT or (start_idx + merge_count) >= len(df):
-        df.at[start_idx + merge_count - 1, 'cut_off'] = 1
+    # If no suitable merge point is found or a cut_off boundary was hit
+    df.at[start_idx + merge_count - 1, 'cut_off'] = 1
     return merge_count
 
 def analyze_subtitle_timing_and_speed(df):
@@ -66,23 +71,24 @@ def analyze_subtitle_timing_and_speed(df):
     global ESTIMATOR
     if ESTIMATOR is None:
         ESTIMATOR = init_estimator()
+    estimator = ESTIMATOR
     TOLERANCE = load_key("tolerance")
-    whole_dur = get_audio_duration(_RAW_AUDIO_FILE)
+    whole_dur = get_audio_duration(resolve_task_path(_RAW_AUDIO_FILE))
     df['gap'] = 0.0  # Initialize gap column
     for i in range(len(df) - 1):
         current_end = datetime.datetime.strptime(df.loc[i, 'end_time'], '%H:%M:%S.%f').time()
         next_start = datetime.datetime.strptime(df.loc[i + 1, 'start_time'], '%H:%M:%S.%f').time()
-        df.loc[i, 'gap'] = time_diff_seconds(current_end, next_start, datetime.date.today())
+        df.loc[i, 'gap'] = max(0.0, time_diff_seconds(current_end, next_start, datetime.date.today()))
     
     # Set the gap for the last line
     last_end = datetime.datetime.strptime(df.iloc[-1]['end_time'], '%H:%M:%S.%f').time()
     last_end_seconds = (last_end.hour * 3600 + last_end.minute * 60 + 
                        last_end.second + last_end.microsecond / 1000000)
-    df.iloc[-1, df.columns.get_loc('gap')] = whole_dur - last_end_seconds
+    df.iloc[-1, df.columns.get_loc('gap')] = max(0.0, whole_dur - last_end_seconds)
     
-    df['tolerance'] = df['gap'].apply(lambda x: TOLERANCE if x > TOLERANCE else x)
+    df['tolerance'] = df['gap'].apply(lambda x: max(0.0, min(TOLERANCE, x)))
     df['tol_dur'] = df['duration'] + df['tolerance']
-    df['est_dur'] = df.apply(lambda x: estimate_duration(x['text'], ESTIMATOR), axis=1)
+    df['est_dur'] = df.apply(lambda x: estimate_duration(x['text'], estimator), axis=1)
 
     ## Calculate speed indicators
     accept = load_key("speed_factor.accept") # Maximum acceptable speed factor
@@ -137,7 +143,8 @@ def process_cutoffs(df):
 
 def gen_dub_chunks():
     rprint("[🎬 Starting] Generating dubbing chunks...")
-    df = pd.read_excel(_8_1_AUDIO_TASK)
+    audio_task_path = resolve_task_path(_8_1_AUDIO_TASK)
+    df = pd.read_excel(audio_task_path)
     
     rprint("[📊 Processing] Analyzing timing and speed...")
     df = analyze_subtitle_timing_and_speed(df)
@@ -146,8 +153,8 @@ def gen_dub_chunks():
     df = process_cutoffs(df)
 
     rprint("[📝 Reading] Loading transcript files...")
-    content = open(TRANS_SRT, "r", encoding="utf-8").read()
-    ori_content = open(SRC_SRT, "r", encoding="utf-8").read()
+    content = open(resolve_task_path(TRANS_SRT), "r", encoding="utf-8").read()
+    ori_content = open(resolve_task_path(SRC_SRT), "r", encoding="utf-8").read()
     
     # Process subtitle content
     content_lines = []
@@ -175,12 +182,28 @@ def gen_dub_chunks():
     last_idx = 0
 
     def clean_text(text):
-        """clean space and punctuation"""
+        """clean space and punctuation, stripping parenthetical remarks including split ones"""
         if not text or not isinstance(text, str):
             return ''
+        text = re.sub(r'\([^)]*\)|（[^）]*）', '', text)
+        text = re.sub(r'[()（）]', '', text)
         return re.sub(r'[^\w\s]|[\s]', '', text)
 
-    for idx, row in df.iterrows():
+    utterance_cues_by_id = {}
+    utterances_path = resolve_task_path(_3_UTTERANCES_JSON)
+    if os.path.isfile(utterances_path):
+        try:
+            with open(utterances_path, "r", encoding="utf-8") as f:
+                utt_list = json.load(f)
+            if isinstance(utt_list, list):
+                for pos, u in enumerate(utt_list, 1):
+                    if isinstance(u, dict) and isinstance(u.get("sub_cues"), list) and u["sub_cues"]:
+                        utterance_cues_by_id[pos] = u["sub_cues"]
+        except Exception:
+            utterance_cues_by_id = {}
+
+    for pos_idx in range(len(df)):
+        row = df.iloc[pos_idx]
         target = clean_text(row['text'])
         matches = []
         current = ''
@@ -194,18 +217,38 @@ def gen_dub_chunks():
             match_indices.append(i)
             
             if current == target:
-                df.at[idx, 'lines'] = matches
-                df.at[idx, 'src_lines'] = [ori_content_lines[i] for i in match_indices]
+                df.at[pos_idx, 'lines'] = matches
+                df.at[pos_idx, 'src_lines'] = [
+                    ori_content_lines[j] if j < len(ori_content_lines) else '' for j in match_indices
+                ]
                 last_idx = i + 1
                 break
-        else:  # If no match is found
-            rprint(f"[❌ Error] Matching failed at line {idx}:")
-            rprint(f"Target: '{target}'")
-            rprint(f"Current: '{current}'")
-            raise ValueError("Matching failed")
+        else:
+            # Fallback to direct Utterance ID mapping from utterances.json when available
+            raw_num = row.get('number')
+            row_num = int(raw_num) if raw_num is not None and not pd.isna(raw_num) else (pos_idx + 1)
+            next_raw = df.iloc[pos_idx + 1].get('number') if pos_idx + 1 < len(df) else None
+            next_num = int(next_raw) if next_raw is not None and not pd.isna(next_raw) else (row_num + 1)
+            cues = []
+            for uid in range(row_num, max(row_num + 1, next_num)):
+                if uid in utterance_cues_by_id:
+                    cues.extend(utterance_cues_by_id[uid])
+            if cues:
+                spoken_single = clean_line(str(row.get('text', '')))
+                if len(cues) == 1 and spoken_single:
+                    df.at[pos_idx, 'lines'] = [spoken_single]
+                else:
+                    df.at[pos_idx, 'lines'] = [clean_line(str(c.get("trans", c.get("text", "")))) for c in cues]
+                df.at[pos_idx, 'src_lines'] = [clean_line(str(c.get("src", ""))) for c in cues]
+                last_idx = min(len(content_lines), last_idx + len(cues))
+            else:
+                rprint(f"[❌ Error] Matching failed at line {pos_idx}:")
+                rprint(f"Target: '{target}'")
+                rprint(f"Current: '{current}'")
+                raise ValueError("Matching failed")
 
     # Save results
-    df.to_excel(_8_1_AUDIO_TASK, index=False)
+    df.to_excel(audio_task_path, index=False)
     rprint("[✅ Complete] Matching completed successfully!")
 
 if __name__ == "__main__":

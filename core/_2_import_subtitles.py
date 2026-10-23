@@ -6,7 +6,8 @@ import pandas as pd
 
 from core._1_ytdlp import find_media_file, find_subtitle_file, sanitize_filename, write_input_manifest
 from core.utils import load_key, rprint
-from core.utils.models import _2_CLEANED_CHUNKS, _3_1_SPLIT_BY_NLP, _3_2_SPLIT_BY_MEANING
+from core.utils.models import _2_CLEANED_CHUNKS, _3_1_SPLIT_BY_NLP, _3_2_SPLIT_BY_MEANING, resolve_task_path
+from core.workspace import get_active_workspace
 
 # Inside output/, as the generated subtitles are in output/ itself
 SUBTITLE_DIR = "input"
@@ -26,8 +27,11 @@ def read_cues(content: bytes):
     for i, line in enumerate(lines):
         times = CUE_TIMES.search(line)
         if times:
-            if blocks and lines[i - 1].strip().isdigit():
-                blocks[-1][2].pop()  # the number of this subtitle
+            if blocks and i > 0 and lines[i - 1].strip().isdigit():
+                prev_blank = i >= 2 and not lines[i - 2].strip()
+                non_blank_in_prev = [ln for ln in blocks[-1][2] if ln.strip()]
+                if prev_blank or (len(non_blank_in_prev) > 1 and int(lines[i - 1].strip()) <= len(blocks) + 2):
+                    blocks[-1][2].pop()  # the number of this subtitle
             h1, m1, s1, ms1, h2, m2, s2, ms2 = times.groups()
             start = int(h1) * 3600 + int(m1) * 60 + float(f"{s1}.{ms1}")
             end = int(h2) * 3600 + int(m2) * 60 + float(f"{s2}.{ms2}")
@@ -49,6 +53,7 @@ def read_cues(content: bytes):
 def add_input_subtitles(name, content: bytes, save_path="output"):
     """Keep the subtitles with the input. Without a media file they are the input themselves."""
     read_cues(content)
+    save_path = resolve_task_path(save_path) if save_path == "output" else save_path
     folder = os.path.join(save_path, SUBTITLE_DIR)
     os.makedirs(folder, exist_ok=True)
     subtitle_file = os.path.join(folder, sanitize_filename(os.path.splitext(name)[0]) + ".srt")
@@ -69,13 +74,19 @@ def get_words(cues):
     words = []
     for start, end, text in cues:
         parts = text.split()
+        if len(parts) == 1 and len(text) > 1 and re.search(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\u0e00-\u0e7f]", text):
+            parts = re.findall(
+                r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\u0e00-\u0e7f][，。、？！：；,.?!\"'”’）)\]]*|[^\s\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\u0e00-\u0e7f]+",
+                text,
+            ) or parts
         # Without the punctuation, as the lines are matched with the words without it: "-" takes no time
         lengths = [len(re.sub(r"[^\w\s]", "", part)) for part in parts]
-        total = sum(lengths)
+        total = sum(lengths) or len(parts)
         done = 0
         for part, length in zip(parts, lengths):
+            w = length if sum(lengths) > 0 else 1
             word_start = start + (end - start) * done / total
-            done += length
+            done += w
             words.append({"text": f'"{part}"', "start": round(word_start, 3),
                           "end": round(start + (end - start) * done / total, 3), "speaker_id": None})
     return words
@@ -84,7 +95,8 @@ def get_words(cues):
 def import_subtitles():
     """Write the results of the recognition and of the sentence splitting from the subtitles of the user."""
     subtitle_file = find_subtitle_file()
-    if not subtitle_file or os.path.exists(_2_CLEANED_CHUNKS):
+    cleaned_path = resolve_task_path(_2_CLEANED_CHUNKS)
+    if not subtitle_file or os.path.exists(cleaned_path):
         return
     if load_key("whisper.language") == "auto":
         raise ValueError("The language of subtitles can not be detected. "
@@ -98,10 +110,22 @@ def import_subtitles():
         from core._2_asr import prepare_audio
         prepare_audio(media_file, media_type, load_key("demucs"))
 
-    os.makedirs(os.path.dirname(_2_CLEANED_CHUNKS), exist_ok=True)
+    os.makedirs(os.path.dirname(cleaned_path), exist_ok=True)
     sentences = "\n".join(text for _, _, text in cues)
-    for path in (_3_1_SPLIT_BY_NLP, _3_2_SPLIT_BY_MEANING):
+    for path in (resolve_task_path(_3_1_SPLIT_BY_NLP), resolve_task_path(_3_2_SPLIT_BY_MEANING)):
         with open(path, "w", encoding="utf-8") as f:
             f.write(sentences)
-    pd.DataFrame(get_words(cues)).to_excel(_2_CLEANED_CHUNKS, index=False)
+    word_list = get_words(cues)
+    pd.DataFrame(word_list).to_excel(cleaned_path, index=False)
+    get_active_workspace().save_words(
+        [
+            {
+                "text": str(w["text"]).strip('"').strip(),
+                "start": w["start"],
+                "end": w["end"],
+                "speaker_id": w.get("speaker_id"),
+            }
+            for w in word_list
+        ]
+    )
     rprint(f"[green]📄 {len(cues)} subtitles of `{subtitle_file}` are used instead of the recognition.[/green]")

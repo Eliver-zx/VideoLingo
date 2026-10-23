@@ -1,11 +1,12 @@
 import os
 import json
 import time
+from typing import Any
 import requests
 import tempfile
 from core.asr_backend.audio_preprocess import audio_slice_wav
 from rich import print as rprint
-from core.utils import *
+from core.utils import load_key, update_key
 
 # ----------------------------------------
 # ISO 639-2 to 1
@@ -29,12 +30,13 @@ iso_639_2_to_1 = {
 # ----------------------------
 
 SPLIT_GAP = 1
-def elev2whisper(elev_json, word_level_timestamp = False):
+def elev2whisper(elev_json, word_level_timestamp: bool = False) -> dict[str, Any]:
     words = elev_json.get("words", [])
     if not words:
         return {"segments": []}
 
-    segments, seg = [], {
+    segments: list[dict[str, Any]] = []
+    seg: dict[str, Any] = {
         "text": "",                     # accumulated text
         "start": words[0]["start"],     # seg start time
         "end": words[0]["end"],         # seg end time (updates)
@@ -77,14 +79,16 @@ def transcribe_audio_elevenlabs(raw_audio_path, vocal_audio_path, start = None, 
         base_url = "https://api.elevenlabs.io/v1/speech-to-text"
         headers = {"xi-api-key": api_key}
         
+        whisper_lang = load_key("whisper.language")
         data = {
             "model_id": "scribe_v1",
             "timestamps_granularity": "word",
-            "language_code": load_key("whisper.language"),
             "diarize": True,
             "num_speakers": None,
             "tag_audio_events": False
         }
+        if whisper_lang and whisper_lang != "auto":
+            data["language_code"] = whisper_lang
         
         with open(temp_filepath, 'rb') as audio_file:
             files = {"file": (os.path.basename(temp_filepath), audio_file, 'audio/wav')}
@@ -92,10 +96,12 @@ def transcribe_audio_elevenlabs(raw_audio_path, vocal_audio_path, start = None, 
             response = requests.post(base_url, headers=headers, data=data, files=files)
             
         rprint(f"[yellow]API request sent, status code: {response.status_code}[/yellow]")
+        response.raise_for_status()
         result = response.json()
 
         # save detected language
-        detected_language = iso_639_2_to_1.get(result["language_code"], result["language_code"])
+        raw_lang = result.get("language_code") or (whisper_lang if whisper_lang and whisper_lang != "auto" else "en")
+        detected_language = iso_639_2_to_1.get(raw_lang, raw_lang)
         update_key("whisper.detected_language", detected_language)
 
         # Adjust timestamps for all words by adding the start time

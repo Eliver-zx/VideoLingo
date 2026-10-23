@@ -233,5 +233,6 @@
     "Voice ID or the address of its page": "ID голоса или адрес его страницы",
     "Open a voice on fish.audio and copy the address of its page": "Откройте голос на fish.audio и скопируйте адрес его страницы",
     "Vocal separation model": "Модель разделения вокала",
-    "Used for dubbing reference/background separation and optional ASR vocal enhancement.": "Используется для выделения голоса и фона при дубляже и улучшения распознавания речи."
+    "Used for dubbing reference/background separation and optional ASR vocal enhancement.": "Используется для выделения голоса и фона при дубляже и улучшения распознавания речи.",
+    "Restore defaults ({length})": "Восстановить значения по умолчанию ({length})"
 }

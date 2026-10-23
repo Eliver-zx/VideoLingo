@@ -71,7 +71,7 @@ def test_project_sentence_ends_preserves_words_even_when_llm_mutates_tokens(
     assert sentences == [
         "welcome to banji studio today.",
         "we are going to build a new system.",
-        "and it runs very fast.",
+        "and it runs very fast!",
     ]
 
     # Verify _6_gen_sub.get_sentence_timestamps succeeds with 0 character drift

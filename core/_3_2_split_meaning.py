@@ -2,19 +2,33 @@ from difflib import SequenceMatcher
 import re
 from core.prompts import get_split_prompt
 from core.task_runner import StopTask
-from core.utils import *
+from core.utils import (  # noqa: F401
+    ask_gpt,
+    check_file_exists,
+    get_joiner,
+    get_source_language as _default_get_source_language,
+    join_words,
+    load_key,
+)
 from rich.console import Console
 from rich.table import Table
 from core.utils.config_utils import get_text_joiner
-from core.utils.models import _3_1_SPLIT_BY_NLP, _3_2_SPLIT_BY_MEANING
+from core.utils.models import _3_1_SPLIT_BY_NLP, _3_2_SPLIT_BY_MEANING, resolve_task_path
 console = Console()
+
+get_source_language = _default_get_source_language
 
 def _resolve_split_joiner(text: str, language: str | None = None) -> str:
     if language is not None:
         return get_text_joiner(text)
-    whisper_language = load_key("whisper.language")
-    lang = load_key("whisper.detected_language") if whisper_language == 'auto' else whisper_language
-    return get_joiner(lang)
+    if get_source_language is not _default_get_source_language:
+        return get_joiner(get_source_language())
+    try:
+        whisper_language = load_key("whisper.language")
+        lang = load_key("whisper.detected_language") if whisper_language == 'auto' else whisper_language
+        return get_joiner(lang)
+    except Exception:
+        return get_joiner(get_source_language())
 
 def find_split_positions(original, modified, language=None):
     split_positions = []
@@ -121,10 +135,12 @@ def split_sentences_by_meaning():
     short subtitle line splitting is performed after translation in _5_split_sub."""
     import os
     import shutil
-    if not os.path.exists(_3_1_SPLIT_BY_NLP):
-        raise FileNotFoundError(f"Missing NLP split file: {_3_1_SPLIT_BY_NLP}")
-    os.makedirs(os.path.dirname(_3_2_SPLIT_BY_MEANING), exist_ok=True)
-    shutil.copyfile(_3_1_SPLIT_BY_NLP, _3_2_SPLIT_BY_MEANING)
+    nlp_path = resolve_task_path(_3_1_SPLIT_BY_NLP)
+    meaning_path = resolve_task_path(_3_2_SPLIT_BY_MEANING)
+    if not os.path.exists(nlp_path):
+        raise FileNotFoundError(f"Missing NLP split file: {nlp_path}")
+    os.makedirs(os.path.dirname(meaning_path) or ".", exist_ok=True)
+    shutil.copyfile(nlp_path, meaning_path)
     console.print('[green]✅ Sentences prepared for translation![/green]')
 
 if __name__ == '__main__':

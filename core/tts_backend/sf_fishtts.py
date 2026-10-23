@@ -8,10 +8,10 @@ from pathlib import Path
 from pydub import AudioSegment
 from rich.panel import Panel
 from rich.text import Text
-from core._1_ytdlp import find_video_files
+from core._1_ytdlp import find_media_file
 from core.asr_backend.audio_preprocess import get_audio_duration
-from core.utils import *
-from core.utils.models import *
+from core.utils import except_handler, load_key, rprint, update_key
+from core.utils.models import _AUDIO_REFERS_DIR, resolve_task_path
 
 API_URL_SPEECH = "https://api.siliconflow.cn/v1/audio/speech"
 API_URL_VOICE = "https://api.siliconflow.cn/v1/uploads/audio/voice"
@@ -43,16 +43,18 @@ def siliconflow_fish_tts(text, save_path, mode="preset", voice_id=None, ref_audi
             "model": MODEL_NAME, "response_format": "wav", "stream": False, "input": text, "voice": None,
             "references": [{"audio": f"data:audio/wav;base64,{audio_base64}", "text": ref_text}]
         }
-    else: raise ValueError("Invalid mode")
+    else:
+        raise ValueError("Invalid mode")
 
     response = requests.post(API_URL_SPEECH, json=payload, headers=headers)
     if response.status_code == 200:
         wav_file_path = Path(save_path).with_suffix('.wav')
         wav_file_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(wav_file_path, 'wb') as f: f.write(response.content)
+        with open(wav_file_path, 'wb') as f:
+            f.write(response.content)
         
         if check_duration:
-            duration = get_audio_duration(wav_file_path)
+            duration = get_audio_duration(str(wav_file_path))
             rprint(f"[blue]Audio Duration: {duration:.2f} seconds")
             
         rprint(f"[green]Successfully generated audio file: {wav_file_path}")
@@ -67,7 +69,7 @@ def create_custom_voice(audio_path, text, custom_name=None):
         raise FileNotFoundError(f"Audio file not found at {audio_path}")
     
     audio_base64 = f"data:audio/wav;base64,{base64.b64encode(Path(audio_path).read_bytes()).decode('utf-8')}"
-    rprint(f"[yellow]✅ Successfully encoded audio file")
+    rprint("[yellow]✅ Successfully encoded audio file")
     
     payload = {
         "audio": audio_base64,
@@ -76,7 +78,7 @@ def create_custom_voice(audio_path, text, custom_name=None):
         "text": text
     }
     
-    rprint(f"[yellow]🚀 Sending request to create voice...")
+    rprint("[yellow]🚀 Sending request to create voice...")
     response = requests.post(API_URL_VOICE, json=payload, headers={"Authorization": f'Bearer {load_key("sf_fish_tts.api_key")}', "Content-Type": "application/json"})
     response_json = response.json()
     
@@ -114,15 +116,15 @@ def merge_audio(files, output):
     combined.export(output, format="wav", parameters=["-acodec", "pcm_s16le", "-ar", str(REFER_SAMPLE_RATE), "-ac", "1"])
     
     if os.path.getsize(output) == 0:
-        rprint(f"[red]Output file size is 0")
+        rprint("[red]Output file size is 0")
         return False
         
-    rprint(f"[green]Successfully merged audio files")
+    rprint("[green]Successfully merged audio files")
     return True
 
 def get_ref_audio(task_df):
     """Get reference audio and text, ensuring the combined text length does not exceed 100 characters"""
-    rprint(f"[blue]🎯 Starting reference audio selection process...")
+    rprint("[blue]🎯 Starting reference audio selection process...")
     
     duration = 0
     selected = []
@@ -163,14 +165,15 @@ def get_ref_audio(task_df):
         
     rprint(f"[blue]📊 Selected {len(selected)} segments, total duration: {duration:.2f}s")
     
-    audio_files = [f"{_AUDIO_REFERS_DIR}/{row['number']}.wav" for row in selected]
+    refers_dir = resolve_task_path(_AUDIO_REFERS_DIR)
+    audio_files = [f"{refers_dir}/{row['number']}.wav" for row in selected]
     rprint(f"[yellow]🎵 Audio files to merge: {audio_files}")
     
-    combined_audio = f"{_AUDIO_REFERS_DIR}/combined_reference.wav"
+    combined_audio = f"{refers_dir}/combined_reference.wav"
     success = merge_audio(audio_files, combined_audio)
     
     if not success:
-        rprint(f"[red]❌ Error: Failed to merge audio files")
+        rprint("[red]❌ Error: Failed to merge audio files")
         return None, None
         
     rprint(f"[green]✅ Successfully created combined audio: {combined_audio}")
@@ -185,7 +188,7 @@ def siliconflow_fish_tts_for_videolingo(text, save_as, number, task_df):
     if MODE == "preset":
         return siliconflow_fish_tts(text, save_as, mode="preset")
     elif MODE == "custom":
-        video_file = find_video_files()
+        video_file = find_media_file()[0]
         custom_name = hashlib.md5(video_file.encode()).hexdigest()[:8]
         rprint(f"[yellow]Using custom name: {custom_name}")
         log_name = load_key("sf_fish_tts.custom_name")
@@ -194,7 +197,7 @@ def siliconflow_fish_tts_for_videolingo(text, save_as, number, task_df):
             # Get the merged reference audio and text
             ref_audio, ref_text = get_ref_audio(task_df)
             if ref_audio is None or ref_text is None:
-                rprint(f"[red]Failed to get reference audio and text, falling back to preset mode")
+                rprint("[red]Failed to get reference audio and text, falling back to preset mode")
                 return siliconflow_fish_tts(text, save_as, mode="preset")
                 
             voice_id = create_custom_voice(ref_audio, ref_text, custom_name)
@@ -204,7 +207,8 @@ def siliconflow_fish_tts_for_videolingo(text, save_as, number, task_df):
             voice_id = load_key("sf_fish_tts.voice_id")
         return siliconflow_fish_tts(text=text, save_path=save_as, mode="custom", voice_id=voice_id)
     elif MODE == "dynamic":
-        ref_audio_path = f"{_AUDIO_REFERS_DIR}/{number}.wav"
+        refers_dir = resolve_task_path(_AUDIO_REFERS_DIR)
+        ref_audio_path = f"{refers_dir}/{number}.wav"
         if not Path(ref_audio_path).exists():
             rprint(f"[red]Reference audio not found: {ref_audio_path}, falling back to preset mode")
             return siliconflow_fish_tts(text, save_as, mode="preset")

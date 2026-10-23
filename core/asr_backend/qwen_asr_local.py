@@ -175,7 +175,8 @@ def primary_language(name):
 
 
 def iso_language(name):
-    return QWEN_TO_ISO.get(primary_language(name))
+    prim = primary_language(name)
+    return QWEN_TO_ISO.get(prim) if prim else None
 
 
 # ------------------------------------------------------------------
@@ -394,7 +395,7 @@ def script_mismatch(text, iso, min_weight=SCRIPT_MIN_WEIGHT, min_share=SCRIPT_MI
         return None
     expected = EXPECTED_SCRIPTS.get(iso, {"Latin"})
     share = sum(weighted.get(script, 0) for script in expected) / total
-    dominant = max(weighted, key=weighted.get)
+    dominant = max(weighted, key=lambda k: weighted[k])
     if share < min_share:
         return f"{1 - share:.0%} of the letters are not in the expected script ({dominant} text)"
     cjk = counts["Han"] + counts["Kana"]
@@ -511,11 +512,13 @@ def attach_words(text, items, offset=0.0, limit=None):
     for token, start, end in items:
         if not token:
             continue
+        token_norm = unicodedata.normalize("NFKD", token)
+        max_scan = min(len(normalized), cursor + len(token_norm) + 12)
         k = cursor
-        for ch in unicodedata.normalize("NFKD", token):
-            while k < len(normalized) and normalized[k] != ch:
+        for ch in token_norm:
+            while k < max_scan and normalized[k] != ch:
                 k += 1
-            if k >= len(normalized):
+            if k >= max_scan:
                 break
             k += 1
         else:
@@ -555,10 +558,10 @@ def _free(engine):
     gc.collect()
     try:
         if engine == "mlx":
-            import mlx.core as mx
+            import mlx.core as mx  # type: ignore[import-not-found]
             mx.clear_cache()
         else:
-            import torch
+            import torch  # type: ignore[import-not-found]
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
     except ImportError:
@@ -566,11 +569,11 @@ def _free(engine):
 
 
 def _torch_device():
-    import torch
+    import torch  # type: ignore[import-not-found]
     if torch.cuda.is_available():
-        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        dtype = getattr(torch, "bfloat16") if torch.cuda.is_bf16_supported() else getattr(torch, "float16")
         return "cuda:0", dtype
-    return "cpu", torch.float32
+    return "cpu", getattr(torch, "float32")
 
 
 @contextmanager
@@ -580,33 +583,39 @@ def asr_session(engine, repo_id):
     model = None
     try:
         if engine == "mlx":
-            from mlx_audio.stt.utils import load_model
+            from mlx_audio.stt.utils import load_model  # type: ignore[import-not-found]
             model = load_model(source)
 
-            def run(clip, language, max_tokens=None):
+            def _run_mlx(clip, language, max_tokens=None):
                 check_cancel()
+                assert model is not None
                 out = model.generate(clip, language=language,
                                      max_tokens=max_tokens or token_budget(len(clip) / SAMPLE_RATE),
                                      chunk_duration=WINDOW_SECONDS + 1, min_chunk_duration=MIN_WINDOW_SECONDS)
-                detected = language or ",".join(dict.fromkeys(l for l in (out.language or []) if l))
+                detected = language or ",".join(dict.fromkeys(lang_item for lang_item in (out.language or []) if lang_item))
                 return detected, out.text.strip()
+
+            run = _run_mlx
         else:
-            from qwen_asr import Qwen3ASRModel
+            from qwen_asr import Qwen3ASRModel  # type: ignore[import-not-found]
             device, dtype = _torch_device()
             rprint(f"[cyan]🎮 Qwen3-ASR device:[/cyan] {device}, [cyan]dtype:[/cyan] {dtype}")
             model = Qwen3ASRModel.from_pretrained(source, dtype=dtype, device_map=device,
                                                   max_inference_batch_size=1, max_new_tokens=MAX_NEW_TOKENS)
 
-            def run(clip, language, max_tokens=None):
+            def _run_tf(clip, language, max_tokens=None):
                 check_cancel()
+                assert model is not None
                 # qwen-asr reads this attribute for every generate() call.
                 model.max_new_tokens = max_tokens or token_budget(len(clip) / SAMPLE_RATE)
                 out = model.transcribe(audio=(clip, SAMPLE_RATE), language=language)[0]
                 return language or out.language, out.text.strip()
+
+            run = _run_tf
         yield run
     finally:
         # Release the model even when a window fails, so a retry does not start out of memory.
-        del model
+        model = None
         _free(engine)
 
 
@@ -622,21 +631,31 @@ def _align(engine, repo_id, jobs):
     aligner, results = None, []
     try:
         if engine == "mlx":
-            from mlx_audio.stt.utils import load_model
+            from mlx_audio.stt.utils import load_model  # type: ignore[import-not-found]
             aligner = load_model(source)
-            align = lambda clip, text, lang: aligner.generate(clip, text=text, language=lang)
+
+            def _align_mlx(clip, text, lang):
+                assert aligner is not None
+                return aligner.generate(clip, text=text, language=lang)
+
+            align = _align_mlx
         else:
-            from qwen_asr import Qwen3ForcedAligner
+            from qwen_asr import Qwen3ForcedAligner  # type: ignore[import-not-found]
             device, dtype = _torch_device()
             aligner = Qwen3ForcedAligner.from_pretrained(source, dtype=dtype, device_map=device)
-            align = lambda clip, text, lang: aligner.align(audio=(clip, SAMPLE_RATE), text=text, language=lang)[0]
+
+            def _align_tf(clip, text, lang):
+                assert aligner is not None
+                return aligner.align(audio=(clip, SAMPLE_RATE), text=text, language=lang)[0]
+
+            align = _align_tf
         for clip, text, lang in jobs:
             check_cancel()
             result = align(clip, text, lang)
             results.append([(item.text, item.start_time, item.end_time) for item in result])
     finally:
-        align = None  # the lambda holds a reference to the aligner
-        del aligner
+        align = None  # the closure holds a reference to the aligner
+        aligner = None
         _free(engine)
     return results
 
@@ -696,13 +715,14 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
         for a, b, lang, text in pieces:
             if text and iso_language(lang):
                 votes[iso_language(lang)] += b - a
-        detected = max(votes, key=votes.get) if votes else None
+        detected = max(votes, key=lambda k: votes[k]) if votes else None
         if not detected and any(text for *_, text in pieces):
             raise ValueError("Qwen3-ASR could not detect the language; set the recognition language and retry.")
 
     # 2. align by vocal audio
     t0 = time.time()
-    todo = [(a, b, text, (primary_language(lang) or ISO_TO_QWEN[detected]))
+    default_qwen_lang = ISO_TO_QWEN.get(detected or "") or "English"
+    todo = [(a, b, text, (primary_language(lang) or default_qwen_lang))
             for a, b, lang, text in pieces if text]
     jobs = [(vocal[a:b], text, lang) for a, b, text, lang in todo]
     aligned = _align(engine, models["aligner"], jobs) if jobs else []

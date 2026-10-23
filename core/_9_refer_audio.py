@@ -3,8 +3,15 @@ from importlib.util import find_spec
 from rich.panel import Panel
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
-from core.utils import *
-from core.utils.models import *
+from core.utils import rprint
+from core.utils.models import (
+    _8_1_AUDIO_TASK,
+    _AUDIO_REFERS_DIR,
+    _AUDIO_SEGS_DIR,  # noqa: F401
+    _RAW_AUDIO_FILE,
+    _VOCAL_AUDIO_FILE,
+    resolve_task_path,
+)
 import pandas as pd
 import soundfile as sf
 console = Console()
@@ -23,22 +30,33 @@ def extract_audio(audio_data, sr, start_time, end_time, out_file):
     sf.write(out_file, audio_data[start:end], sr)
 
 def extract_refer_audio_main():
-    from core.asr_backend.demucs_vl import demucs_audio, separation_backend_package
-    pkg = separation_backend_package()
-    if find_spec(pkg) is not None:
-        demucs_audio()  # Dubbing normally keeps the original background track.
-        reference_audio = _VOCAL_AUDIO_FILE
-    elif pkg != "demucs" and find_spec("demucs") is not None:
-        demucs_audio(model_key="htdemucs")
-        reference_audio = _VOCAL_AUDIO_FILE
-    else:
+    raw_audio_file = resolve_task_path(_RAW_AUDIO_FILE)
+    vocal_audio_file = resolve_task_path(_VOCAL_AUDIO_FILE)
+    refers_dir = resolve_task_path(_AUDIO_REFERS_DIR)
+    audio_task_file = resolve_task_path(_8_1_AUDIO_TASK)
+    reference_audio = raw_audio_file
+    try:
+        from core.asr_backend.demucs_vl import demucs_audio, separation_backend_package
+        pkg = separation_backend_package()
+        if find_spec(pkg) is not None:
+            demucs_audio()  # Dubbing normally keeps the original background track.
+            reference_audio = vocal_audio_file
+        elif pkg != "demucs" and find_spec("demucs") is not None:
+            demucs_audio(model_key="htdemucs")
+            reference_audio = vocal_audio_file
+        else:
+            rprint(Panel(
+                "Vocal separation is unavailable; using the original audio for references. "
+                "The dubbed video will not keep the original background sound.",
+                title="Info", border_style="yellow",
+            ))
+    except ImportError:
         rprint(Panel(
             "Vocal separation is unavailable; using the original audio for references. "
             "The dubbed video will not keep the original background sound.",
             title="Info", border_style="yellow",
         ))
-        reference_audio = _RAW_AUDIO_FILE
-    first_refer = os.path.join(_AUDIO_REFERS_DIR, '1.wav')
+    first_refer = os.path.join(refers_dir, '1.wav')
     if os.path.exists(first_refer):
         try:
             ref_up_to_date = (
@@ -52,10 +70,10 @@ def extract_refer_audio_main():
             return
 
     # Create output directory
-    os.makedirs(_AUDIO_REFERS_DIR, exist_ok=True)
+    os.makedirs(refers_dir, exist_ok=True)
     
     # Read task file and audio data
-    df = pd.read_excel(_8_1_AUDIO_TASK)
+    df = pd.read_excel(audio_task_file)
     data, sr = sf.read(reference_audio)
     
     with Progress(
@@ -67,11 +85,26 @@ def extract_refer_audio_main():
         task = progress.add_task("Extracting audio segments...", total=len(df))
         
         for _, row in df.iterrows():
-            out_file = os.path.join(_AUDIO_REFERS_DIR, f"{row['number']}.wav")
-            extract_audio(data, sr, row['start_time'], row['end_time'], out_file)
+            out_file = os.path.join(refers_dir, f"{row['number']}.wav")
+            start_time = row['start_time']
+            end_time = row['end_time']
+            raw_start_val = row.get('raw_start_time')
+            raw_end_val = row.get('raw_end_time')
+            if (
+                raw_start_val is not None
+                and raw_end_val is not None
+                and not pd.isna(raw_start_val)
+                and not pd.isna(raw_end_val)
+            ):
+                raw_start = time_to_samples(str(raw_start_val), sr)
+                raw_end = time_to_samples(str(raw_end_val), sr)
+                if (raw_end - raw_start) >= int(1.0 * sr):
+                    start_time = str(raw_start_val)
+                    end_time = str(raw_end_val)
+            extract_audio(data, sr, start_time, end_time, out_file)
             progress.update(task, advance=1)
             
-    rprint(Panel(f"Audio segments saved to {_AUDIO_REFERS_DIR}", title="Success", border_style="green"))
+    rprint(Panel(f"Audio segments saved to {refers_dir}", title="Success", border_style="green"))
 
 if __name__ == "__main__":
     extract_refer_audio_main()

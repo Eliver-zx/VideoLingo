@@ -1,13 +1,12 @@
-import os
 import warnings
 import time
 from runtime_libraries import configure_ffmpeg_dlls
 
 configure_ffmpeg_dlls()
 
-import torch
-import functools
-from pathlib import Path
+import torch  # noqa: E402  # type: ignore[import-not-found]
+import functools  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 warnings.filterwarnings("ignore")
 
@@ -32,11 +31,10 @@ torch.load = _patched_torch_load
 # =============================================================================
 # Now safe to import whisperx and the rest of the application
 # =============================================================================
-import whisperx
-from whisperx.audio import load_audio as _whisperx_load_audio, SAMPLE_RATE as _WHISPERX_SR
-from rich import print as rprint
-from core.utils import *
-MODEL_DIR = load_key("model_dir")
+import whisperx  # noqa: E402  # type: ignore[import-not-found]
+from whisperx.audio import load_audio as _whisperx_load_audio, SAMPLE_RATE as _WHISPERX_SR  # noqa: E402  # type: ignore[import-not-found]
+from rich import print as rprint  # noqa: E402
+from core.utils import except_handler, load_key, update_key  # noqa: E402
 
 
 def _complete_model_directory(path):
@@ -45,11 +43,13 @@ def _complete_model_directory(path):
                for name in required)
 
 
-def resolve_whisper_model(model_name, model_dir):
+def resolve_whisper_model(model_name, model_dir=None):
     """Resolve complete local files before allowing any Hub request."""
-    from faster_whisper.utils import download_model
+    from faster_whisper.utils import download_model  # type: ignore[import-not-found]
     from huggingface_hub.errors import LocalEntryNotFoundError
 
+    if model_dir is None:
+        model_dir = load_key("model_dir")
     explicit = Path(model_name)
     project = Path(model_dir) / model_name
     for directory in (explicit, project):
@@ -98,9 +98,10 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
         rprint(f"[cyan]📦 Batch size:[/cyan] {batch_size}, [cyan]⚙️ Compute type:[/cyan] {compute_type}")
     rprint(f"[green]▶️ Starting WhisperX for segment {start:.2f}s to {end:.2f}s...[/green]")
     
+    model_dir = load_key("model_dir")
     if WHISPER_LANGUAGE == 'zh':
         model_name = "Huan69/Belle-whisper-large-v3-zh-punct-fasterwhisper"
-        local_model = Path(MODEL_DIR) / "Belle-whisper-large-v3-zh-punct-fasterwhisper"
+        local_model = Path(model_dir) / "Belle-whisper-large-v3-zh-punct-fasterwhisper"
         if local_model.is_dir():
             model_name = str(local_model.resolve())
     else:
@@ -109,7 +110,7 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
             # turbo loops on repeated words in this pipeline, so it is rewritten.
             rprint("[yellow]large-v3-turbo repeats itself in this pipeline; using large-v3 instead.[/yellow]")
             model_name = "large-v3"
-    model_name = resolve_whisper_model(model_name, MODEL_DIR)
+    model_name = resolve_whisper_model(model_name, model_dir)
 
     vad_options = {"vad_onset": 0.500,"vad_offset": 0.363}
     asr_options = {"temperatures": [0],"initial_prompt": "",}

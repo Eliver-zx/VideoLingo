@@ -233,5 +233,6 @@
     "Voice ID or the address of its page": "音色 ID 或音色页面的网址",
     "Open a voice on fish.audio and copy the address of its page": "在 fish.audio 打开喜欢的音色，复制它页面的网址",
     "Vocal separation model": "人声分离模型",
-    "Used for dubbing reference/background separation and optional ASR vocal enhancement.": "用于配音参考音与背景音分离，以及可选的识别前人声增强。"
+    "Used for dubbing reference/background separation and optional ASR vocal enhancement.": "用于配音参考音与背景音分离，以及可选的识别前人声增强。",
+    "Restore defaults ({length})": "恢复默认值（{length}）"
 }

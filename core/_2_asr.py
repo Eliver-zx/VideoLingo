@@ -1,7 +1,7 @@
-from core.utils import *
-from core.asr_backend.audio_preprocess import process_transcription, convert_video_to_audio, prepare_audio_for_asr, split_audio, save_results, normalize_audio_volume
+from core.utils import check_cancel, check_file_exists, load_key, load_key_or, rprint, update_key
+from core.asr_backend.audio_preprocess import process_transcription, convert_video_to_audio, prepare_audio_for_asr, split_audio, save_results
 from core._1_ytdlp import find_media_file
-from core.utils.models import *
+from core.utils.models import _2_CLEANED_CHUNKS, _RAW_AUDIO_FILE, _VOCAL_AUDIO_FILE, resolve_task_path
 from core.asr_backend import transcription_cache as cache
 
 def local_backend(whisper):
@@ -26,7 +26,7 @@ def prepare_audio(media_file, media_type, demucs):
 
     # Vocal separation:
     if not demucs:
-        return _RAW_AUDIO_FILE
+        return resolve_task_path(_RAW_AUDIO_FILE)
     from importlib.util import find_spec
     from core.asr_backend.demucs_vl import demucs_audio, separation_backend_package
     pkg = separation_backend_package()
@@ -36,7 +36,7 @@ def prepare_audio(media_file, media_type, demucs):
             "Turn vocal separation off in settings or install the required package."
         )
     demucs_audio()
-    return normalize_audio_volume(_VOCAL_AUDIO_FILE, _VOCAL_AUDIO_FILE, format="mp3")
+    return resolve_task_path(_VOCAL_AUDIO_FILE)
 
 SUPPORTED_RUNTIMES = (
     "local", "elevenlabs", "mai",
@@ -100,11 +100,12 @@ def transcribe():
         return
 
     # 3. Extract audio
+    raw_audio_file = resolve_task_path(_RAW_AUDIO_FILE)
     if runtime == "mai" and str(whisper.get("mai_provider", "azure")).lower() == "openrouter":
         # OpenRouter's upstream has a roughly 60-second processing timeout.
-        segments = split_audio(_RAW_AUDIO_FILE, target_len=120, win=15)
+        segments = split_audio(raw_audio_file, target_len=120, win=15)
     else:
-        segments = split_audio(_RAW_AUDIO_FILE)
+        segments = split_audio(raw_audio_file)
     
     # 4. Transcribe audio by clips
     all_results = []
@@ -147,7 +148,7 @@ def transcribe():
             result = cached["result"]
             language = cached["language"]
         else:
-            result = ts(_RAW_AUDIO_FILE, vocal_audio, start, end)
+            result = ts(raw_audio_file, vocal_audio, start, end)
             check_cancel()
             language = whisper["language"] if whisper["language"] != "auto" else result.get("language")
             if key:

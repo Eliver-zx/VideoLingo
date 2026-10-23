@@ -55,7 +55,7 @@ def _warning_lines(capsys):
 
 def _python_sources():
     for path in ROOT.rglob("*.py"):
-        if any(part in {".venv", "site-packages", "tests"} for part in path.parts):
+        if any(part in {".venv", "site-packages", "tests", "old"} for part in path.parts):
             continue
         yield path
 

@@ -1,7 +1,6 @@
-# * Settings marked with * are advanced settings that won't appear in the Streamlit page and can only be modified manually in config.py
-# recommend to set in streamlit page
+# VideoLingo configuration file
 # -------------------
-# version: "3.1.1"
+# version: "3.2.0"
 # author: "Huanshere"
 # -------------------
 
@@ -77,6 +76,7 @@ youtube:
   cookies_path: ''
 
 # *Default resolution for downloading YouTube videos [360, 1080, best]
+  proxy:
 ytb_resolution: '1080'
 
 subtitle:
@@ -103,12 +103,6 @@ subtitle:
       outline_width: 1
       back_color: '&H33000000'
       margin_v: 27
-
-# *Summary length, set low to 2k if using local LLM
-summary_length: 8000
-
-# *Maximum number of words for the first rough cut, below 18 will cut too finely affecting translation, above 22 is too long and will make subsequent subtitle splitting difficult to align
-max_split_length: 20
 
 # *Whether to reflect the translation result in the original text
 reflect_translate: true
@@ -185,7 +179,6 @@ speed_factor:
 
 # *Merge audio configuration
 min_subtitle_duration: 2.5 # Minimum subtitle duration, will be forcibly extended
-min_trim_duration: 3.5 # Subtitles shorter than this value won't be split
 tolerance: 1.5 # Allowed extension time to the next subtitle
 
 # *Raw audio extraction quality (raw.mp3). Demucs vocals and voice-clone reference clips inherit this bandwidth;
@@ -218,18 +211,6 @@ allowed_audio_formats:
 - 'mp3'
 - 'flac'
 - 'm4a'
-
-# Spacy models. Other languages use built-in defaults (ko, pt, nl, sv, da, fi, pl, el, ro, mk)
-# or, without a spaCy pipeline (e.g. ar, th, vi), punctuation-only sentence splitting.
-spacy_model_map:
-  en: 'en_core_web_md'
-  ru: 'ru_core_news_md'
-  fr: 'fr_core_news_md'
-  ja: 'ja_core_news_md'
-  es: 'es_core_news_md'
-  de: 'de_core_news_md'
-  it: 'it_core_news_md'
-  zh: 'zh_core_web_md'
 
 # Word joiners. Languages not listed: zh/yue/ja/th/lo/km/my/bo join without spaces, all others with spaces.
 # Languages that use space as separator

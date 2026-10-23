@@ -1,4 +1,5 @@
 from core.task_runner import StopTask
+from core.utils.models import resolve_task_path
 
 import functools
 import time
@@ -20,6 +21,8 @@ def except_handler(error_msg, retry=0, delay=1, default_return=None):
                 except StopTask:
                     raise
                 except Exception as e:
+                    if isinstance(e, ValueError) and str(e) == "API key is not set":
+                        raise
                     last_exception = e
                     rprint(f"[red]{error_msg}: {e}, retry: {i+1}/{retry}[/red]")
                     if i == retry:
@@ -39,15 +42,10 @@ def check_file_exists(file_path):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            if os.path.exists(file_path):
-                rprint(f"[yellow]⚠️ File <{file_path}> already exists, skip <{func.__name__}> step.[/yellow]")
+            resolved = resolve_task_path(file_path)
+            if os.path.exists(resolved):
+                rprint(f"[yellow]⚠️ File <{resolved}> already exists, skip <{func.__name__}> step.[/yellow]")
                 return
             return func(*args, **kwargs)
         return wrapper
     return decorator
-
-if __name__ == "__main__":
-    @except_handler("function execution failed", retry=3, delay=1)
-    def test_function():
-        raise Exception("test exception")
-    test_function()
