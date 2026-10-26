@@ -495,8 +495,14 @@ def test_generate_shared_prompt_formats_list_and_string_context_cleanly():
         "Theme summary",
         "Term notes",
     )
-    assert "<previous_content>\nPrev line 1.\nPrev line 2.\n</previous_content>" in with_lists
-    assert "<subsequent_content>\nNext line 1.\nNext line 2.\n</subsequent_content>" in with_lists
+    assert (
+        "<previous_content>\nPrev line 1.\nPrev line 2.\n</previous_content>"
+        in with_lists
+    )
+    assert (
+        "<subsequent_content>\nNext line 1.\nNext line 2.\n</subsequent_content>"
+        in with_lists
+    )
     assert "['Prev line 1.'" not in with_lists
 
     with_strings = generate_shared_prompt("prev", "next", "summary", "notes")
@@ -509,15 +515,38 @@ def test_generate_shared_prompt_formats_list_and_string_context_cleanly():
     assert "None" not in with_nones
 
 
-def test_valid_translate_result_rejects_empty_strings_and_populates_missing_origin(monkeypatch):
+def test_valid_translate_result_rejects_empty_strings_and_populates_missing_origin(
+    monkeypatch,
+):
     """valid_translate_result rejects non-dicts and empty/whitespace translations, and translate_lines populates missing origin keys."""
     import core.translate_lines as tl
 
-    assert tl.valid_translate_result([{"1": {"direct": "ok"}}], ["1"], ["direct"])["status"] == "error"
-    assert tl.valid_translate_result({"1": {"direct": ""}}, ["1"], ["direct"])["status"] == "error"
-    assert tl.valid_translate_result({"1": {"direct": "   \n "}}, ["1"], ["direct"])["status"] == "error"
-    assert tl.valid_translate_result({"1": {"direct": 123}}, ["1"], ["direct"])["status"] == "error"
-    assert tl.valid_translate_result({"1": {"direct": "有效译文"}}, ["1"], ["direct"])["status"] == "success"
+    assert (
+        tl.valid_translate_result([{"1": {"direct": "ok"}}], ["1"], ["direct"])[
+            "status"
+        ]
+        == "error"
+    )
+    assert (
+        tl.valid_translate_result({"1": {"direct": ""}}, ["1"], ["direct"])["status"]
+        == "error"
+    )
+    assert (
+        tl.valid_translate_result({"1": {"direct": "   \n "}}, ["1"], ["direct"])[
+            "status"
+        ]
+        == "error"
+    )
+    assert (
+        tl.valid_translate_result({"1": {"direct": 123}}, ["1"], ["direct"])["status"]
+        == "error"
+    )
+    assert (
+        tl.valid_translate_result({"1": {"direct": "有效译文"}}, ["1"], ["direct"])[
+            "status"
+        ]
+        == "success"
+    )
 
     def fake_ask_gpt(prompt, **kwargs):
         if kwargs.get("log_title") == "translate_faithfulness":
@@ -529,11 +558,15 @@ def test_valid_translate_result_rejects_empty_strings_and_populates_missing_orig
         }
 
     monkeypatch.setattr(tl, "ask_gpt", fake_ask_gpt)
-    monkeypatch.setattr(tl, "load_key", lambda k: True if k == "reflect_translate" else "简体中文")
+    monkeypatch.setattr(
+        tl, "load_key", lambda k: True if k == "reflect_translate" else "简体中文"
+    )
     monkeypatch.setattr(tl, "check_cancel", lambda: None)
     monkeypatch.setattr(tl.console, "print", lambda *a, **kw: None)
 
-    trans, orig = tl.translate_lines("Line one.\nLine two.", ["Prev line."], ["Next line."], "notes", "summary", 0)
+    trans, orig = tl.translate_lines(
+        "Line one.\nLine two.", ["Prev line."], ["Next line."], "notes", "summary", 0
+    )
     assert trans == "第一行直译\n第二行润色"
     assert orig == "Line one.\nLine two."
 
@@ -570,18 +603,24 @@ def test_translate_chunk_scans_previous_content_and_chunk_for_terms(monkeypatch)
     assert "Current chunk referring to it." in captured["search_scope"]
 
 
-def test_translation_prompts_contain_asr_recovery_and_keep_if_flawless_in_english(monkeypatch):
+def test_translation_prompts_contain_asr_recovery_and_keep_if_flawless_in_english(
+    monkeypatch,
+):
     """Both translation prompts contain English instructions for ASR phonetic recovery and Keep-if-Flawless."""
     import core.prompts as prompts
 
-    monkeypatch.setattr(prompts, "load_key", lambda k: "简体中文" if k == "target_language" else True)
+    monkeypatch.setattr(
+        prompts, "load_key", lambda k: "简体中文" if k == "target_language" else True
+    )
     monkeypatch.setattr(prompts, "load_key_or", lambda k, d="": "")
     monkeypatch.setattr(prompts, "get_source_language", lambda: "English")
 
     shared = prompts.generate_shared_prompt(["Prev"], ["Next"], "Summary", "Notes")
     faith_prompt = prompts.get_prompt_faithfulness("Hello world.", shared)
     express_prompt = prompts.get_prompt_expressiveness(
-        {"1": {"origin": "Hello world.", "direct": "你好世界。"}}, "Hello world.", shared
+        {"1": {"origin": "Hello world.", "direct": "你好世界。"}},
+        "Hello world.",
+        shared,
     )
 
     assert "ASR Homophone & Phonetic Error Recovery" in faith_prompt
@@ -618,7 +657,9 @@ def test_symbol_terms_do_not_pollute_stem_ngram_map_and_aliases_appear_in_prompt
         encoding="utf-8",
     )
     monkeypatch.setattr(summarize, "_4_1_TERMINOLOGY", str(term_json))
-    monkeypatch.setattr(summarize, "GLOBAL_GLOSSARY_PATH", str(tmp_path / "no_global.csv"))
+    monkeypatch.setattr(
+        summarize, "GLOBAL_GLOSSARY_PATH", str(tmp_path / "no_global.csv")
+    )
     monkeypatch.setattr(summarize, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
     monkeypatch.setattr(summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
     monkeypatch.setattr(
@@ -719,10 +760,14 @@ def test_multiword_fuzzy_guards_and_longest_span_suppression(monkeypatch, tmp_pa
         encoding="utf-8",
     )
     monkeypatch.setattr(summarize, "_4_1_TERMINOLOGY", str(term_json))
-    monkeypatch.setattr(summarize, "GLOBAL_GLOSSARY_PATH", str(tmp_path / "no_global.csv"))
+    monkeypatch.setattr(
+        summarize, "GLOBAL_GLOSSARY_PATH", str(tmp_path / "no_global.csv")
+    )
     monkeypatch.setattr(summarize, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
     monkeypatch.setattr(summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
-    monkeypatch.setattr(summarize, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json"))
+    monkeypatch.setattr(
+        summarize, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json")
+    )
 
     # "rate weapons" and "and compendium" must NOT fuzzy-match "Heat weapons" or "Data Compendium"
     false_pos = summarize.search_things_to_note_in_prompt(
@@ -739,7 +784,9 @@ def test_multiword_fuzzy_guards_and_longest_span_suppression(monkeypatch, tmp_pa
     assert '"Compendium": "汇编"' not in span_prompt
 
 
-def test_generic_kb_candidate_retrieval_and_llm_reduce_consolidation(monkeypatch, tmp_path):
+def test_generic_kb_candidate_retrieval_and_llm_reduce_consolidation(
+    monkeypatch, tmp_path
+):
     """Schema-agnostic KB indexing extracts entries from nested JSON, fuzzy-matches ASR variants ('Multimoc', 'DFA')
     to official KB entries ('Multimach CCX', 'D.F.A.'), scans direct KB hits, and preserves transcript surface forms in aliases."""
     import core._4_1_summarize as summarize
@@ -774,13 +821,17 @@ def test_generic_kb_candidate_retrieval_and_llm_reduce_consolidation(monkeypatch
     cands_multi = summarize._retrieve_kb_candidates_for_term(
         {"src": "Multimach", "aliases": ["Multimoc"]}, kb_data
     )
-    assert any(c["src"] == "Multimach CCX" and c["tgt"] == "多机系统CCX" for c in cands_multi)
+    assert any(
+        c["src"] == "Multimach CCX" and c["tgt"] == "多机系统CCX" for c in cands_multi
+    )
 
     cands_dfa = summarize._retrieve_kb_candidates_for_term({"src": "DFA"}, kb_data)
     assert any(c["src"] == "D.F.A." and c["tgt"] == "死从天降" for c in cands_dfa)
 
     # Direct KB scan finds "Hand Cannons" in transcript while skipping conversational stopword phrases "what if" and "all"
-    transcript = "What if we compare all Hand Cannons against the Multimoc and DFA today?"
+    transcript = (
+        "What if we compare all Hand Cannons against the Multimoc and DFA today?"
+    )
     scanned = summarize._scan_text_for_kb_terms(transcript, kb_data)
     scanned_srcs = {s["src"] for s in scanned}
     assert "Hand Cannons" in scanned_srcs
@@ -794,7 +845,12 @@ def test_generic_kb_candidate_retrieval_and_llm_reduce_consolidation(monkeypatch
             {
                 "theme": "Weapon comparison.",
                 "terms": [
-                    {"src": "Multimach", "tgt": "多级机枪", "aliases": ["Multimoc"], "note": "SMG"},
+                    {
+                        "src": "Multimach",
+                        "tgt": "多级机枪",
+                        "aliases": ["Multimoc"],
+                        "note": "SMG",
+                    },
                     {"src": "DFA", "tgt": "DFA手炮", "note": "Hand cannon"},
                 ],
             },
@@ -841,5 +897,133 @@ def test_generic_kb_candidate_retrieval_and_llm_reduce_consolidation(monkeypatch
     assert "DFA" in by_src["D.F.A."]["aliases"]
     assert by_src["Hand Cannons"]["tgt"] == "手炮"
 
+    # Also verify _get_term_index() does not deadlock when OPTIONAL_JSON_TERMS_PATH exists
+    term_json = tmp_path / "terminology.json"
+    term_json.write_text(json.dumps(consolidated), encoding="utf-8")
+    monkeypatch.setattr(summarize, "_4_1_TERMINOLOGY", str(term_json))
+    monkeypatch.setattr(summarize, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
+    monkeypatch.setattr(summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
+    note_prompt = summarize.search_things_to_note_in_prompt(
+        "Using Multimoc and DFA today."
+    )
+    assert note_prompt is not None
+    assert "多机系统CCX" in note_prompt
+    assert "死从天降" in note_prompt
 
 
+def test_stitch_incomplete_clause_spans_merges_fronted_and_trailing_subordinate_clauses():
+    """Fronted adverbial clauses ('While X.') and trailing subordinate clauses ('because Y.')
+    with short acoustic gaps are stitched into complete sentences."""
+    import core._3_1_split_nlp as split_nlp
+
+    words = [
+        "While",
+        "this",
+        "gun",
+        "is",
+        "good",
+        "It",
+        "lacks",
+        "range",
+        "Because",
+        "the",
+        "barrel",
+        "is",
+        "short",
+    ]
+    punct_by_word = {4: ".", 7: ".", 12: "."}
+    word_gaps = [0.05] * len(words)
+    spans = [(0, 4), (5, 7), (8, 12)]
+    stitched = split_nlp._stitch_incomplete_clause_spans(
+        spans, words, punct_by_word, word_gaps
+    )
+    assert stitched == [(0, 12)]
+    assert punct_by_word[4] == ","
+    assert punct_by_word[7] == ","
+
+
+def test_translate_lines_replaces_ok_placeholder_in_free_with_direct(monkeypatch):
+    """When LLM outputs 'OK' in 'free' during expressiveness pass, translate_lines
+    substitutes the faithful 'direct' translation instead of leaking 'OK' into subtitles."""
+    import core.translate_lines as tl
+
+    monkeypatch.setattr(
+        tl, "load_key", lambda k: True if k == "reflect_translate" else "简体中文"
+    )
+    monkeypatch.setattr("core.prompts.load_key", lambda k: "简体中文")
+    monkeypatch.setattr("core.prompts.get_source_language", lambda: "en")
+    monkeypatch.setattr("core.prompts.load_key_or", lambda k, d="": d)
+
+    def fake_ask_gpt(prompt, **kwargs):
+        if kwargs.get("log_title") == "translate_faithfulness":
+            return {
+                "1": {"origin": "Hello world.", "direct": "你好，世界。"},
+                "2": {"origin": "Use Multimach CCX.", "direct": "使用多机系统CCX。"},
+            }
+        return {
+            "1": {
+                "origin": "Hello world.",
+                "direct": "你好，世界。",
+                "reflect": "OK",
+                "free": "OK",
+            },
+            "2": {
+                "origin": "Use Multimach CCX.",
+                "direct": "使用多机系统CCX。",
+                "reflect": "微调语序",
+                "free": "推荐使用多机系统CCX。",
+            },
+        }
+
+    monkeypatch.setattr(tl, "ask_gpt", fake_ask_gpt)
+    result, _ = tl.translate_lines(
+        "Hello world.\nUse Multimach CCX.", None, None, None, "theme", 0
+    )
+    assert result.splitlines() == ["你好，世界。", "推荐使用多机系统CCX。"]
+
+
+def test_split_align_subs_resolves_punctuated_clauses_locally_and_batches_remaining(
+    monkeypatch,
+):
+    """Step 5 splits multi-clause translated sentences in O(1) locally without LLM calls when
+    clause boundaries already satisfy max_length, and batches remaining punctuation-less long
+    lines into a single batch LLM call."""
+    import core._5_split_sub as s5
+
+    settings = {
+        "subtitle": {"max_length": 75, "target_multiplier": 1.3},
+        "max_workers": 2,
+    }
+    monkeypatch.setattr(s5, "load_key", lambda k: settings[k])
+    monkeypatch.setattr(
+        s5,
+        "load_key_or",
+        lambda k, d=None: "简体中文" if k == "target_language" else 2,
+    )
+    monkeypatch.setattr("core.prompts.get_source_language", lambda: "en")
+
+    batch_calls = []
+
+    def fake_ask_gpt(prompt, **kwargs):
+        batch_calls.append(kwargs.get("log_title"))
+        return {"1": "重型榴弹发射器不遵循武器羸弱能量球[br]通常预期的弹匣百分比公式。"}
+
+    monkeypatch.setattr(s5, "ask_gpt", fake_ask_gpt)
+
+    src_in = [
+        "Hey everyone, so while I was doing the primary tier list, we went through all the attrition orbs classics, like AOKT and Multimach.",
+        "So, heavy GLs do not obey the mag percentage formula that is typically expected of weapons for attrition orbs.",
+    ]
+    tr_in = [
+        "大家好，在做主武器分级榜的时候，我们回顾了所有经典的羸弱能量球武器，比如AOKT和多机系统CCX。",
+        "重型榴弹发射器不遵循武器羸弱能量球通常预期的弹匣百分比公式。",
+    ]
+
+    src_out, tr_out, remerged = s5.split_align_subs(src_in, tr_in)
+    # Line 0 has 3 clauses (all <=32 chars) and is split locally without calling LLM;
+    # Only Line 1 (no internal commas, src_w=110 > 75) triggers 1 batch LLM call.
+    assert batch_calls == ["split_by_meaning_batch"]
+    assert len(src_out) == len(tr_out) >= 4
+    assert all(s5.calc_len(s) <= 75 for s in src_out)
+    assert all(s5.calc_len(t) * 1.3 <= 75 for t in tr_out)
+    assert remerged == tr_in

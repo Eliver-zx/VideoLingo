@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import inspect
+import math
 import os
 from pathlib import Path
 import re
@@ -13,8 +14,15 @@ from rich.panel import Panel
 from rich.table import Table
 
 from core._1_ytdlp import find_subtitle_file
-from core._3_2_split_meaning import split_sentence as _default_split_sentence
-from core.prompts import get_align_prompt as _default_get_align_prompt
+from core._3_2_split_meaning import (
+    BR_TAG,
+    find_split_positions,
+    split_sentence as _default_split_sentence,
+)
+from core.prompts import (
+    get_align_prompt as _default_get_align_prompt,
+    get_batch_split_prompt,
+)
 from core.task_runner import StopTask
 from core.utils import (  # noqa: F401
     ask_gpt,
@@ -108,14 +116,16 @@ def get_target_parts(response_data, num_parts):
         return None
     parts = []
     for i, item in enumerate(align_data):
-        part = item.get(f"target_part_{i+1}") if isinstance(item, dict) else None
+        part = item.get(f"target_part_{i + 1}") if isinstance(item, dict) else None
         if not isinstance(part, str) or not part.strip():
             return None
         parts.append(part.strip())
     return parts
 
 
-def align_subs(src_sub: str, tr_sub: str, src_part: str) -> Tuple[List[str], List[str], str]:
+def align_subs(
+    src_sub: str, tr_sub: str, src_part: str
+) -> Tuple[List[str], List[str], str]:
     align_prompt = get_align_prompt(src_sub, tr_sub, src_part)
     src_parts = src_part.split("\n")
 
@@ -129,7 +139,9 @@ def align_subs(src_sub: str, tr_sub: str, src_part: str) -> Tuple[List[str], Lis
             }
         return {"status": "success", "message": "Align completed"}
 
-    parsed = ask_gpt(align_prompt, resp_type="json", valid_def=valid_align, log_title="align_subs")
+    parsed = ask_gpt(
+        align_prompt, resp_type="json", valid_def=valid_align, log_title="align_subs"
+    )
     tr_parts = get_target_parts(parsed, len(src_parts)) or [tr_sub]
 
     # The parts are in the target language, so the source-language joiner does not apply
@@ -242,7 +254,9 @@ def align_source_by_ratio(
         for part_idx in range(num_parts - 1):
             parts_left = num_parts - part_idx
             max_end = len(src_words) - (parts_left - 1)
-            rel_ratio = ratios[part_idx] / rem_ratio if rem_ratio > 0 else 1.0 / parts_left
+            rel_ratio = (
+                ratios[part_idx] / rem_ratio if rem_ratio > 0 else 1.0 / parts_left
+            )
             cut_idx = _find_spaced_cut(
                 src_words,
                 weights,
@@ -267,7 +281,9 @@ def align_source_by_ratio(
         for part_idx in range(num_parts - 1):
             parts_left = num_parts - part_idx
             max_end = len(src_chars) - (parts_left - 1)
-            rel_ratio = ratios[part_idx] / rem_ratio if rem_ratio > 0 else 1.0 / parts_left
+            rel_ratio = (
+                ratios[part_idx] / rem_ratio if rem_ratio > 0 else 1.0 / parts_left
+            )
             seg_w = sum(weights[start_idx:])
             target_w = rel_ratio * seg_w
             cum = 0.0
@@ -287,15 +303,25 @@ def align_source_by_ratio(
                 best_score = -float("inf")
                 for i in range(low, high + 1):
                     punct_bonus = 2.0 if src_chars[i - 1] in _CLAUSE_PUNCT else 0.0
-                    g = max(0.0, float(word_gaps[i - 1])) if i - 1 < len(word_gaps) else 0.0
+                    g = (
+                        max(0.0, float(word_gaps[i - 1]))
+                        if i - 1 < len(word_gaps)
+                        else 0.0
+                    )
                     score = punct_bonus + 0.35 * min(g, 0.8) - abs(i - ideal_cut) * 0.35
                     if score > best_score:
                         best_score = score
                         best_cut = i
                 cut_idx = best_cut
             else:
-                punct_cuts = [i for i in range(low, high + 1) if src_chars[i - 1] in _CLAUSE_PUNCT]
-                cut_idx = min(punct_cuts, key=lambda i: abs(i - ideal_cut)) if punct_cuts else ideal_cut
+                punct_cuts = [
+                    i for i in range(low, high + 1) if src_chars[i - 1] in _CLAUSE_PUNCT
+                ]
+                cut_idx = (
+                    min(punct_cuts, key=lambda i: abs(i - ideal_cut))
+                    if punct_cuts
+                    else ideal_cut
+                )
             src_parts.append("".join(src_chars[start_idx:cut_idx]).strip())
             start_idx = cut_idx
             rem_ratio = max(1e-6, rem_ratio - ratios[part_idx])
@@ -314,12 +340,207 @@ def align_source_by_ratio(
     return src_parts, tr_parts, tr_remerged
 
 
-def _call_split_sentence(text: str, num_parts: int = 2, language: str | None = None) -> str:
+_CLAUSE_SPLIT_RE = re.compile(r"(?<=[，,；;：:。！？!?—])")
+
+
+def _partition_clauses_dp(clauses: list[str], k: int) -> list[str]:
+    """Partition ``clauses`` into ``k`` contiguous groups minimizing the maximum group weight."""
+    n = len(clauses)
+    if k <= 1 or n <= 1:
+        return ["".join(clauses).strip()]
+    k = min(k, n)
+    weights = [max(1.0, calc_len(c)) for c in clauses]
+    prefix = [0.0]
+    for w in weights:
+        prefix.append(prefix[-1] + w)
+
+    dp = [[float("inf")] * (k + 1) for _ in range(n + 1)]
+    parent = [[0] * (k + 1) for _ in range(n + 1)]
+    dp[0][0] = 0.0
+
+    for i in range(1, n + 1):
+        for j in range(1, min(i, k) + 1):
+            for prev in range(j - 1, i):
+                seg_w = prefix[i] - prefix[prev]
+                cost = max(dp[prev][j - 1], seg_w)
+                if cost < dp[i][j]:
+                    dp[i][j] = cost
+                    parent[i][j] = prev
+
+    groups: list[str] = []
+    curr = n
+    for j in range(k, 0, -1):
+        prev = parent[curr][j]
+        groups.append("".join(clauses[prev:curr]).strip())
+        curr = prev
+    groups.reverse()
+    return [g for g in groups if g]
+
+
+def _try_local_clause_split(
+    src_line: str,
+    tr_line: str,
+    max_sub_length: float,
+    target_sub_multiplier: float,
+    word_gaps: List[float] | None = None,
+) -> Tuple[List[str], List[str], str] | None:
+    """Split ``tr_line`` and ``src_line`` locally in O(1) using internal clause punctuation when
+    existing clause boundaries already satisfy subtitle length constraints without an LLM call."""
+    tr_clean = _LEADING_PUNCT_RE.sub("", str(tr_line)).strip() or str(tr_line).strip()
+    clauses = [c.strip() for c in _CLAUSE_SPLIT_RE.split(tr_clean) if c.strip()]
+    if len(clauses) < 2:
+        return None
+    if any(calc_len(c) * target_sub_multiplier > max_sub_length for c in clauses):
+        return None
+
+    src_w = calc_len(src_line)
+    tr_w = calc_len(tr_clean) * target_sub_multiplier
+    needed_k = max(
+        math.ceil(src_w / max(1.0, max_sub_length)),
+        math.ceil(tr_w / max(1.0, max_sub_length)),
+        2,
+    )
+    if needed_k > len(clauses):
+        cand_groups = clauses
+        if any(len(g) < 2 for g in cand_groups):
+            return None
+        s_parts, t_parts, remerged = align_source_by_ratio(
+            str(src_line), str(tr_line), "\n".join(cand_groups), word_gaps=word_gaps
+        )
+        if (
+            len(s_parts) >= 2
+            and len(s_parts) == len(t_parts)
+            and all(
+                calc_len(tp) * target_sub_multiplier <= max_sub_length for tp in t_parts
+            )
+            and all(calc_len(sp) <= max_sub_length for sp in s_parts)
+        ):
+            return s_parts, t_parts, remerged
+        return None
+
+    for k_try in range(needed_k, len(clauses) + 1):
+        cand_groups = _partition_clauses_dp(clauses, k_try)
+        if len(cand_groups) < 2 or any(len(g) < 2 for g in cand_groups):
+            continue
+        if any(
+            calc_len(g) * target_sub_multiplier > max_sub_length for g in cand_groups
+        ):
+            continue
+        s_parts, t_parts, remerged = align_source_by_ratio(
+            str(src_line), str(tr_line), "\n".join(cand_groups), word_gaps=word_gaps
+        )
+        if len(s_parts) == len(cand_groups) and all(
+            calc_len(sp) <= max_sub_length for sp in s_parts
+        ):
+            return s_parts, t_parts, remerged
+    return None
+
+
+def _apply_br_split_to_sentence(
+    sentence: str, modified: str, language: str | None = None
+) -> str:
+    """Project ``[br]`` markers in ``modified`` back onto exact positions of ``sentence``."""
+    mod_norm = BR_TAG.sub("[br]", str(modified or ""))
+    parts = [p.strip() for p in mod_norm.split("[br]") if p.strip()]
+    if len(parts) < 2:
+        return sentence
+    split_points = find_split_positions(sentence, "[br]".join(parts), language=language)
+    if not split_points:
+        return sentence
+    best_split = sentence
+    for idx_pt, split_point in enumerate(split_points):
+        if idx_pt == 0:
+            best_split = sentence[:split_point] + "\n" + sentence[split_point:]
+        else:
+            cur_parts = best_split.split("\n")
+            last_part = cur_parts[-1]
+            rel = split_point - split_points[idx_pt - 1]
+            cur_parts[-1] = last_part[:rel] + "\n" + last_part[rel:]
+            best_split = "\n".join(cur_parts)
+    out_parts = [p.strip() for p in best_split.split("\n") if p.strip()]
+    return "\n".join(out_parts) if len(out_parts) >= 2 else sentence
+
+
+def _batch_split_sentences_llm(
+    items: list[tuple[int, str, int]],
+    language: str | None = None,
+    batch_size: int = 12,
+) -> dict[int, str]:
+    """Split multiple punctuation-scarce sentences in parallel batches using a single LLM call per batch."""
+    if not items:
+        return {}
+
+    batches = [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
+    results: dict[int, str] = {}
+
+    def _run_batch(batch: list[tuple[int, str, int]]) -> dict[int, str]:
+        payload = {
+            str(line_idx): {"text": text, "num_parts": num_parts}
+            for line_idx, text, num_parts in batch
+        }
+        prompt = get_batch_split_prompt(payload, language=language)
+
+        def _valid_batch(resp: Any) -> dict[str, str]:
+            if not isinstance(resp, dict):
+                return {"status": "error", "message": "Response must be a JSON object"}
+            for k in payload:
+                val = str(resp.get(k, ""))
+                norm = BR_TAG.sub("[br]", val)
+                if "[br]" not in norm:
+                    return {"status": "error", "message": f"Missing [br] in key {k}"}
+            return {"status": "success", "message": "Batch split completed"}
+
+        out: dict[int, str] = {}
+        try:
+            resp = ask_gpt(
+                prompt,
+                resp_type="json",
+                valid_def=_valid_batch,
+                log_title="split_by_meaning_batch",
+            )
+            if isinstance(resp, dict):
+                for line_idx, text, num_parts in batch:
+                    raw_val = str(resp.get(str(line_idx), ""))
+                    projected = _apply_br_split_to_sentence(
+                        text, raw_val, language=language
+                    )
+                    if len([p for p in projected.split("\n") if p.strip()]) >= 2:
+                        out[line_idx] = projected
+                    else:
+                        out[line_idx] = _call_split_sentence(
+                            text, num_parts=num_parts, language=language
+                        ).strip()
+                return out
+        except StopTask:
+            raise
+        except Exception:
+            pass
+
+        for line_idx, text, num_parts in batch:
+            out[line_idx] = _call_split_sentence(
+                text, num_parts=num_parts, language=language
+            ).strip()
+        return out
+
+    max_workers = max(1, int(load_key_or("max_workers", 4) or 4))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_run_batch, b) for b in batches]
+        for fut in futures:
+            check_cancel()
+            results.update(fut.result())
+    return results
+
+
+def _call_split_sentence(
+    text: str, num_parts: int = 2, language: str | None = None
+) -> str:
     if language is not None:
         try:
             sig = inspect.signature(split_sentence)
             if "language" in sig.parameters:
-                return str(split_sentence(text, num_parts=num_parts, language=language) or "")
+                return str(
+                    split_sentence(text, num_parts=num_parts, language=language) or ""
+                )
         except (TypeError, ValueError):
             pass
     return str(split_sentence(text, num_parts=num_parts) or "")
@@ -336,11 +557,18 @@ def split_align_subs(
     remerged_tr_lines = tr_lines.copy()
     target_language = load_key_or("target_language", None)
     use_legacy_align = get_align_prompt is not _default_get_align_prompt
+    use_custom_split = split_sentence is not _default_split_sentence
+
+    src_work: list[str | list[str]] = list(src_lines)
+    tr_work: list[str | list[str]] = list(tr_lines)
 
     to_split = []
     for i, (src, tr) in enumerate(zip(src_lines, tr_lines)):
         src, tr = str(src), str(tr)
-        if calc_len(src) > MAX_SUB_LENGTH or calc_len(tr) * TARGET_SUB_MULTIPLIER > MAX_SUB_LENGTH:
+        if (
+            calc_len(src) > MAX_SUB_LENGTH
+            or calc_len(tr) * TARGET_SUB_MULTIPLIER > MAX_SUB_LENGTH
+        ):
             to_split.append(i)
             table = Table(title=f"📏 Line {i} needs to be split")
             table.add_column("Type", style="cyan")
@@ -349,52 +577,143 @@ def split_align_subs(
             table.add_row("Target Line", tr)
             console.print(table)
 
-    @except_handler("Error in split_align_subs")
-    def process(i):
-        if use_legacy_align:
-            split_src = _call_split_sentence(src_lines[i], num_parts=2).strip()
-            if len([part for part in split_src.split("\n") if part.strip()]) < 2:
-                console.print(f"[yellow]⚠️ Line {i} could not be split, keeping it as is[/yellow]")
-                return
-            src_parts, tr_parts, tr_remerged = align_subs(src_lines[i], tr_lines[i], split_src)
-        else:
-            tr_clean = _LEADING_PUNCT_RE.sub("", str(tr_lines[i])).strip() or str(tr_lines[i]).strip()
-            split_tr = _call_split_sentence(tr_clean, num_parts=2, language=target_language).strip()
-            if len([part for part in split_tr.split("\n") if part.strip()]) < 2:
-                console.print(f"[yellow]⚠️ Line {i} could not be split, keeping it as is[/yellow]")
-                return
-            gaps_i = line_word_gaps[i] if (line_word_gaps and i < len(line_word_gaps)) else None
-            src_parts, tr_parts, tr_remerged = align_source_by_ratio(
-                str(src_lines[i]), str(tr_lines[i]), split_tr, word_gaps=gaps_i
+    if not use_legacy_align and not use_custom_split:
+        llm_pending: list[tuple[int, str, int]] = []
+        for i in to_split:
+            gaps_i = (
+                line_word_gaps[i]
+                if (line_word_gaps and i < len(line_word_gaps))
+                else None
             )
-        # Source and translation must stay in step: a line is split on both sides or not at all
-        if not tr_parts or len(src_parts) < 2 or len(src_parts) != len(tr_parts):
-            console.print(
-                f"[yellow]⚠️ Line {i} was aligned into a different number of parts, keeping it as is[/yellow]"
+            local_res = _try_local_clause_split(
+                str(src_lines[i]),
+                str(tr_lines[i]),
+                float(MAX_SUB_LENGTH),
+                float(TARGET_SUB_MULTIPLIER),
+                word_gaps=gaps_i,
             )
-            return
-        src_lines[i] = src_parts
-        tr_lines[i] = tr_parts
-        remerged_tr_lines[i] = tr_remerged
+            if local_res is not None:
+                s_parts, t_parts, tr_remerged = local_res
+                src_work[i] = s_parts
+                tr_work[i] = t_parts
+                remerged_tr_lines[i] = tr_remerged
+            else:
+                tr_clean = (
+                    _LEADING_PUNCT_RE.sub("", str(tr_lines[i])).strip()
+                    or str(tr_lines[i]).strip()
+                )
+                needed_k = max(
+                    math.ceil(
+                        calc_len(str(src_lines[i])) / max(1.0, float(MAX_SUB_LENGTH))
+                    ),
+                    math.ceil(
+                        (calc_len(tr_clean) * float(TARGET_SUB_MULTIPLIER))
+                        / max(1.0, float(MAX_SUB_LENGTH))
+                    ),
+                    2,
+                )
+                llm_pending.append((i, tr_clean, needed_k))
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=load_key("max_workers")) as executor:
-        futures = [executor.submit(process, i) for i in to_split]
-    for i, future in zip(to_split, futures):
-        error = future.exception()
-        if isinstance(error, StopTask):
-            raise error
-        if error:
-            console.print(f"[yellow]⚠️ Line {i} is kept unsplit: {error}[/yellow]")
+        if llm_pending:
+            batch_splits = _batch_split_sentences_llm(
+                llm_pending, language=target_language
+            )
+            for i, _tr_clean, _needed_k in llm_pending:
+                split_tr = (batch_splits.get(i) or "").strip()
+                if len([part for part in split_tr.split("\n") if part.strip()]) < 2:
+                    console.print(
+                        f"[yellow]⚠️ Line {i} could not be split, keeping it as is[/yellow]"
+                    )
+                    continue
+                gaps_i = (
+                    line_word_gaps[i]
+                    if (line_word_gaps and i < len(line_word_gaps))
+                    else None
+                )
+                src_parts, tr_parts, tr_remerged = align_source_by_ratio(
+                    str(src_lines[i]), str(tr_lines[i]), split_tr, word_gaps=gaps_i
+                )
+                if (
+                    not tr_parts
+                    or len(src_parts) < 2
+                    or len(src_parts) != len(tr_parts)
+                ):
+                    console.print(
+                        f"[yellow]⚠️ Line {i} was aligned into a different number of parts, keeping it as is[/yellow]"
+                    )
+                    continue
+                src_work[i] = src_parts
+                tr_work[i] = tr_parts
+                remerged_tr_lines[i] = tr_remerged
+    else:
 
-    # Flatten `src_lines` and `tr_lines`
-    src_lines = [
-        item for sublist in src_lines for item in (sublist if isinstance(sublist, list) else [sublist])
+        @except_handler("Error in split_align_subs")
+        def process(i):
+            if use_legacy_align:
+                split_src = _call_split_sentence(src_lines[i], num_parts=2).strip()
+                if len([part for part in split_src.split("\n") if part.strip()]) < 2:
+                    console.print(
+                        f"[yellow]⚠️ Line {i} could not be split, keeping it as is[/yellow]"
+                    )
+                    return
+                src_parts, tr_parts, tr_remerged = align_subs(
+                    src_lines[i], tr_lines[i], split_src
+                )
+            else:
+                tr_clean = (
+                    _LEADING_PUNCT_RE.sub("", str(tr_lines[i])).strip()
+                    or str(tr_lines[i]).strip()
+                )
+                split_tr = _call_split_sentence(
+                    tr_clean, num_parts=2, language=target_language
+                ).strip()
+                if len([part for part in split_tr.split("\n") if part.strip()]) < 2:
+                    console.print(
+                        f"[yellow]⚠️ Line {i} could not be split, keeping it as is[/yellow]"
+                    )
+                    return
+                gaps_i = (
+                    line_word_gaps[i]
+                    if (line_word_gaps and i < len(line_word_gaps))
+                    else None
+                )
+                src_parts, tr_parts, tr_remerged = align_source_by_ratio(
+                    str(src_lines[i]), str(tr_lines[i]), split_tr, word_gaps=gaps_i
+                )
+            # Source and translation must stay in step: a line is split on both sides or not at all
+            if not tr_parts or len(src_parts) < 2 or len(src_parts) != len(tr_parts):
+                console.print(
+                    f"[yellow]⚠️ Line {i} was aligned into a different number of parts, keeping it as is[/yellow]"
+                )
+                return
+            src_work[i] = src_parts
+            tr_work[i] = tr_parts
+            remerged_tr_lines[i] = tr_remerged
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=load_key("max_workers")
+        ) as executor:
+            futures = [executor.submit(process, i) for i in to_split]
+        for i, future in zip(to_split, futures):
+            error = future.exception()
+            if isinstance(error, StopTask):
+                raise error
+            if error:
+                console.print(f"[yellow]⚠️ Line {i} is kept unsplit: {error}[/yellow]")
+
+    # Flatten `src_work` and `tr_work`
+    flat_src = [
+        item
+        for sublist in src_work
+        for item in (sublist if isinstance(sublist, list) else [sublist])
     ]
-    tr_lines = [
-        item for sublist in tr_lines for item in (sublist if isinstance(sublist, list) else [sublist])
+    flat_tr = [
+        item
+        for sublist in tr_work
+        for item in (sublist if isinstance(sublist, list) else [sublist])
     ]
 
-    return src_lines, tr_lines, remerged_tr_lines
+    return flat_src, flat_tr, remerged_tr_lines
 
 
 def split_source_lines(lines: List[str]) -> List[str]:
@@ -404,14 +723,20 @@ def split_source_lines(lines: List[str]) -> List[str]:
     def process(line):
         if calc_len(line) <= max_length:
             return [line]
-        parts = [part.strip() for part in split_sentence(line, num_parts=2).split("\n") if part.strip()]
+        parts = [
+            part.strip()
+            for part in split_sentence(line, num_parts=2).split("\n")
+            if part.strip()
+        ]
         return parts if len(parts) > 1 else [line]
 
     for _ in range(3):
         if all(calc_len(line) <= max_length for line in lines):
             break
         check_cancel()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=load_key("max_workers")) as executor:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=load_key("max_workers")
+        ) as executor:
             lines = [part for parts in executor.map(process, lines) for part in parts]
     return lines
 
@@ -462,7 +787,11 @@ def _partition_word_span_for_cues(
             w_b = w_end
         else:
             part_clean = _clean_alnum(s_part)
-            pos = span_clean.find(part_clean, char_cursor) if (part_clean and span_clean) else -1
+            pos = (
+                span_clean.find(part_clean, char_cursor)
+                if (part_clean and span_clean)
+                else -1
+            )
             if pos != -1 and pos + len(part_clean) - 1 < len(char_to_abs_word):
                 w_a = curr_w
                 w_b = max(w_a + 1, char_to_abs_word[pos + len(part_clean) - 1] + 1)
@@ -527,11 +856,17 @@ def split_for_sub_main():
                         float(cfg_d.get("max_length", -1)),
                         float(cfg_d.get("target_multiplier", -1)),
                     )
-            config_matches = prev_cfg is None or prev_cfg == (MAX_SUB_LENGTH, TARGET_SUB_MULTIPLIER)
+            config_matches = prev_cfg is None or prev_cfg == (
+                MAX_SUB_LENGTH,
+                TARGET_SUB_MULTIPLIER,
+            )
             df_existing = pd.read_excel(split_sub_path)
             if (
                 config_matches
-                and all(calc_len(str(s)) <= MAX_SUB_LENGTH for s in df_existing["Source"].fillna(""))
+                and all(
+                    calc_len(str(s)) <= MAX_SUB_LENGTH
+                    for s in df_existing["Source"].fillna("")
+                )
                 and all(
                     calc_len(str(tr)) * TARGET_SUB_MULTIPLIER <= MAX_SUB_LENGTH
                     for tr in df_existing["Translation"].fillna("")
@@ -553,11 +888,18 @@ def split_for_sub_main():
 
     if find_subtitle_file():
         # The subtitles of the user keep their lines and their times
-        console.print("[cyan]📄 Subtitles of the user: the lines are kept as they are[/cyan]")
+        console.print(
+            "[cyan]📄 Subtitles of the user: the lines are kept as they are[/cyan]"
+        )
         os.makedirs(os.path.dirname(split_sub_path) or ".", exist_ok=True)
         for path in (split_sub_path, remerged_path):
-            pd.DataFrame({"Source": src, "Translation": trans}).to_excel(path, index=False)
-        _LAST_SPLIT_CONFIG_BY_PATH[abs_split_path] = (MAX_SUB_LENGTH, TARGET_SUB_MULTIPLIER)
+            pd.DataFrame({"Source": src, "Translation": trans}).to_excel(
+                path, index=False
+            )
+        _LAST_SPLIT_CONFIG_BY_PATH[abs_split_path] = (
+            MAX_SUB_LENGTH,
+            TARGET_SUB_MULTIPLIER,
+        )
         return
 
     orig_src = src.copy()
@@ -601,8 +943,12 @@ def split_for_sub_main():
         src, trans = split_src, split_trans
 
     os.makedirs(os.path.dirname(split_sub_path) or ".", exist_ok=True)
-    pd.DataFrame({"Source": split_src, "Translation": split_trans}).to_excel(split_sub_path, index=False)
-    pd.DataFrame({"Source": orig_src, "Translation": orig_remerged}).to_excel(remerged_path, index=False)
+    pd.DataFrame({"Source": split_src, "Translation": split_trans}).to_excel(
+        split_sub_path, index=False
+    )
+    pd.DataFrame({"Source": orig_src, "Translation": orig_remerged}).to_excel(
+        remerged_path, index=False
+    )
     _LAST_SPLIT_CONFIG_BY_PATH[abs_split_path] = (MAX_SUB_LENGTH, TARGET_SUB_MULTIPLIER)
 
     if ws.utterances_path.is_file() and ws.words_path.is_file():

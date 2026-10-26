@@ -31,15 +31,77 @@ from core.utils.models import (
 from core.workspace import TaskWorkspace, get_active_workspace
 
 CHUNK_WORDS = 400
-OVERLAP_WORDS = 30
+OVERLAP_WORDS = 60
 SENTENCE_END_CHARS = ".?!。？！…।॥؟۔"
 CLAUSE_PUNCT_CHARS = ",，、;；:：—"
 PAUSE_MARKER = "‖"
 ACOUSTIC_PAUSE_PROMPT_GAP = 0.40
-LONG_SENTENCE_MAX_WORDS = 45
-LONG_SENTENCE_MAX_CJK_CHARS = 60
-LONG_SENTENCE_MAX_DURATION = 8.0
+# Sentence completeness takes priority before translation; Step 5 (_5_split_sub.py)
+# handles splitting translated sentences into short display cues.
+# Only split unpunctuated runaway spans exceeding 120 words / 180 CJK chars and 25s.
+LONG_SENTENCE_MAX_WORDS = 120
+LONG_SENTENCE_MAX_CJK_CHARS = 180
+LONG_SENTENCE_MAX_DURATION = 25.0
 CLAUSE_SPLIT_MIN_GAP = 0.25
+
+_SUBORDINATE_CLAUSE_STARTERS = {
+    "because",
+    "cuz",
+    "cause",
+    "since",
+    "although",
+    "though",
+    "while",
+    "whereas",
+    "unless",
+    "until",
+    "if",
+    "whether",
+    "especially",
+    "particularly",
+    "specifically",
+    "which",
+    "who",
+    "whom",
+    "whose",
+    "where",
+    "whereby",
+    "wherein",
+    "meaning",
+    "including",
+    "excluding",
+}
+_DANGLING_TAIL_WORDS = {
+    "to",
+    "of",
+    "in",
+    "on",
+    "for",
+    "with",
+    "at",
+    "by",
+    "from",
+    "into",
+    "about",
+    "like",
+    "and",
+    "or",
+    "but",
+    "nor",
+    "because",
+    "cuz",
+    "if",
+    "while",
+    "when",
+    "although",
+    "though",
+    "which",
+    "who",
+    "where",
+    "than",
+    "as",
+}
+_FILLER_TOKENS = {"uh", "um", "er", "ah"}
 
 _ABBREVIATIONS = {
     "mr",
@@ -260,7 +322,9 @@ def _project_window_punctuation(
     existing_punct: dict[int, str] = {}
     for i, w in enumerate(win_words):
         stripped = str(w).replace(PAUSE_MARKER, "").rstrip("\"'”’）)]}")
-        if stripped and (stripped[-1] in SENTENCE_END_CHARS or stripped[-1] in CLAUSE_PUNCT_CHARS):
+        if stripped and (
+            stripped[-1] in SENTENCE_END_CHARS or stripped[-1] in CLAUSE_PUNCT_CHARS
+        ):
             if i in existing_ends or stripped[-1] in CLAUSE_PUNCT_CHARS:
                 existing_punct[i] = stripped[-1]
 
@@ -309,7 +373,9 @@ def _project_window_punctuation(
         return None
 
     end_word_indices: set[int] = set()
-    punct_by_word: dict[int, str] = dict(existing_punct)
+    # When the LLM returns restored punctuation, trust the LLM's punctuation placement
+    # rather than carrying over raw ASR trailing periods that the LLM chose to remove.
+    punct_by_word: dict[int, str] = {}
 
     for r_pos, ch in sorted(clause_punct_at_rpos.items()):
         w_idx = _map_rpos_to_word(r_pos)
@@ -325,13 +391,15 @@ def _project_window_punctuation(
             if ch == "." and len(clean_tok) == 1 and clean_tok.isalpha():
                 next_w = win_words[w_idx + 1] if w_idx + 1 < len(win_words) else None
                 gap = word_gaps[w_idx] if word_gaps and w_idx < len(word_gaps) else 0.0
-                if not _is_sentence_end_punct(w_str + ".", next_word=next_w, gap_after=gap):
+                if not _is_sentence_end_punct(
+                    w_str + ".", next_word=next_w, gap_after=gap
+                ):
                     continue
             end_word_indices.add(w_idx)
             punct_by_word[w_idx] = ch
 
     if not end_word_indices:
-        return existing_ends, punct_by_word
+        return existing_ends, dict(existing_punct)
     return end_word_indices, punct_by_word
 
 
@@ -355,7 +423,11 @@ def _merge_standalone_punct_tokens(
     merged_dicts: list[dict[str, Any]] | None = [] if word_dicts is not None else None
     for idx, raw in enumerate(words):
         w = str(raw).strip('"').strip()
-        wd = word_dicts[idx] if (word_dicts is not None and idx < len(word_dicts)) else None
+        wd = (
+            word_dicts[idx]
+            if (word_dicts is not None and idx < len(word_dicts))
+            else None
+        )
         if not w:
             continue
         if not _clean_word(w):
@@ -371,7 +443,9 @@ def _merge_standalone_punct_tokens(
             continue
         merged.append(w)
         if merged_dicts is not None:
-            merged_dicts.append(dict(wd) if wd is not None else {"text": w, "start": 0.0, "end": 0.0})
+            merged_dicts.append(
+                dict(wd) if wd is not None else {"text": w, "start": 0.0, "end": 0.0}
+            )
     return merged, merged_dicts
 
 
@@ -409,17 +483,42 @@ def _normalize_slice_words(slice_words: list[str], default_period: str) -> list[
     return out
 
 
+def _strip_prompt_punct(word: str) -> str:
+    """Strip ASR trailing sentence/clause punctuation before sending to the LLM so the model
+    makes syntactic boundary decisions cleanly while keeping abbreviations and decimals intact."""
+    s = str(word).strip()
+    if not s:
+        return s
+    if s[-1] in CLAUSE_PUNCT_CHARS:
+        return s[:-1] or s
+    if s[-1] in SENTENCE_END_CHARS:
+        clean_tok = _clean_word(s[:-1])
+        if s[-1] == "." and (
+            clean_tok in _ABBREVIATIONS
+            or "." in s[:-1]
+            or (len(clean_tok) == 1 and clean_tok.isalpha())
+        ):
+            return s
+        return s.rstrip(SENTENCE_END_CHARS) or s
+    return s
+
+
 def _build_window_segment_with_pauses(
     win_words: list[str],
     joiner: str,
     word_gaps: list[float] | None = None,
 ) -> str:
-    if not word_gaps or not win_words:
-        return join_words(win_words, joiner)
+    prompt_words = [_strip_prompt_punct(w) for w in win_words]
+    if not word_gaps or not prompt_words:
+        return join_words(prompt_words, joiner)
     pieces: list[str] = []
-    for i, w in enumerate(win_words):
+    for i, w in enumerate(prompt_words):
         pieces.append(w)
-        if i + 1 < len(win_words) and i < len(word_gaps) and word_gaps[i] >= ACOUSTIC_PAUSE_PROMPT_GAP:
+        if (
+            i + 1 < len(prompt_words)
+            and i < len(word_gaps)
+            and word_gaps[i] >= ACOUSTIC_PAUSE_PROMPT_GAP
+        ):
             pieces.append(PAUSE_MARKER)
     return join_words(pieces, joiner)
 
@@ -433,7 +532,9 @@ def _restore_window_punctuation(
 ) -> tuple[set[int], dict[int, str]]:
     """Call LLM to restore punctuation for one window and return local sentence-end indices and punct map."""
     check_cancel()
-    raw_segment = _build_window_segment_with_pauses(win_words, joiner, word_gaps=word_gaps)
+    raw_segment = _build_window_segment_with_pauses(
+        win_words, joiner, word_gaps=word_gaps
+    )
     prompt = get_punctuation_prompt(raw_segment, language=language)
 
     def valid_punct(resp):
@@ -454,7 +555,9 @@ def _restore_window_punctuation(
             log_title=f"punct_restore_{win_idx}",
         )
         restored_text = resp["restored"].replace(PAUSE_MARKER, "")
-        return _project_window_punctuation(win_words, restored_text, word_gaps=word_gaps)
+        return _project_window_punctuation(
+            win_words, restored_text, word_gaps=word_gaps
+        )
     except StopTask:
         raise
     except Exception as exc:
@@ -486,13 +589,15 @@ def _split_long_span_at_clauses(
         for k in range(start_idx, end_idx + 1)
     )
     duration = (
-        float(word_dicts[end_idx].get("end", 0.0)) - float(word_dicts[start_idx].get("start", 0.0))
+        float(word_dicts[end_idx].get("end", 0.0))
+        - float(word_dicts[start_idx].get("start", 0.0))
         if word_dicts and end_idx < len(word_dicts)
         else 0.0
     )
-    is_overlong = (n_span_words > LONG_SENTENCE_MAX_WORDS or cjk_chars > LONG_SENTENCE_MAX_CJK_CHARS) and (
-        duration > LONG_SENTENCE_MAX_DURATION if word_dicts else True
-    )
+    is_overlong = (
+        n_span_words > LONG_SENTENCE_MAX_WORDS
+        or cjk_chars > LONG_SENTENCE_MAX_CJK_CHARS
+    ) and (duration > LONG_SENTENCE_MAX_DURATION if word_dicts else True)
     if not is_overlong or n_span_words < 6:
         return [(start_idx, end_idx)]
 
@@ -501,6 +606,9 @@ def _split_long_span_at_clauses(
         p = punct_by_word.get(k, "")
         w_tail = cleaned_words[k][-1] if cleaned_words[k] else ""
         if (p and p in CLAUSE_PUNCT_CHARS) or (w_tail and w_tail in CLAUSE_PUNCT_CHARS):
+            next_tok = _clean_word(cleaned_words[k + 1]) if k + 1 <= end_idx else ""
+            if next_tok in _SUBORDINATE_CLAUSE_STARTERS:
+                continue
             clause_candidates.append(k)
 
     if not clause_candidates:
@@ -510,7 +618,9 @@ def _split_long_span_at_clauses(
     pause_candidates = [
         k
         for k in clause_candidates
-        if word_gaps is not None and k < len(word_gaps) and word_gaps[k] >= CLAUSE_SPLIT_MIN_GAP
+        if word_gaps is not None
+        and k < len(word_gaps)
+        and word_gaps[k] >= CLAUSE_SPLIT_MIN_GAP
     ]
     pool = pause_candidates if pause_candidates else clause_candidates
     best_k = min(pool, key=lambda k: abs(k - mid))
@@ -522,6 +632,97 @@ def _split_long_span_at_clauses(
         best_k + 1, end_idx, cleaned_words, punct_by_word, word_dicts, word_gaps
     )
     return left_spans + right_spans
+
+
+def _stitch_incomplete_clause_spans(
+    spans: list[tuple[int, int]],
+    cleaned_words: list[str],
+    punct_by_word: dict[int, str],
+    word_gaps: list[float] | None,
+) -> list[tuple[int, int]]:
+    """Merge false sentence breaks where the preceding span ends with a dangling token or
+    is a short fronted adverbial clause, or the following span starts with a subordinate clause
+    without an acoustic pause."""
+    if len(spans) <= 1:
+        return spans
+
+    stitched: list[tuple[int, int]] = [spans[0]]
+    for cur_s, cur_e in spans[1:]:
+        prev_s, prev_e = stitched[-1]
+        gap = word_gaps[prev_e] if (word_gaps and prev_e < len(word_gaps)) else 0.0
+        prev_last_tok = _clean_word(cleaned_words[prev_e])
+
+        first_tok = _clean_word(cleaned_words[cur_s])
+        non_filler_idx = cur_s
+        while (
+            non_filler_idx < cur_e
+            and _clean_word(cleaned_words[non_filler_idx]) in _FILLER_TOKENS
+        ):
+            non_filler_idx += 1
+        effective_first_tok = _clean_word(cleaned_words[non_filler_idx])
+
+        prev_head_toks = [
+            _clean_word(cleaned_words[k])
+            for k in range(prev_s, min(prev_e + 1, prev_s + 4))
+        ]
+        prev_has_fronted_sub = any(
+            t in {"while", "although", "though", "when", "whenever", "if", "unless"}
+            for t in prev_head_toks
+        )
+        prev_has_internal_comma = any(
+            bool(punct_by_word.get(k))
+            and (punct_by_word.get(k) or "") in CLAUSE_PUNCT_CHARS
+            for k in range(prev_s + 2, prev_e)
+        )
+        cur_has_internal_comma = any(
+            bool(punct_by_word.get(k))
+            and (punct_by_word.get(k) or "") in CLAUSE_PUNCT_CHARS
+            for k in range(cur_s + 2, cur_e)
+        )
+
+        should_stitch = False
+        if prev_last_tok in _DANGLING_TAIL_WORDS:
+            should_stitch = True
+        elif (
+            first_tok in _FILLER_TOKENS
+            and effective_first_tok
+            in {"you", "a", "the", "like", "for", "with", "on", "in", "to", "because"}
+            and gap < 0.45
+        ):
+            should_stitch = True
+        elif (
+            effective_first_tok in _SUBORDINATE_CLAUSE_STARTERS
+            and gap < 0.45
+            and (
+                not cur_has_internal_comma
+                or effective_first_tok
+                in {
+                    "because",
+                    "cuz",
+                    "whereas",
+                    "which",
+                    "especially",
+                    "including",
+                    "meaning",
+                }
+            )
+        ):
+            should_stitch = True
+        elif (
+            prev_has_fronted_sub
+            and not prev_has_internal_comma
+            and (prev_e - prev_s + 1) <= 25
+            and gap < 0.45
+        ):
+            should_stitch = True
+
+        if should_stitch:
+            punct_by_word[prev_e] = ","
+            stitched[-1] = (prev_s, cur_e)
+        else:
+            stitched.append((cur_s, cur_e))
+
+    return stitched
 
 
 def restore_and_split_words(
@@ -543,7 +744,9 @@ def restore_and_split_words(
     else:
         raw_word_strs = [str(w) for w in words]
 
-    cleaned_words, active_dicts = _merge_standalone_punct_tokens(raw_word_strs, caller_dicts)
+    cleaned_words, active_dicts = _merge_standalone_punct_tokens(
+        raw_word_strs, caller_dicts
+    )
     if not cleaned_words:
         return []
 
@@ -558,7 +761,8 @@ def restore_and_split_words(
             if i + 1 < n_words:
                 gap = max(
                     0.0,
-                    float(active_dicts[i + 1].get("start", 0.0)) - float(active_dicts[i].get("end", 0.0)),
+                    float(active_dicts[i + 1].get("start", 0.0))
+                    - float(active_dicts[i].get("end", 0.0)),
                 )
             else:
                 gap = 0.0
@@ -617,16 +821,28 @@ def restore_and_split_words(
             raw_spans.append((start_idx, end_idx))
             start_idx = end_idx + 1
 
+    raw_spans = _stitch_incomplete_clause_spans(
+        raw_spans, cleaned_words, global_punct_by_word, word_gaps
+    )
+
     final_spans: list[tuple[int, int]] = []
     for s_idx, e_idx in raw_spans:
         final_spans.extend(
             _split_long_span_at_clauses(
-                s_idx, e_idx, cleaned_words, global_punct_by_word, active_dicts, word_gaps
+                s_idx,
+                e_idx,
+                cleaned_words,
+                global_punct_by_word,
+                active_dicts,
+                word_gaps,
             )
         )
 
     for _, e_idx in final_spans:
-        if e_idx not in global_punct_by_word or global_punct_by_word[e_idx] in CLAUSE_PUNCT_CHARS:
+        if (
+            e_idx not in global_punct_by_word
+            or global_punct_by_word[e_idx] in CLAUSE_PUNCT_CHARS
+        ):
             w_end_str = cleaned_words[e_idx].rstrip("\"'”’）)]}")
             if w_end_str and w_end_str[-1] in SENTENCE_END_CHARS:
                 global_punct_by_word[e_idx] = w_end_str[-1]
@@ -645,16 +861,33 @@ def restore_and_split_words(
         slice_words = list(cleaned_words[s_idx : e_idx + 1])
         if not slice_words:
             continue
-        # Attach restored internal clause commas onto words that do not already carry punctuation
+        # Attach restored internal clause commas onto words (replacing any raw ASR period that the LLM downgraded)
         for rel_i in range(len(slice_words) - 1):
             abs_i = s_idx + rel_i
             p_ch = global_punct_by_word.get(abs_i, "")
             if p_ch and p_ch in CLAUSE_PUNCT_CHARS:
                 w_cur = slice_words[rel_i]
-                if w_cur and w_cur[-1] not in CLAUSE_PUNCT_CHARS and w_cur[-1] not in SENTENCE_END_CHARS:
+                if w_cur and w_cur[-1] in SENTENCE_END_CHARS:
+                    clean_tok = _clean_word(w_cur)
+                    if not (
+                        w_cur[-1] == "."
+                        and (
+                            clean_tok in _ABBREVIATIONS
+                            or "." in w_cur[:-1]
+                            or (len(clean_tok) == 1 and clean_tok.isalpha())
+                        )
+                    ):
+                        w_cur = w_cur.rstrip(SENTENCE_END_CHARS)
+                if (
+                    w_cur
+                    and w_cur[-1] not in CLAUSE_PUNCT_CHARS
+                    and w_cur[-1] not in SENTENCE_END_CHARS
+                ):
                     slice_words[rel_i] = w_cur + p_ch
         end_p = global_punct_by_word.get(e_idx, "")
-        sent_end_punct = end_p if (end_p and end_p in SENTENCE_END_CHARS) else default_period
+        sent_end_punct = (
+            end_p if (end_p and end_p in SENTENCE_END_CHARS) else default_period
+        )
         norm_words = _normalize_slice_words(slice_words, sent_end_punct)
         sentence = join_words(norm_words, joiner).strip()
         sentence = sentence.lstrip("，,。.:;；：?!？！… ")
@@ -709,7 +942,10 @@ def _build_utterances_from_sentences(
         else:
             gap_after = 0.0
         src_raw = join_words(
-            [str(w.get("text", w.get("word", ""))).strip() for w in word_dicts[w_start:w_end]],
+            [
+                str(w.get("text", w.get("word", ""))).strip()
+                for w in word_dicts[w_start:w_end]
+            ],
             joiner,
         ).strip()
         utterances.append(
@@ -778,9 +1014,15 @@ def split_by_spacy():
                     "idx": len(word_dicts),
                     "text": raw_txt,
                     "punct_after": "",
-                    "start": 0.0 if start_raw is None or bool(pd.isna(start_raw)) else float(start_raw),
-                    "end": 0.0 if end_raw is None or bool(pd.isna(end_raw)) else float(end_raw),
-                    "speaker": None if spk_raw is None or bool(pd.isna(spk_raw)) else spk_raw,
+                    "start": 0.0
+                    if start_raw is None or bool(pd.isna(start_raw))
+                    else float(start_raw),
+                    "end": 0.0
+                    if end_raw is None or bool(pd.isna(end_raw))
+                    else float(end_raw),
+                    "speaker": None
+                    if spk_raw is None or bool(pd.isna(spk_raw))
+                    else spk_raw,
                 }
             )
 

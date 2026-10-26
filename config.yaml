@@ -105,7 +105,7 @@ subtitle:
       margin_v: 27
 
 # *Whether to reflect the translation result in the original text
-reflect_translate: true
+reflect_translate: false
 
 # *Style of the translation in your own words, e.g. 'colloquial, short sentences'. Empty = no extra requirement
 translation_style: ''

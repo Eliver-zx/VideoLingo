@@ -10,14 +10,14 @@ from typing import Any
 import unicodedata
 from ruamel.yaml import YAML
 
-CONFIG_PATH = 'config.yaml'
+CONFIG_PATH = "config.yaml"
 lock = threading.Lock()
 
 yaml = YAML()
 yaml.preserve_quotes = True
 
-_TASK_CONFIG_OVERRIDES: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
-    "_TASK_CONFIG_OVERRIDES", default=None
+_TASK_CONFIG_OVERRIDES: contextvars.ContextVar[dict[str, Any] | None] = (
+    contextvars.ContextVar("_TASK_CONFIG_OVERRIDES", default=None)
 )
 _PROCESS_CONFIG_OVERRIDES: dict[str, Any] | None = None
 _OVERRIDES_LOCK = threading.Lock()
@@ -88,7 +88,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             },
         },
     },
-    "reflect_translate": True,
+    "reflect_translate": False,
     "translation_style": "",
     "pause_before_translate": False,
     "pause_after_translate": False,
@@ -181,7 +181,9 @@ def task_config_context(overrides: dict[str, Any] | None):
 def _atomic_dump_yaml(data: Any, config_path: str | Path) -> None:
     target = Path(config_path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = target.with_name(f".{target.name}.tmp.{os.getpid()}.{threading.get_ident()}")
+    tmp_path = target.with_name(
+        f".{target.name}.tmp.{os.getpid()}.{threading.get_ident()}"
+    )
     try:
         with open(tmp_path, "w", encoding="utf-8") as f:
             yaml.dump(data, f)
@@ -198,6 +200,7 @@ def _atomic_dump_yaml(data: Any, config_path: str | Path) -> None:
 # load & update config
 # -----------------------
 
+
 def load_key(key: str) -> Any:
     overrides = _TASK_CONFIG_OVERRIDES.get()
     if overrides is None:
@@ -207,18 +210,20 @@ def load_key(key: str) -> Any:
         if key in overrides:
             return copy.deepcopy(overrides[key])
         prefix = f"{key}."
-        sub_overrides = {k[len(prefix):]: v for k, v in overrides.items() if k.startswith(prefix)}
+        sub_overrides = {
+            k[len(prefix) :]: v for k, v in overrides.items() if k.startswith(prefix)
+        }
     else:
         sub_overrides = {}
 
     with lock:
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as file:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as file:
             data = yaml.load(file)
 
     if not isinstance(data, dict):
         raise KeyError(f"Configuration file {CONFIG_PATH!r} is empty or invalid")
 
-    keys = key.split('.')
+    keys = key.split(".")
     value: Any = data
     for k in keys:
         if isinstance(value, dict) and k in value:
@@ -251,12 +256,12 @@ def load_key_or(key, default=None):
 def update_key(key: str, new_value: Any, add_missing: bool = False) -> bool:
     """Atomically set an existing key in `config.yaml`; `add_missing=True` also creates missing parent/leaf keys."""
     with lock:
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as file:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as file:
             data = yaml.load(file)
         if data is None:
             data = {}
 
-        keys = key.split('.')
+        keys = key.split(".")
         current = data
         for k in keys[:-1]:
             if isinstance(current, dict) and k in current:
@@ -285,16 +290,20 @@ def update_keys(updates: dict[str, Any], add_missing: bool = True) -> bool:
     if not updates:
         return True
     with lock:
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as file:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as file:
             data = yaml.load(file)
         if data is None:
             data = {}
 
         for key, new_value in updates.items():
-            keys = key.split('.')
+            keys = key.split(".")
             current = data
             for k in keys[:-1]:
-                if isinstance(current, dict) and k in current and isinstance(current[k], dict):
+                if (
+                    isinstance(current, dict)
+                    and k in current
+                    and isinstance(current[k], dict)
+                ):
                     current = current[k]
                 elif isinstance(current, dict) and add_missing:
                     current[k] = {}
@@ -350,7 +359,9 @@ def get_source_language() -> str:
     if language == "auto":
         language = whisper.get("detected_language")
     if not isinstance(language, str) or not language or language == "auto":
-        raise ValueError("Source language is unknown. Run transcription first or select a language.")
+        raise ValueError(
+            "Source language is unknown. Run transcription first or select a language."
+        )
     return language
 
 
@@ -360,9 +371,9 @@ LANGUAGES_WITHOUT_SPACE = {"zh", "yue", "ja", "th", "lo", "km", "my", "bo"}
 
 
 def get_joiner(language: str) -> str:
-    if language in load_key_or('language_split_with_space', []):
+    if language in load_key_or("language_split_with_space", []):
         return " "
-    elif language in load_key_or('language_split_without_space', []):
+    elif language in load_key_or("language_split_without_space", []):
         return ""
     if not isinstance(language, str) or not language or language == "auto":
         raise ValueError(f"Unsupported language code: {language!r}")
@@ -370,8 +381,19 @@ def get_joiner(language: str) -> str:
 
 
 # Scripts that are written without spaces; their letters never get a space from join_words.
-_UNSPACED_SCRIPTS = ("CJK", "HIRAGANA", "KATAKANA", "HALFWIDTH KATAKANA", "IDEOGRAPHIC", "BOPOMOFO",
-                     "THAI", "LAO", "KHMER", "MYANMAR", "TIBETAN")
+_UNSPACED_SCRIPTS = (
+    "CJK",
+    "HIRAGANA",
+    "KATAKANA",
+    "HALFWIDTH KATAKANA",
+    "IDEOGRAPHIC",
+    "BOPOMOFO",
+    "THAI",
+    "LAO",
+    "KHMER",
+    "MYANMAR",
+    "TIBETAN",
+)
 
 
 def _spaced_word_char(char: str) -> bool:
@@ -400,13 +422,15 @@ def join_words(words: list[Any], joiner: str) -> str:
     for word in words:
         if text and word:
             left, right = text[-1], word[0]
-            if (not (left.isdecimal() and right.isdecimal())
-                    and _spaced_word_char(right)
-                    and (_spaced_word_char(left) or (left in ",.!?;:" and right.isalpha()))):
+            if (
+                not (left.isdecimal() and right.isdecimal())
+                and _spaced_word_char(right)
+                and (_spaced_word_char(left) or (left in ",.!?;:" and right.isalpha()))
+            ):
                 text += " "
         text += word
     return text
 
 
 if __name__ == "__main__":
-    print(load_key('language_split_with_space'))
+    print(load_key("language_split_with_space"))

@@ -43,7 +43,7 @@ GLOBAL_GLOSSARY_PATH = str(GLOBAL_GLOSSARY_CSV)
 SUMMARY_CHUNK_WEIGHTED_CHARS = 6000
 FUZZY_THRESHOLD = 82.0
 
-_INDEX_LOCK = threading.Lock()
+_INDEX_LOCK = threading.RLock()
 _CACHED_INDEX_KEY: tuple | None = None
 _CACHED_INDEX_DATA: dict | None = None
 _CACHED_KB_KEY: tuple | None = None
@@ -368,7 +368,9 @@ def _normalize_aliases(raw_aliases: Any, src: str = "") -> list[str]:
     else:
         return []
     src_low = src.strip().lower()
-    return list(dict.fromkeys(a for a in items if a.lower() != src_low and a.lower() != "nan"))
+    return list(
+        dict.fromkeys(a for a in items if a.lower() != src_low and a.lower() != "nan")
+    )
 
 
 _KB_META_KEYS = {
@@ -394,7 +396,9 @@ _KB_META_KEYS = {
 }
 
 
-def _extract_generic_kb_pairs(node: Any, out: dict[str, dict[str, Any]], source_tag: str = "kb") -> None:
+def _extract_generic_kb_pairs(
+    node: Any, out: dict[str, dict[str, Any]], source_tag: str = "kb"
+) -> None:
     """Recursively extract bilingual term entries from any JSON/dict/list structure without schema coupling."""
     if isinstance(node, dict):
         src_val = (
@@ -431,11 +435,7 @@ def _extract_generic_kb_pairs(node: Any, out: dict[str, dict[str, Any]], source_
             if isinstance(v, str):
                 ks = str(k).strip()
                 vs = v.strip()
-                if (
-                    len(ks) >= 2
-                    and vs
-                    and ks.lower() not in _KB_META_KEYS
-                ):
+                if len(ks) >= 2 and vs and ks.lower() not in _KB_META_KEYS:
                     key = ks.lower()
                     if key not in out:
                         out[key] = {
@@ -487,7 +487,9 @@ def load_custom_terms() -> list[dict[str, Any]]:
             }
         else:
             existing_aliases = merged[key].get("aliases") or []
-            merged[key]["aliases"] = list(dict.fromkeys([*existing_aliases, *alias_list]))
+            merged[key]["aliases"] = list(
+                dict.fromkeys([*existing_aliases, *alias_list])
+            )
             if not merged[key].get("note") and n:
                 merged[key]["note"] = n
 
@@ -558,44 +560,278 @@ def load_custom_terms() -> list[dict[str, Any]]:
 
 
 _KB_STOP_TOKENS = {
-    "with", "that", "this", "from", "have", "what", "when", "where", "which", "while",
-    "there", "their", "they", "them", "then", "than", "some", "more", "most", "very",
-    "just", "like", "know", "think", "make", "made", "good", "best", "well", "much",
-    "many", "only", "also", "even", "back", "into", "over", "after", "before", "under",
-    "every", "other", "about", "because", "really", "actually", "basically", "literally",
-    "going", "want", "need", "look", "take", "give", "come", "here", "time", "year",
-    "thing", "things", "weapon", "weapons", "perk", "perks", "frame", "frames",
-    "all", "now", "one", "two", "three", "four", "five", "new", "old", "first", "last",
-    "high", "low", "left", "right", "down", "next", "same", "still", "such", "both",
-    "each", "few", "own", "sure", "true", "full", "hard", "fast", "slow", "long", "short",
-    "open", "close", "free", "real", "main", "part", "side", "kind", "type", "sort",
-    "case", "point", "place", "work", "play", "turn", "move", "call", "keep", "find",
-    "show", "tell", "mean", "feel", "seem", "leave", "put", "set", "run", "use", "try",
+    "with",
+    "that",
+    "this",
+    "from",
+    "have",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "there",
+    "their",
+    "they",
+    "them",
+    "then",
+    "than",
+    "some",
+    "more",
+    "most",
+    "very",
+    "just",
+    "like",
+    "know",
+    "think",
+    "make",
+    "made",
+    "good",
+    "best",
+    "well",
+    "much",
+    "many",
+    "only",
+    "also",
+    "even",
+    "back",
+    "into",
+    "over",
+    "after",
+    "before",
+    "under",
+    "every",
+    "other",
+    "about",
+    "because",
+    "really",
+    "actually",
+    "basically",
+    "literally",
+    "going",
+    "want",
+    "need",
+    "look",
+    "take",
+    "give",
+    "come",
+    "here",
+    "time",
+    "year",
+    "thing",
+    "things",
+    "weapon",
+    "weapons",
+    "perk",
+    "perks",
+    "frame",
+    "frames",
+    "all",
+    "now",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "new",
+    "old",
+    "first",
+    "last",
+    "high",
+    "low",
+    "left",
+    "right",
+    "down",
+    "next",
+    "same",
+    "still",
+    "such",
+    "both",
+    "each",
+    "few",
+    "own",
+    "sure",
+    "true",
+    "full",
+    "hard",
+    "fast",
+    "slow",
+    "long",
+    "short",
+    "open",
+    "close",
+    "free",
+    "real",
+    "main",
+    "part",
+    "side",
+    "kind",
+    "type",
+    "sort",
+    "case",
+    "point",
+    "place",
+    "work",
+    "play",
+    "turn",
+    "move",
+    "call",
+    "keep",
+    "find",
+    "show",
+    "tell",
+    "mean",
+    "feel",
+    "seem",
+    "leave",
+    "put",
+    "set",
+    "run",
+    "use",
+    "try",
 }
 
 _KB_CONVERSATIONAL_STOPWORDS = {
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "it", "its", "it's", "that", "this", "these", "those", "what", "when", "where",
-    "who", "whom", "which", "why", "how", "if", "or", "and", "but", "so", "as",
-    "at", "by", "for", "from", "in", "into", "of", "on", "to", "up", "with", "out",
-    "not", "no", "yes", "do", "does", "did", "done", "can", "could", "will", "would",
-    "shall", "should", "may", "might", "must", "have", "has", "had", "having",
-    "you", "your", "yours", "we", "our", "ours", "they", "them", "their", "he", "him",
-    "his", "she", "her", "hers", "me", "my", "mine", "i", "i'm", "you're", "we're",
-    "all", "any", "some", "more", "most", "other", "another", "such", "only", "own",
-    "same", "so", "than", "too", "very", "just", "now", "then", "here", "there",
-    "way", "end", "past", "present", "future", "cool", "good", "bad", "great", "nice",
-    "little", "big", "small", "old", "new", "high", "low", "long", "short", "right", "left",
+    "a",
+    "an",
+    "the",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "it",
+    "its",
+    "it's",
+    "that",
+    "this",
+    "these",
+    "those",
+    "what",
+    "when",
+    "where",
+    "who",
+    "whom",
+    "which",
+    "why",
+    "how",
+    "if",
+    "or",
+    "and",
+    "but",
+    "so",
+    "as",
+    "at",
+    "by",
+    "for",
+    "from",
+    "in",
+    "into",
+    "of",
+    "on",
+    "to",
+    "up",
+    "with",
+    "out",
+    "not",
+    "no",
+    "yes",
+    "do",
+    "does",
+    "did",
+    "done",
+    "can",
+    "could",
+    "will",
+    "would",
+    "shall",
+    "should",
+    "may",
+    "might",
+    "must",
+    "have",
+    "has",
+    "had",
+    "having",
+    "you",
+    "your",
+    "yours",
+    "we",
+    "our",
+    "ours",
+    "they",
+    "them",
+    "their",
+    "he",
+    "him",
+    "his",
+    "she",
+    "her",
+    "hers",
+    "me",
+    "my",
+    "mine",
+    "i",
+    "i'm",
+    "you're",
+    "we're",
+    "all",
+    "any",
+    "some",
+    "more",
+    "most",
+    "other",
+    "another",
+    "such",
+    "only",
+    "own",
+    "same",
+    "so",
+    "than",
+    "too",
+    "very",
+    "just",
+    "now",
+    "then",
+    "here",
+    "there",
+    "way",
+    "end",
+    "past",
+    "present",
+    "future",
+    "cool",
+    "good",
+    "bad",
+    "great",
+    "nice",
+    "little",
+    "big",
+    "small",
+    "old",
+    "new",
+    "high",
+    "low",
+    "long",
+    "short",
+    "right",
+    "left",
 }
 
 
-def _get_kb_index(custom_terms_list: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def _get_kb_index(
+    custom_terms_list: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Build or return a cached inverted index over authoritative glossary sources (including large ``term-map.json``)."""
     global _CACHED_KB_KEY, _CACHED_KB_DATA
 
     abs_map = os.path.abspath(OPTIONAL_JSON_TERMS_PATH)
     map_mtime = _file_mtime(abs_map)
-    custom_sig = tuple((t.get("src", ""), t.get("tgt", "")) for t in (custom_terms_list or []))
+    custom_sig = tuple(
+        (t.get("src", ""), t.get("tgt", "")) for t in (custom_terms_list or [])
+    )
     kb_key = (abs_map, map_mtime, custom_sig)
 
     with _INDEX_LOCK:
@@ -620,7 +856,9 @@ def _get_kb_index(custom_terms_list: list[dict[str, Any]] | None = None) -> dict
                     raw_data = json.load(f)
                 _extract_generic_kb_pairs(raw_data, kb_entries, source_tag="term_map")
             except Exception as exc:
-                rprint(f"[yellow]⚠️ Could not read {OPTIONAL_JSON_TERMS_PATH}: {exc}[/yellow]")
+                rprint(
+                    f"[yellow]⚠️ Could not read {OPTIONAL_JSON_TERMS_PATH}: {exc}[/yellow]"
+                )
 
         exact_lower_map: dict[str, dict[str, Any]] = {}
         compact_map: dict[str, list[dict[str, Any]]] = {}
@@ -644,7 +882,11 @@ def _get_kb_index(custom_terms_list: list[dict[str, Any]] | None = None) -> dict
             if len(comp) >= 2:
                 compact_map.setdefault(comp, []).append(entry)
 
-            toks = [t for t in re.findall(r"[a-z0-9]+", key) if len(t) >= 3 and t not in _KB_STOP_TOKENS]
+            toks = [
+                t
+                for t in re.findall(r"[a-z0-9]+", key)
+                if len(t) >= 3 and t not in _KB_STOP_TOKENS
+            ]
             for t in set(toks):
                 if t not in token_inv:
                     token_inv[t] = []
@@ -670,7 +912,9 @@ def _get_kb_index(custom_terms_list: list[dict[str, Any]] | None = None) -> dict
         return kb_data
 
 
-def _scan_text_for_kb_terms(text: str, kb_data: dict[str, Any], max_hints: int = 40) -> list[dict[str, Any]]:
+def _scan_text_for_kb_terms(
+    text: str, kb_data: dict[str, Any], max_hints: int = 40
+) -> list[dict[str, Any]]:
     """Pre-scan a transcript against the authoritative KB to surface official terms that chunk extraction might miss."""
     stem_ngram_map = kb_data.get("stem_ngram_map") or {}
     if not stem_ngram_map or not text:
@@ -731,7 +975,9 @@ def _retrieve_kb_candidates_for_term(
     p3_inv = kb_data.get("p3_inv") or {}
 
     # Query only the extracted term's own `src` and `aliases` (do not scrape free-text `note`)
-    queries = [str(term_obj.get("src") or "")] + [str(a) for a in (term_obj.get("aliases") or [])]
+    queries = [str(term_obj.get("src") or "")] + [
+        str(a) for a in (term_obj.get("aliases") or [])
+    ]
 
     results: list[tuple[float, dict[str, Any]]] = []
     seen: set[str] = set()
@@ -751,7 +997,11 @@ def _retrieve_kb_candidates_for_term(
         for e in compact_map.get(q_comp, ()):
             _add(e, 99.0)
 
-        q_toks = [t for t in re.findall(r"[a-z0-9]+", q_low) if len(t) >= 3 and t not in _KB_STOP_TOKENS]
+        q_toks = [
+            t
+            for t in re.findall(r"[a-z0-9]+", q_low)
+            if len(t) >= 3 and t not in _KB_STOP_TOKENS
+        ]
         cand_pool: list[dict[str, Any]] = []
         seen_cand_srcs: set[str] = set()
 
@@ -772,7 +1022,8 @@ def _retrieve_kb_candidates_for_term(
                 p4 = qt[:4]
                 for kt in p3_inv.get(qt[:3], ()):
                     if kt.startswith(p4) or (
-                        abs(len(kt) - len(qt)) <= 2 and _similarity_score(qt, kt) >= 75.0
+                        abs(len(kt) - len(qt)) <= 2
+                        and _similarity_score(qt, kt) >= 75.0
                     ):
                         _pool_extend(token_inv[kt])
 
@@ -787,7 +1038,10 @@ def _retrieve_kb_candidates_for_term(
             q_words = re.findall(r"[a-z0-9]+", q_low)
             sub_bonus = 0.0
             if q_words and all(
-                any(ew.startswith(qw) or _similarity_score(qw, ew) >= 80.0 for ew in e_words)
+                any(
+                    ew.startswith(qw) or _similarity_score(qw, ew) >= 80.0
+                    for ew in e_words
+                )
                 for qw in q_words
             ):
                 if len(e_words) <= len(q_words) + 2:
@@ -944,14 +1198,22 @@ def _get_term_index() -> dict:
                     merged_by_src[key] = {
                         "src": src_str,
                         "tgt": str(item.get("tgt", "")).strip(),
-                        "note": str(item.get("note", "") or prev.get("note", "")).strip(),
+                        "note": str(
+                            item.get("note", "") or prev.get("note", "")
+                        ).strip(),
                         "aliases": list(dict.fromkeys([*prev_aliases, *new_aliases])),
-                        "fix_source": bool(item.get("fix_source", prev.get("fix_source", False))),
-                        "source": str(item.get("source") or prev.get("source") or "task"),
+                        "fix_source": bool(
+                            item.get("fix_source", prev.get("fix_source", False))
+                        ),
+                        "source": str(
+                            item.get("source") or prev.get("source") or "task"
+                        ),
                     }
 
         custom_list = load_custom_terms()
-        custom_mtimes = [m for m in (global_mtime, xlsx_mtime, csv_mtime, map_mtime) if m is not None]
+        custom_mtimes = [
+            m for m in (global_mtime, xlsx_mtime, csv_mtime, map_mtime) if m is not None
+        ]
         latest_custom_mtime = max(custom_mtimes) if custom_mtimes else 0.0
         task_mtimes = [m for m in (json_mtime, contract_mtime) if m is not None]
         latest_task_mtime = max(task_mtimes) if task_mtimes else 0.0
@@ -965,12 +1227,18 @@ def _get_term_index() -> dict:
                 prev = merged_by_src.get(key, {})
                 merged_by_src[key] = {
                     **item,
-                    "aliases": list(dict.fromkeys([*(prev.get("aliases") or []), *(item.get("aliases") or [])])),
+                    "aliases": list(
+                        dict.fromkeys(
+                            [*(prev.get("aliases") or []), *(item.get("aliases") or [])]
+                        )
+                    ),
                 }
         else:
             for item in custom_list:
                 merged_by_src[item["src"].lower()] = dict(item)
-            if contract_mtime is not None and (json_mtime is None or contract_mtime >= json_mtime):
+            if contract_mtime is not None and (
+                json_mtime is None or contract_mtime >= json_mtime
+            ):
                 _merge_json_terms(term_json_path)
                 _merge_json_terms(terms_contract_path)
             else:
@@ -1169,7 +1437,11 @@ def _merge_terminology_results(
                 if not canonical_entry.get("note") and note:
                     canonical_entry["note"] = note
                 merged_aliases = _normalize_aliases(
-                    [*(canonical_entry.get("aliases") or []), *( [src] if target_key != s_low else [] ), *aliases],
+                    [
+                        *(canonical_entry.get("aliases") or []),
+                        *([src] if target_key != s_low else []),
+                        *aliases,
+                    ],
                     canonical_entry["src"],
                 )
                 if merged_aliases:
@@ -1209,7 +1481,9 @@ def _consolidate_terms_with_llm(
     if not raw_terms and not full_text:
         return merged_summary
 
-    custom_by_low = {str(t["src"]).strip().lower(): t for t in custom_terms_list if t.get("src")}
+    custom_by_low = {
+        str(t["src"]).strip().lower(): t for t in custom_terms_list if t.get("src")
+    }
     enriched_terms: list[dict[str, Any]] = []
     seen_srcs: set[str] = set()
     has_kb_candidates = False
@@ -1236,7 +1510,8 @@ def _consolidate_terms_with_llm(
                 cand_entry: dict[str, Any] = {
                     "src": kb_hit["src"],
                     "tgt": kb_hit["tgt"],
-                    "note": kb_hit.get("note") or "Official glossary match in transcript",
+                    "note": kb_hit.get("note")
+                    or "Official glossary match in transcript",
                     "source_hint": "kb_scan_candidate",
                 }
                 if kb_hit.get("context_snippet"):
@@ -1274,7 +1549,9 @@ def _consolidate_terms_with_llm(
         return merged_summary
 
     # Ensure every explicit custom term remains present and authoritative, and preserve original surface forms
-    consolidated_chunk = [(0, {"theme": merged_summary.get("theme", ""), "terms": resp["terms"]})]
+    consolidated_chunk = [
+        (0, {"theme": merged_summary.get("theme", ""), "terms": resp["terms"]})
+    ]
     final_merged = _merge_terminology_results(consolidated_chunk, custom_terms_list)
 
     # Also ensure any original surface forms from raw_terms that were merged into a canonical KB term

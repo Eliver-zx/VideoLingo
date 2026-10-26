@@ -1,72 +1,131 @@
-from core.prompts import generate_shared_prompt, get_prompt_faithfulness, get_prompt_expressiveness
+from core.prompts import (
+    generate_shared_prompt,
+    get_prompt_faithfulness,
+    get_prompt_expressiveness,
+)
 from rich.panel import Panel
 from rich.console import Console
 from rich.table import Table
 from rich import box
 from core.task_runner import StopTask
 from core.utils import ask_gpt, check_cancel, load_key
+
 console = Console()
 
 LAST_DIRECT_BY_INDEX: dict[int, list[str]] = {}
 
-def valid_translate_result(result: object, required_keys: list, required_sub_keys: list):
+
+def valid_translate_result(
+    result: object, required_keys: list, required_sub_keys: list
+):
     if not isinstance(result, dict):
-        return {"status": "error", "message": f"Expected a JSON object, got {type(result).__name__}"}
+        return {
+            "status": "error",
+            "message": f"Expected a JSON object, got {type(result).__name__}",
+        }
     # Check for the required key
     if not all(key in result for key in required_keys):
-        return {"status": "error", "message": f"Missing required key(s): {', '.join(set(required_keys) - set(result.keys()))}"}
-    
+        return {
+            "status": "error",
+            "message": f"Missing required key(s): {', '.join(set(required_keys) - set(result.keys()))}",
+        }
+
     # Check for required sub-keys in all items; keys the model added on its own are ignored
     for key in required_keys:
         if not isinstance(result[key], dict):
             return {"status": "error", "message": f"Item {key} is not an object"}
         if not all(sub_key in result[key] for sub_key in required_sub_keys):
-            return {"status": "error", "message": f"Missing required sub-key(s) in item {key}: {', '.join(set(required_sub_keys) - set(result[key].keys()))}"}
+            return {
+                "status": "error",
+                "message": f"Missing required sub-key(s) in item {key}: {', '.join(set(required_sub_keys) - set(result[key].keys()))}",
+            }
         for sub_key in required_sub_keys:
             val = result[key][sub_key]
             if not isinstance(val, str) or not val.strip():
-                return {"status": "error", "message": f"Empty or non-string value for '{sub_key}' in item {key}"}
+                return {
+                    "status": "error",
+                    "message": f"Empty or non-string value for '{sub_key}' in item {key}",
+                }
 
     return {"status": "success", "message": "Translation completed"}
 
-def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_to_note_prompt, summary_prompt, index = 0):
+
+def translate_lines(
+    lines,
+    previous_content_prompt,
+    after_cotent_prompt,
+    things_to_note_prompt,
+    summary_prompt,
+    index=0,
+):
     check_cancel()
-    shared_prompt = generate_shared_prompt(previous_content_prompt, after_cotent_prompt, summary_prompt, things_to_note_prompt)
+    shared_prompt = generate_shared_prompt(
+        previous_content_prompt,
+        after_cotent_prompt,
+        summary_prompt,
+        things_to_note_prompt,
+    )
 
     # Retry translation if the length of the original text and the translated text are not the same, or if the specified key is missing
     def retry_translation(prompt, length, step_name):
         def valid_faith(response_data):
-            return valid_translate_result(response_data, [str(i) for i in range(1, length+1)], ['direct'])
+            return valid_translate_result(
+                response_data, [str(i) for i in range(1, length + 1)], ["direct"]
+            )
+
         def valid_express(response_data):
-            return valid_translate_result(response_data, [str(i) for i in range(1, length+1)], ['free'])
+            return valid_translate_result(
+                response_data, [str(i) for i in range(1, length + 1)], ["free"]
+            )
+
         for retry in range(3):
-            if step_name == 'faithfulness':
-                result = ask_gpt(prompt+retry* " ", resp_type='json', valid_def=valid_faith, log_title=f'translate_{step_name}')
+            if step_name == "faithfulness":
+                result = ask_gpt(
+                    prompt + retry * " ",
+                    resp_type="json",
+                    valid_def=valid_faith,
+                    log_title=f"translate_{step_name}",
+                )
             else:
-                result = ask_gpt(prompt+retry* " ", resp_type='json', valid_def=valid_express, log_title=f'translate_{step_name}')
-            result = {str(i): result[str(i)] for i in range(1, length+1)}
-            if len(lines.split('\n')) == len(result):
+                result = ask_gpt(
+                    prompt + retry * " ",
+                    resp_type="json",
+                    valid_def=valid_express,
+                    log_title=f"translate_{step_name}",
+                )
+            result = {str(i): result[str(i)] for i in range(1, length + 1)}
+            if len(lines.split("\n")) == len(result):
                 return result
             if retry != 2:
-                console.print(f'[yellow]⚠️ {step_name.capitalize()} translation of block {index} failed, Retry...[/yellow]')
-        raise ValueError(f'[red]❌ {step_name.capitalize()} translation of block {index} failed after 3 retries. Please check `output/gpt_log/error.json` for more details.[/red]')
+                console.print(
+                    f"[yellow]⚠️ {step_name.capitalize()} translation of block {index} failed, Retry...[/yellow]"
+                )
+        raise ValueError(
+            f"[red]❌ {step_name.capitalize()} translation of block {index} failed after 3 retries. Please check `output/gpt_log/error.json` for more details.[/red]"
+        )
 
     ## Step 1: Faithful to the Original Text
-    line_list = lines.split('\n')
+    line_list = lines.split("\n")
     prompt1 = get_prompt_faithfulness(lines, shared_prompt)
-    faith_result = retry_translation(prompt1, len(line_list), 'faithfulness')
+    faith_result = retry_translation(prompt1, len(line_list), "faithfulness")
 
     for idx, i in enumerate(faith_result):
-        faith_result[i].setdefault("origin", line_list[idx] if idx < len(line_list) else "")
-        faith_result[i]["direct"] = faith_result[i]["direct"].replace('\n', ' ')
-    LAST_DIRECT_BY_INDEX[index] = [faith_result[i]["direct"].strip() for i in faith_result]
+        faith_result[i].setdefault(
+            "origin", line_list[idx] if idx < len(line_list) else ""
+        )
+        faith_result[i]["direct"] = faith_result[i]["direct"].replace("\n", " ")
+    LAST_DIRECT_BY_INDEX[index] = [
+        faith_result[i]["direct"].strip() for i in faith_result
+    ]
 
     # If reflect_translate is False or not set, use faithful translation directly
-    reflect_translate = load_key('reflect_translate')
+    reflect_translate = load_key("reflect_translate")
     if not reflect_translate:
         # If reflect_translate is False or not set, use faithful translation directly
-        translate_result = "\n".join([faith_result[i]["direct"].strip() for i in faith_result])
-        
+        translate_result = "\n".join(
+            [faith_result[i]["direct"].strip() for i in faith_result]
+        )
+
         table = Table(title="Translation Results", show_header=False, box=box.ROUNDED)
         table.add_column("Translations", style="bold")
         for i, key in enumerate(faith_result):
@@ -74,20 +133,33 @@ def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_
             table.add_row(f"[magenta]Direct:  {faith_result[key]['direct']}[/magenta]")
             if i < len(faith_result) - 1:
                 table.add_row("[yellow]" + "-" * 50 + "[/yellow]")
-        
+
         console.print(table)
         return translate_result, lines
 
-    ## Step 2: Express Smoothly  
+    ## Step 2: Express Smoothly
     prompt2 = get_prompt_expressiveness(faith_result, lines, shared_prompt)
     try:
-        express_result = retry_translation(prompt2, len(lines.split('\n')), 'expressiveness')
+        express_result = retry_translation(
+            prompt2, len(lines.split("\n")), "expressiveness"
+        )
     except StopTask:
         raise
     except Exception as e:
         # The polish step is optional: keep the faithful translation instead of stopping the video
-        console.print(f'[yellow]⚠️ Expressiveness translation of block {index} failed ({e}), using the direct translation[/yellow]')
-        express_result = {key: {"free": faith_result[key]["direct"]} for key in faith_result}
+        console.print(
+            f"[yellow]⚠️ Expressiveness translation of block {index} failed ({e}), using the direct translation[/yellow]"
+        )
+        express_result = {
+            key: {"free": faith_result[key]["direct"]} for key in faith_result
+        }
+
+    for key in express_result:
+        free_val = express_result[key]["free"].replace("\n", " ").strip()
+        if free_val.upper() in ("OK", "SAME", "UNCHANGED", "KEEP"):
+            express_result[key]["free"] = faith_result[key]["direct"].strip()
+        else:
+            express_result[key]["free"] = free_val
 
     table = Table(title="Translation Results", show_header=False, box=box.ROUNDED)
     table.add_column("Translations", style="bold")
@@ -100,23 +172,33 @@ def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_
 
     console.print(table)
 
-    translate_result = "\n".join([express_result[i]["free"].replace('\n', ' ').strip() for i in express_result])
+    translate_result = "\n".join([express_result[i]["free"] for i in express_result])
 
-    if len(lines.split('\n')) != len(translate_result.split('\n')):
-        console.print(Panel(f'[red]❌ Translation of block {index} failed, Length Mismatch, Please check `output/gpt_log/translate_expressiveness.json`[/red]'))
-        raise ValueError(f'Origin ···{lines}···,\nbut got ···{translate_result}···')
+    if len(lines.split("\n")) != len(translate_result.split("\n")):
+        console.print(
+            Panel(
+                f"[red]❌ Translation of block {index} failed, Length Mismatch, Please check `output/gpt_log/translate_expressiveness.json`[/red]"
+            )
+        )
+        raise ValueError(f"Origin ···{lines}···,\nbut got ···{translate_result}···")
 
     return translate_result, lines
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # test e.g.
-    lines = '''All of you know Andrew Ng as a famous computer science professor at Stanford.
+    lines = """All of you know Andrew Ng as a famous computer science professor at Stanford.
 He was really early on in the development of neural networks with GPUs.
 Of course, a creator of Coursera and popular courses like deeplearning.ai.
-Also the founder and creator and early lead of Google Brain.'''
+Also the founder and creator and early lead of Google Brain."""
     previous_content_prompt = None
     after_cotent_prompt = None
     things_to_note_prompt = None
     summary_prompt = None
-    translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_to_note_prompt, summary_prompt)
+    translate_lines(
+        lines,
+        previous_content_prompt,
+        after_cotent_prompt,
+        things_to_note_prompt,
+        summary_prompt,
+    )

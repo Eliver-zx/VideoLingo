@@ -1,23 +1,29 @@
 import json
 from core.utils import get_source_language, load_key, load_key_or
 
+
 ## ================================================================
 # @ _3_1_split_nlp.py
 def get_punctuation_prompt(text: str, language: str | None = None):
     lang = language or get_source_language()
     return f"""
 ## Role
-You are a speech transcript punctuation specialist in **{lang}**.
+You are a speech transcript punctuation and syntactic sentence boundary specialist in **{lang}**.
 
 ## Task
-Restore sentence-ending punctuation (`.`, `?`, `!` or `。`, `？`, `！`) and internal commas into the given ASR transcript segment so that it can be split into complete, natural conversational sentences.
+Restore sentence-ending punctuation (`.`, `?`, `!` or `。`, `？`, `！`) and internal commas into the given ASR transcript segment so that every split sentence is **100% syntactically and semantically complete**.
 
-## Rules
+## Rules (Syntactic Completeness First — Length is Secondary)
 1. **Strict Word Preservation**: NEVER change, add, delete, or reorder any word, character, or number from the input text. Only insert or fix punctuation marks.
-2. **Complete Natural Sentences**: Place a sentence-ending mark (`.`, `?`, `!`, `。`, `？`, `！`) at the end of every complete conversational sentence (one full thought).
-3. **Break Spoken Run-ons & Comma Splices**: In spoken transcripts, speakers often chain multiple independent clauses together using commas or filler conjunctions (`and`, `so`, `but`, `then`, `because`, `然后`, `所以`, `但是`, `而且`). Whenever the preceding clause already expresses a complete thought, end it with a period (`.` or `。`) instead of chaining a long run-on sentence with commas.
-4. **No Fragmentation**: Keep dependent clauses, short modifiers, and prepositional phrases attached to their main clause; do not put periods inside a single incomplete phrase.
-5. **Acoustic Pause Markers (`‖`)**: The symbol `‖` in the input indicates a spoken acoustic pause (>= 0.4s). Use `‖` as a cue for placing a period or comma at natural clause boundaries, and **do not include `‖` in the output**.
+2. **Syntactic Completeness Above All (Never Split Dependent Clauses)**:
+   - Every sentence MUST express a complete thought with its main clause intact. Sentence length does NOT matter — a 50–70 word complex sentence is completely fine; NEVER chop a complex sentence in half just because it is long.
+   - **Fronted Adverbial Clauses**: When a clause starts with `While...`, `Although...`, `If...`, `When...`, `Because...`, `Since...`, or `Additionally, while...`, put a **comma (`,`)** after the dependent clause and keep the following main clause in the **same sentence**. NEVER put a period between a fronted dependent clause and its main clause.
+   - **Trailing Subordinate & Relative Clauses**: Keep trailing clauses starting with `because`, `cuz`, `whereas`, `which`, `where`, `especially`, `unless`, `until`, `so that`, or `for example` attached to their main clause with a comma (`,`), NOT a period.
+   - **Mid-Sentence Spoken Hesitations (`uh`, `um`, `you know`, `like`)**: When a speaker pauses or says `uh` / `you know` mid-sentence before continuing a list or phrase, use commas (`,`); NEVER start a new sentence with a dangling phrase after a filler word.
+3. **Break True Independent Sentences**:
+   - When one complete independent thought finishes and a new independent main clause begins, end the first with `.`, `?`, `!` (or `。`, `？`, `！`).
+4. **Acoustic Pause Markers (`‖`)**:
+   - The symbol `‖` in the input indicates a spoken acoustic pause (>= 0.4s). Use `‖` as a cue: place a period ONLY if the preceding words already form a complete independent sentence, or a comma if the speaker paused mid-sentence. **Do not include `‖` in the output**.
 
 ## INPUT
 <transcript>
@@ -34,27 +40,20 @@ Restore sentence-ending punctuation (`.`, `?`, `!` or `。`, `？`, `！`) and i
 Note: Start your answer with ```json and end with ```, do not add any other text.
 """.strip()
 
+
 ## ================================================================
 # @ step4_splitbymeaning.py
-def get_split_prompt(sentence, num_parts = 2, word_limit = 20, language = None):
+def get_split_prompt(sentence, num_parts=2, word_limit=20, language=None):
     language = language or get_source_language()
     split_prompt = f"""
 ## Role
 You are a professional Netflix subtitle splitter in **{language}**.
 
 ## Task
-Split the given subtitle text into **{num_parts}** parts, each less than **{word_limit}** words.
+Insert `[br]` tag(s) to split the given subtitle text into **{num_parts}** roughly equal, semantically natural parts (each under **{word_limit}** words/characters).
 
-1. Maintain sentence meaning coherence according to Netflix subtitle standards
-2. MOST IMPORTANT: Keep parts roughly equal in length (minimum 3 words each)
-3. Split at natural points like punctuation marks or conjunctions
-4. If provided text is repeated words, simply split at the middle of the repeated words.
-
-## Steps
-1. Analyze the sentence structure, complexity, and key splitting challenges
-2. Generate two alternative splitting approaches with [br] tags at split positions
-3. Compare both approaches highlighting their strengths and weaknesses
-4. Choose the best splitting approach
+1. Split at natural syntactic boundaries (punctuation marks, clause boundaries, or conjunctions/prepositions).
+2. Keep the parts balanced in length and never alter, add, or omit any characters from the original text.
 
 ## Given Text
 <split_this_sentence>
@@ -64,11 +63,8 @@ Split the given subtitle text into **{num_parts}** parts, each less than **{word
 ## Output in only JSON format and no other text
 ```json
 {{
-    "analysis": "Brief description of sentence structure, complexity, and key splitting challenges",
-    "split1": "First splitting approach with [br] tags at split positions",
-    "split2": "Alternative splitting approach with [br] tags at split positions",
-    "assess": "Comparison of both approaches highlighting their strengths and weaknesses",
-    "choice": "1 or 2"
+    "split1": "Text with [br] tags at split positions",
+    "choice": "1"
 }}
 ```
 
@@ -76,20 +72,59 @@ Note: Start you answer with ```json and end with ```, do not add any other text.
 """.strip()
     return split_prompt
 
+
+def get_batch_split_prompt(items: dict[str, dict], language=None):
+    language = language or get_source_language()
+    input_json = json.dumps(items, ensure_ascii=False, indent=2)
+    out_template = {
+        k: f"<{language} text {k} with [br] inserted to split into {v.get('num_parts', 2)} balanced parts>"
+        for k, v in items.items()
+    }
+    out_json = json.dumps(out_template, ensure_ascii=False, indent=2)
+    return f"""
+## Role
+You are a professional Netflix subtitle splitter in **{language}**.
+
+## Task
+For each numbered subtitle line below, insert `[br]` tag(s) to split its `text` into the requested `num_parts` roughly equal, semantically natural parts.
+- Split at natural phrase, conjunction, preposition, or predicate boundaries.
+- Keep all parts roughly balanced in length.
+- Never alter, add, or omit any words/characters from `text` — only insert `[br]`.
+
+## INPUT
+```json
+{input_json}
+```
+
+## Output in only JSON format and no other text
+```json
+{out_json}
+```
+
+Note: Start your answer with ```json and end with ```, do not add any other text.
+""".strip()
+
+
 ## ================================================================
 # @ step4_1_summarize.py
 def get_summary_prompt(source_content, custom_terms_json=None):
     src_lang = get_source_language()
     tgt_lang = load_key("target_language")
-    
+
     # add custom terms note
     terms_note = ""
-    if custom_terms_json and custom_terms_json.get('terms'):
+    if custom_terms_json and custom_terms_json.get("terms"):
         terms_list = []
-        for term in custom_terms_json['terms']:
+        for term in custom_terms_json["terms"]:
             aliases = term.get("aliases") or []
-            alias_str = f" [aliases: {', '.join(str(a) for a in aliases if str(a).strip())}]" if aliases else ""
-            terms_list.append(f"- {term['src']}{alias_str}: {term['tgt']} ({term.get('note', '')})")
+            alias_str = (
+                f" [aliases: {', '.join(str(a) for a in aliases if str(a).strip())}]"
+                if aliases
+                else ""
+            )
+            terms_list.append(
+                f"- {term['src']}{alias_str}: {term['tgt']} ({term.get('note', '')})"
+            )
         terms_note = (
             "\n### Reference & Existing Terms\n"
             "Exclude exact matches already listed below, but DO extract any ASR spelling/phonetic variants "
@@ -97,7 +132,7 @@ def get_summary_prompt(source_content, custom_terms_json=None):
             "exact surface variant(s) in `<text>`, and `tgt` to the existing translation:\n"
             + "\n".join(terms_list)
         )
-    
+
     summary_prompt = f"""
 ## Role
 You are a video translation expert and terminology curator, specializing in {src_lang} ASR transcript analysis and {tgt_lang} localization.
@@ -146,7 +181,9 @@ Note: Start your answer with ```json and end with ```, do not add any other text
     return summary_prompt
 
 
-def get_consolidate_terms_prompt(raw_terms: list[dict], theme: str = "", target_language: str | None = None):
+def get_consolidate_terms_prompt(
+    raw_terms: list[dict], theme: str = "", target_language: str | None = None
+):
     src_lang = get_source_language()
     tgt_lang = target_language or load_key("target_language")
     raw_json = json.dumps(raw_terms, ensure_ascii=False, indent=2)
@@ -201,10 +238,20 @@ Note: Start your answer with ```json and end with ```, do not add any other text
 
 ## ================================================================
 # @ step5_translate.py & translate_lines.py
-def generate_shared_prompt(previous_content_prompt, after_content_prompt, summary_prompt, things_to_note_prompt):
-    prev_text = "\n".join(previous_content_prompt) if isinstance(previous_content_prompt, list) else (previous_content_prompt or "")
-    after_text = "\n".join(after_content_prompt) if isinstance(after_content_prompt, list) else (after_content_prompt or "")
-    return f'''### Context Information
+def generate_shared_prompt(
+    previous_content_prompt, after_content_prompt, summary_prompt, things_to_note_prompt
+):
+    prev_text = (
+        "\n".join(previous_content_prompt)
+        if isinstance(previous_content_prompt, list)
+        else (previous_content_prompt or "")
+    )
+    after_text = (
+        "\n".join(after_content_prompt)
+        if isinstance(after_content_prompt, list)
+        else (after_content_prompt or "")
+    )
+    return f"""### Context Information
 <previous_content>
 {prev_text}
 </previous_content>
@@ -217,35 +264,42 @@ def generate_shared_prompt(previous_content_prompt, after_content_prompt, summar
 {summary_prompt or ""}
 
 ### Points to Note
-{things_to_note_prompt or ""}'''
+{things_to_note_prompt or ""}"""
+
 
 def get_translation_style_prompt():
     """The style the user asks for, as a section of the translation prompt; empty without one."""
     style = str(load_key_or("translation_style", "") or "").strip()
     if not style:
         return ""
-    return f'''### Translation Style
+    return f"""### Translation Style
 The user asks for the following style. Follow it in the translation, without changing the meaning of the original:
 <translation_style>
 {style}
 </translation_style>
 
-'''
+"""
+
 
 def get_prompt_faithfulness(lines, shared_prompt):
     TARGET_LANGUAGE = load_key("target_language")
     # The polish step applies the style when there is one, this step stays a direct translation
-    style_prompt = "" if load_key("reflect_translate") else get_translation_style_prompt()
+    style_prompt = (
+        "" if load_key("reflect_translate") else get_translation_style_prompt()
+    )
     # Split lines by \n
-    line_splits = lines.split('\n')
-    
+    line_splits = lines.split("\n")
+
     json_dict = {}
     for i, line in enumerate(line_splits, 1):
-        json_dict[f"{i}"] = {"origin": line, "direct": f"direct {TARGET_LANGUAGE} translation {i}."}
+        json_dict[f"{i}"] = {
+            "origin": line,
+            "direct": f"direct {TARGET_LANGUAGE} translation {i}.",
+        }
     json_format = json.dumps(json_dict, indent=2, ensure_ascii=False)
 
     src_language = get_source_language()
-    prompt_faithfulness = f'''
+    prompt_faithfulness = f"""
 ## Role
 You are a professional Netflix subtitle translator, fluent in both {src_language} and {TARGET_LANGUAGE}, as well as their respective cultures. 
 Your expertise lies in accurately understanding the semantics and structure of the original {src_language} text and faithfully translating it into {TARGET_LANGUAGE} while preserving the original meaning.
@@ -264,7 +318,7 @@ We have a segment of original {src_language} subtitles that need to be directly 
 2. **ASR Homophone & Phonetic Error Recovery**: The source subtitles are generated by Automatic Speech Recognition (ASR) and may contain phonetic misrecognitions, homophone errors, or misspellings of technical terms and proper nouns. Infer and translate the speaker's intended meaning from context rather than translating literal transcription errors.
 3. **Strict Terminology & Clean Proper Nouns**: Strictly follow the translations in `Points to Note`. For person names, model numbers, version codes, or code identifiers not listed in the glossary, keep their original form. **Never** append parenthetical source text, original terms in brackets, or translator notes inside the subtitle lines.
 4. **Line-Locked Alignment**: Maintain strict 1-to-1 line alignment with the numbered input lines. Connect clauses smoothly across adjacent lines, but never move semantic content from one line into another, as each line is locked to a specific video timestamp.
-5. **Natural Clause Punctuation**: Preserve natural internal clause commas and pauses within each line so downstream subtitle splitting can segment long lines cleanly.
+5. **Natural Spoken Cadence & Filler Removal**: Omit meaningless spoken hesitation fillers (`uh`, `um`, `er`, `ah`, redundant `you know` / `like`) so `呃` / `嗯` / `你知道` do not clutter the subtitles. Write natural, fluent {TARGET_LANGUAGE} rather than stiff word-by-word calques, while preserving internal clause commas so downstream subtitle splitting can segment long lines cleanly.
 </translation_principles>
 
 ## INPUT
@@ -278,7 +332,7 @@ We have a segment of original {src_language} subtitles that need to be directly 
 ```
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
-'''
+"""
     return prompt_faithfulness.strip()
 
 
@@ -289,7 +343,7 @@ def get_prompt_expressiveness(faithfulness_result, lines, shared_prompt):
             "origin": value.get("origin", ""),
             "direct": value["direct"],
             "reflect": "your reflection on direct translation",
-            "free": "your free translation"
+            "free": "your free translation",
         }
         for key, value in faithfulness_result.items()
     }
@@ -297,7 +351,7 @@ def get_prompt_expressiveness(faithfulness_result, lines, shared_prompt):
 
     src_language = get_source_language()
     style_prompt = get_translation_style_prompt()
-    prompt_expressiveness = f'''
+    prompt_expressiveness = f"""
 ## Role
 You are a professional Netflix subtitle translator and language consultant.
 Your expertise lies not only in accurately understanding the original {src_language} but also in optimizing the {TARGET_LANGUAGE} translation to better suit the target language's expression habits and cultural background.
@@ -321,10 +375,11 @@ Please use a two-step thinking process to handle the text line by line:
    - **Accuracy & ASR Recovery**: Check against `origin` for mistranslations, unrecovered ASR homophone/phonetic errors, or shifted meaning across line boundaries.
    - **Terminology & Cleanliness**: Verify exact adherence to `Points to Note` and ensure no parenthetical source terms or translator notes were inserted.
    - **Anti-Translationese**: Identify awkward literal calques, stacked modifiers, unnatural passive constructions, or rigid source-language word order that sounds robotic in {TARGET_LANGUAGE}.
-   - **Spoken Cadence & Conciseness**: Check whether the line reads like natural spoken {TARGET_LANGUAGE} within a concise subtitle length while preserving natural internal clause commas.
+   - **Spoken Cadence, Filler Removal & Conciseness**: Omit meaningless spoken fillers (`uh`, `um`, `er`, `ah`, redundant `you know` / `like` -> `呃`, `嗯`, `你知道`) and check whether the line reads like natural spoken {TARGET_LANGUAGE} within a concise subtitle length while preserving natural internal clause commas.
 
 2. {TARGET_LANGUAGE} Free Translation (`free` — Targeted Refinement & Keep-if-Flawless):
-   - **Principle of Necessary Enhancement (Keep-if-Flawless)**: If `direct` already passes all four diagnostic checks and sounds like natural native {TARGET_LANGUAGE} speech, write `"OK"` in `reflect` and copy `direct` **unchanged** into `free`. Do not rewrite or substitute synonyms just for the sake of making changes.
+   - **Principle of Necessary Enhancement (Keep-if-Flawless)**: If `direct` already passes all four diagnostic checks and sounds like natural native {TARGET_LANGUAGE} speech, write `"OK"` in `reflect` and copy the **full text of `direct`** unchanged into `free` (never write `"OK"` inside `free`). Do not rewrite or substitute synonyms just for the sake of making changes.
+   - **Strict Terminology Preservation**: Every glossary translation from `Points to Note` that was correctly used in `direct` MUST remain intact in `free` — never abbreviate, paraphrase, or drop official terms during polishing.
    - When issues are found in Step 1, rewrite the line into idiomatic, spoken {TARGET_LANGUAGE} that matches the video's register (e.g., conversational for tutorials/vlogs, precise for technical content, formal for documentaries).
    - Keep each line's meaning strictly within its own line number (do not merge or shift content across adjacent lines).
 </Translation Analysis Steps>
@@ -340,7 +395,7 @@ Please use a two-step thinking process to handle the text line by line:
 ```
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
-'''
+"""
     return prompt_expressiveness.strip()
 
 
@@ -349,15 +404,16 @@ Note: Start you answer with ```json and end with ```, do not add any other text.
 def get_align_prompt(src_sub, tr_sub, src_part):
     targ_lang = load_key("target_language")
     src_lang = get_source_language()
-    src_splits = src_part.split('\n')
+    src_splits = src_part.split("\n")
     num_parts = len(src_splits)
-    src_part = src_part.replace('\n', ' [br] ')
-    align_parts_json = ','.join(
+    src_part = src_part.replace("\n", " [br] ")
+    align_parts_json = ",".join(
         f'''
         {{
-            "src_part_{i+1}": "{src_splits[i]}",
-            "target_part_{i+1}": "Corresponding aligned {targ_lang} subtitle part"
-        }}''' for i in range(num_parts)
+            "src_part_{i + 1}": "{src_splits[i]}",
+            "target_part_{i + 1}": "Corresponding aligned {targ_lang} subtitle part"
+        }}'''
+        for i in range(num_parts)
     )
 
     align_prompt = f'''
@@ -394,15 +450,16 @@ Note: Start you answer with ```json and end with ```, do not add any other text.
 '''.strip()
     return align_prompt
 
+
 ## ================================================================
 # @ step8_gen_audio_task.py @ step10_gen_audio.py
 def get_subtitle_trim_prompt(text, duration):
- 
-    rule = '''Consider a. Reducing filler words without modifying meaningful content. b. Omitting unnecessary modifiers or pronouns, for example:
+
+    rule = """Consider a. Reducing filler words without modifying meaningful content. b. Omitting unnecessary modifiers or pronouns, for example:
     - "Please explain your thought process" can be shortened to "Please explain thought process"
     - "We need to carefully analyze this complex problem" can be shortened to "We need to analyze this problem"
     - "Let's discuss the various different perspectives on this topic" can be shortened to "Let's discuss different perspectives on this topic"
-    - "Can you describe in detail your experience from yesterday" can be shortened to "Can you describe yesterday's experience" '''
+    - "Can you describe in detail your experience from yesterday" can be shortened to "Can you describe yesterday's experience" """
 
     trim_prompt = f'''
 ## Role
@@ -435,10 +492,11 @@ Note: Start you answer with ```json and end with ```, do not add any other text.
 '''.strip()
     return trim_prompt
 
+
 ## ================================================================
 # @ tts_main
 def get_correct_text_prompt(text):
-    return f'''
+    return f"""
 ## Role
 You are a text cleaning expert for TTS (Text-to-Speech) systems.
 
@@ -458,4 +516,4 @@ Clean the given text by:
 ```
 
 Note: Start you answer with ```json and end with ```, do not add any other text.
-'''.strip()
+""".strip()
