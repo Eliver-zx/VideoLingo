@@ -589,3 +589,257 @@ def test_translation_prompts_contain_asr_recovery_and_keep_if_flawless_in_englis
     assert "Principle of Necessary Enhancement (Keep-if-Flawless)" in express_prompt
     assert "Anti-Translationese" in express_prompt
 
+
+def test_symbol_terms_do_not_pollute_stem_ngram_map_and_aliases_appear_in_prompt(
+    monkeypatch, tmp_path
+):
+    """Symbol terms (.NET, C#, C++) must not strip symbols to match plain 'net' or 'c';
+    matched terms with aliases must include '(also transcribed as: ...)' in Points to Note."""
+    import core._4_1_summarize as summarize
+
+    term_json = tmp_path / "terminology.json"
+    term_json.write_text(
+        json.dumps(
+            {
+                "theme": "Software engineering",
+                "terms": [
+                    {"src": ".NET", "tgt": ".NET 框架", "note": "微软平台"},
+                    {"src": "C#", "tgt": "C# 语言", "note": "编程语言"},
+                    {"src": "C++", "tgt": "C++ 语言", "note": "系统语言"},
+                    {
+                        "src": "Kubernetes",
+                        "tgt": "K8s 容器编排",
+                        "aliases": ["cooper netties"],
+                        "note": "云原生系统",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(summarize, "_4_1_TERMINOLOGY", str(term_json))
+    monkeypatch.setattr(summarize, "GLOBAL_GLOSSARY_PATH", str(tmp_path / "no_global.csv"))
+    monkeypatch.setattr(summarize, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
+    monkeypatch.setattr(summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
+    monkeypatch.setattr(
+        summarize, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json")
+    )
+
+    # Everyday 'net' and 'c' must NOT trigger .NET, C#, or C++
+    assert (
+        summarize.search_things_to_note_in_prompt(
+            "The fishing net caught a fish in section c with a net profit."
+        )
+        is None
+    )
+
+    # Exact symbol match must trigger .NET and C++
+    sym_prompt = summarize.search_things_to_note_in_prompt(
+        "We migrated the backend from .NET to C++ yesterday."
+    )
+    assert sym_prompt is not None
+    assert '".NET"' in sym_prompt
+    assert '"C++"' in sym_prompt
+    assert '"C#"' not in sym_prompt
+
+    # Alias match must surface the alias in Points to Note so LLM links 'cooper netties' -> 'Kubernetes'
+    alias_prompt = summarize.search_things_to_note_in_prompt(
+        "We deployed the cluster on cooper netties in production."
+    )
+    assert alias_prompt is not None
+    assert '"Kubernetes"' in alias_prompt
+    assert "cooper netties" in alias_prompt
+    assert "also transcribed as" in alias_prompt
+
+
+def test_merge_terminology_results_unifies_llm_variants_into_canonical_aliases():
+    """When LLM extracts an ASR variant matching a custom term's alias or returns aliases,
+    _merge_terminology_results merges them into the canonical custom term."""
+    from core._4_1_summarize import _merge_terminology_results
+
+    custom_terms = [
+        {
+            "src": "PyTorch",
+            "tgt": "PyTorch 框架",
+            "aliases": ["pie torch"],
+            "note": "深度学习库",
+            "fix_source": True,
+            "source": "global_kb",
+        }
+    ]
+    chunk_results = [
+        (
+            0,
+            {
+                "theme": "Deep learning tutorial.",
+                "terms": [
+                    {
+                        "src": "pie torch",
+                        "tgt": "PyTorch",
+                        "aliases": ["pi torch"],
+                        "note": "ASR variant of PyTorch",
+                    },
+                    {
+                        "src": "TensorRT",
+                        "tgt": "TensorRT 推理引擎",
+                        "aliases": ["tensor artie"],
+                        "note": "NVIDIA SDK",
+                    },
+                ],
+            },
+        )
+    ]
+    merged = _merge_terminology_results(chunk_results, custom_terms)
+    by_src = {t["src"]: t for t in merged["terms"]}
+    assert "pie torch" not in by_src
+    assert "PyTorch" in by_src
+    assert by_src["PyTorch"]["tgt"] == "PyTorch 框架"
+    assert "pie torch" in by_src["PyTorch"]["aliases"]
+    assert "pi torch" in by_src["PyTorch"]["aliases"]
+    assert by_src["TensorRT"]["aliases"] == ["tensor artie"]
+
+
+def test_multiword_fuzzy_guards_and_longest_span_suppression(monkeypatch, tmp_path):
+    """Multi-word fuzzy matching must not false-match 'rate weapons' -> 'heat weapons' or 'and compendium' -> 'data compendium',
+    and Longest-Span Suppression must suppress 'Compendium' when covered by 'Data Compendium'."""
+    import core._4_1_summarize as summarize
+
+    term_json = tmp_path / "terminology.json"
+    term_json.write_text(
+        json.dumps(
+            {
+                "theme": "Destiny 2 weapon guide",
+                "terms": [
+                    {"src": "Heat weapons", "tgt": "热量武器", "note": "武器机制"},
+                    {"src": "Data Compendium", "tgt": "数据汇编", "note": "社区表格"},
+                    {"src": "Compendium", "tgt": "汇编", "note": "简称"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(summarize, "_4_1_TERMINOLOGY", str(term_json))
+    monkeypatch.setattr(summarize, "GLOBAL_GLOSSARY_PATH", str(tmp_path / "no_global.csv"))
+    monkeypatch.setattr(summarize, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
+    monkeypatch.setattr(summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
+    monkeypatch.setattr(summarize, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json"))
+
+    # "rate weapons" and "and compendium" must NOT fuzzy-match "Heat weapons" or "Data Compendium"
+    false_pos = summarize.search_things_to_note_in_prompt(
+        "High fire rate weapons are strong here."
+    )
+    assert false_pos is None
+
+    # When "Data Compendium" matches, nested "Compendium" is suppressed so only "Data Compendium" appears
+    span_prompt = summarize.search_things_to_note_in_prompt(
+        "You can check the Destiny 2 Data Compendium for exact numbers."
+    )
+    assert span_prompt is not None
+    assert '"Data Compendium": "数据汇编"' in span_prompt
+    assert '"Compendium": "汇编"' not in span_prompt
+
+
+def test_generic_kb_candidate_retrieval_and_llm_reduce_consolidation(monkeypatch, tmp_path):
+    """Schema-agnostic KB indexing extracts entries from nested JSON, fuzzy-matches ASR variants ('Multimoc', 'DFA')
+    to official KB entries ('Multimach CCX', 'D.F.A.'), scans direct KB hits, and preserves transcript surface forms in aliases."""
+    import core._4_1_summarize as summarize
+
+    kb_json = tmp_path / "term-map.json"
+    kb_json.write_text(
+        json.dumps(
+            {
+                "version": "1.0",
+                "categories": {
+                    "weapons": [
+                        {"en": "Multimach CCX", "zh-chs": "多机系统CCX"},
+                        {"en": "D.F.A.", "zh-chs": "死从天降"},
+                        {"en": "Indebted Kindness", "zh-chs": "蒙恩"},
+                        {"en": "Hand Cannons", "zh-chs": "手炮"},
+                    ],
+                    "misc": {
+                        "What If": "假若",
+                        "All": "所有",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(summarize, "OPTIONAL_JSON_TERMS_PATH", str(kb_json))
+    monkeypatch.setattr(summarize, "load_key_or", lambda k, d=None: "简体中文")
+    monkeypatch.setattr("core.prompts.get_source_language", lambda: "en")
+    monkeypatch.setattr("core.prompts.load_key", lambda k: "简体中文")
+
+    kb_data = summarize._get_kb_index([])
+    cands_multi = summarize._retrieve_kb_candidates_for_term(
+        {"src": "Multimach", "aliases": ["Multimoc"]}, kb_data
+    )
+    assert any(c["src"] == "Multimach CCX" and c["tgt"] == "多机系统CCX" for c in cands_multi)
+
+    cands_dfa = summarize._retrieve_kb_candidates_for_term({"src": "DFA"}, kb_data)
+    assert any(c["src"] == "D.F.A." and c["tgt"] == "死从天降" for c in cands_dfa)
+
+    # Direct KB scan finds "Hand Cannons" in transcript while skipping conversational stopword phrases "what if" and "all"
+    transcript = "What if we compare all Hand Cannons against the Multimoc and DFA today?"
+    scanned = summarize._scan_text_for_kb_terms(transcript, kb_data)
+    scanned_srcs = {s["src"] for s in scanned}
+    assert "Hand Cannons" in scanned_srcs
+    assert "What If" not in scanned_srcs
+    assert "All" not in scanned_srcs
+
+    # LLM Reduce consolidation adopts official KB translations and keeps original surface forms in aliases
+    chunk_results = [
+        (
+            0,
+            {
+                "theme": "Weapon comparison.",
+                "terms": [
+                    {"src": "Multimach", "tgt": "多级机枪", "aliases": ["Multimoc"], "note": "SMG"},
+                    {"src": "DFA", "tgt": "DFA手炮", "note": "Hand cannon"},
+                ],
+            },
+        )
+    ]
+    merged = summarize._merge_terminology_results(chunk_results, [])
+
+    def fake_consolidate_gpt(prompt, **kwargs):
+        assert "Multimach CCX" in prompt
+        assert "多机系统CCX" in prompt
+        assert "Hand Cannons" in prompt
+        return {
+            "terms": [
+                {
+                    "src": "Multimach CCX",
+                    "tgt": "多机系统CCX",
+                    "aliases": ["Multimach", "Multimoc"],
+                    "note": "Iron Banner SMG",
+                },
+                {
+                    "src": "D.F.A.",
+                    "tgt": "死从天降",
+                    "aliases": ["DFA"],
+                    "note": "Nightfall Hand Cannon",
+                },
+                {
+                    "src": "Hand Cannons",
+                    "tgt": "手炮",
+                    "aliases": [],
+                    "note": "Weapon archetype",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(summarize, "ask_gpt", fake_consolidate_gpt)
+    consolidated = summarize._consolidate_terms_with_llm(
+        merged, chunk_results, [], kb_data=kb_data, full_text=transcript
+    )
+    by_src = {t["src"]: t for t in consolidated["terms"]}
+    assert by_src["Multimach CCX"]["tgt"] == "多机系统CCX"
+    assert "Multimach" in by_src["Multimach CCX"]["aliases"]
+    assert "Multimoc" in by_src["Multimach CCX"]["aliases"]
+    assert by_src["D.F.A."]["tgt"] == "死从天降"
+    assert "DFA" in by_src["D.F.A."]["aliases"]
+    assert by_src["Hand Cannons"]["tgt"] == "手炮"
+
+
+

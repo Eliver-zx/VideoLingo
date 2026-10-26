@@ -811,3 +811,97 @@ def test_multi_task_isolation_fix_source_and_inline_tts_text_flow(
     assert client.get("/api/glossary").json()["terms"][0]["src"] == "CUDA"
     assert client.delete("/api/tasks/task_b").status_code == 200
     assert not ws_b.root.exists()
+
+
+def test_sentence_initial_fix_source_and_global_glossary_cache_invalidation(
+    tmp_path: Path, monkeypatch
+):
+    """Sentence-initial ASR error rewritten by fix_source preserves O(1) word_span timestamps;
+    updating global glossary invalidates _translation_cache_fingerprint and applies fix_source."""
+    import os
+    from core import _4_1_summarize, _4_2_translate, _5_split_sub, _6_gen_sub
+    from core.workspace import save_global_glossary
+
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    global_csv = tmp_path / "glossary" / "custom_terms.csv"
+    monkeypatch.setattr("core.workspace.OUTPUT_ROOT", output_root)
+    monkeypatch.setattr("core.workspace.GLOBAL_GLOSSARY_CSV", global_csv)
+    monkeypatch.setattr(_4_1_summarize, "GLOBAL_GLOSSARY_PATH", str(global_csv))
+    monkeypatch.setattr(_4_1_summarize, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
+    monkeypatch.setattr(_4_1_summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
+    monkeypatch.setattr(_4_1_summarize, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json"))
+
+    ws = TaskWorkspace(output_root / "task_init")
+    ws.ensure_dirs()
+
+    # First word in ASR is "Gnats" (starts with 'g'), which fix_source rewrites to "NATS" (starts with 'n')
+    words = [
+        {"idx": 0, "text": "Gnats", "punct_after": "", "start": 1.25, "end": 1.75},
+        {"idx": 1, "text": "streams", "punct_after": "", "start": 1.80, "end": 2.20},
+        {"idx": 2, "text": "messages", "punct_after": ".", "start": 2.25, "end": 2.95},
+    ]
+    ws.save_words(words)
+    df_words = pd.DataFrame(words)
+    df_words.to_excel(ws.log_dir / "cleaned_chunks.xlsx", index=False)
+    (ws.log_dir / "split_by_meaning.txt").write_text(
+        "Gnats streams messages.\n", encoding="utf-8"
+    )
+    ws.save_utterances(
+        [
+            {
+                "id": 0,
+                "word_span": [0, 3],
+                "start": 1.25,
+                "end": 2.95,
+                "gap_after": 0.0,
+                "src_raw": "Gnats streams messages",
+                "src": "Gnats streams messages.",
+                "direct": "NATS流式传输消息。",
+                "tgt": "NATS流式传输消息。",
+                "tts_text": "NATS流式传输消息。",
+            }
+        ]
+    )
+    ws.save_terms("Messaging", [])
+
+    with workspace_context(ws):
+        fp_before = _4_2_translate._translation_cache_fingerprint()
+
+        # Save a global glossary entry with fix_source=True
+        save_global_glossary(
+            [
+                {
+                    "src": "NATS",
+                    "tgt": "NATS消息系统",
+                    "aliases": ["Gnats"],
+                    "note": "CNCF messaging",
+                    "fix_source": True,
+                }
+            ],
+            csv_path=global_csv,
+        )
+        # Ensure mtime advances so _get_term_index refreshes
+        st = os.stat(global_csv)
+        os.utime(global_csv, (st.st_atime, st.st_mtime + 2.0))
+
+        fp_after = _4_2_translate._translation_cache_fingerprint()
+        assert fp_after != fp_before
+
+        # split_chunks_by_chars must apply global glossary fix_source even when task terms.json is empty
+        chunks = _4_2_translate.split_chunks_by_chars()
+        assert chunks == ["NATS streams messages."]
+        utts = ws.load_utterances()
+        assert utts[0]["src"] == "NATS streams messages."
+        assert utts[0]["src_raw"] == "Gnats streams messages"
+
+        pd.DataFrame(
+            [{"Source": "NATS streams messages.", "Translation": "NATS流式传输消息。"}]
+        ).to_excel(ws.log_dir / "translation_results.xlsx", index=False)
+
+        _5_split_sub.split_for_sub_main()
+        stamps = _6_gen_sub.get_sentence_timestamps(
+            df_words, pd.DataFrame({"Source": ["NATS streams messages."]})
+        )
+        assert stamps == [(1.25, 2.95)]
+

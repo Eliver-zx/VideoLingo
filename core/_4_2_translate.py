@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import pandas as pd
 from core.translate_lines import LAST_DIRECT_BY_INDEX, translate_lines
-from core._4_1_summarize import search_things_to_note_in_prompt
+from core._4_1_summarize import _get_term_index, search_things_to_note_in_prompt
 from core._6_gen_sub import align_timestamp
 from core.utils import check_cancel, check_file_exists, load_key, load_key_or
 from rich.console import Console
@@ -55,27 +55,22 @@ def split_chunks_by_chars(chunk_size=2400, max_i=15):
     if not sentences:
         return []
 
-    term_path = resolve_task_path(_4_1_TERMINOLOGY)
-    if os.path.isfile(term_path):
-        try:
-            with open(term_path, "r", encoding="utf-8") as tf:
-                term_data = json.load(tf)
-            terms = term_data.get("terms", []) if isinstance(term_data, dict) else []
-            if any(isinstance(t, dict) and t.get("fix_source") for t in terms):
-                new_sentences = [apply_fix_source_terms(s, terms) for s in sentences]
-                if new_sentences != sentences:
-                    sentences = new_sentences
-                    with open(meaning_path, "w", encoding="utf-8") as wf:
-                        wf.write("\n".join(sentences) + "\n")
-                    ws = get_active_workspace()
-                    if ws.utterances_path.is_file():
-                        utts = ws.load_utterances()
-                        if len(utts) == len(sentences):
-                            for idx, u in enumerate(utts):
-                                u["src"] = sentences[idx]
-                            ws.save_utterances(utts)
-        except Exception:
-            pass
+    terms = _get_term_index().get("terms", [])
+    if any(isinstance(t, dict) and t.get("fix_source") for t in terms):
+        new_sentences = [apply_fix_source_terms(s, terms) for s in sentences]
+        if new_sentences != sentences:
+            orig_sentences = list(sentences)
+            sentences = new_sentences
+            with open(meaning_path, "w", encoding="utf-8") as wf:
+                wf.write("\n".join(sentences) + "\n")
+            ws = get_active_workspace()
+            if ws.utterances_path.is_file():
+                utts = ws.load_utterances()
+                if len(utts) == len(sentences):
+                    for idx, u in enumerate(utts):
+                        u.setdefault("src_raw", orig_sentences[idx])
+                        u["src"] = sentences[idx]
+                    ws.save_utterances(utts)
 
     chunks = []
     chunk = ''
@@ -120,11 +115,11 @@ def translate_chunk(chunk, chunks, theme_prompt, i):
 
 
 def _translation_cache_fingerprint() -> str:
-    """Compute a SHA-256 fingerprint of translation settings and terminology content.
+    """Compute a SHA-256 fingerprint of translation settings and merged terminology content.
 
     Ensures cached raw translations are invalidated whenever ``api.model``,
-    ``target_language``, ``translation_style``, ``reflect_translate``, or
-    ``terminology.json`` changes.
+    ``target_language``, ``translation_style``, ``reflect_translate``,
+    ``terminology.json``, ``terms.json``, or global glossary files change.
     """
     h = hashlib.sha256()
     for key in ("api.model", "target_language", "translation_style", "reflect_translate"):
@@ -137,6 +132,14 @@ def _translation_cache_fingerprint() -> str:
                 h.update(f.read())
         except OSError:
             pass
+    try:
+        merged_terms = _get_term_index().get("terms", [])
+        if merged_terms:
+            h.update(
+                json.dumps(merged_terms, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            )
+    except Exception:
+        pass
     return h.hexdigest()[:16]
 
 

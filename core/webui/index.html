@@ -2001,6 +2001,10 @@
               </div>
             </header>
             <div class="wf-body hidden" id="wf-body-3">
+              <label class="field" style="margin-block-end:0.35rem;">
+                <span style="font-size:0.75rem; font-weight:600; color:var(--text-secondary);">视频主题与背景摘要 (theme / summary · 注入每次翻译上下文)</span>
+                <input id="terms-summary-input" type="text" placeholder="两句话概括视频主题与领域背景，帮助翻译模型消歧...">
+              </label>
               <div class="row" style="justify-content:space-between;">
                 <span style="font-size:0.79rem; color:var(--text-secondary);">
                   支持多对一 ASR 谐音纠错（<code class="mono">aliases</code> 用 <code class="mono">|</code> 分隔，如 <code class="mono">pie torch</code> → <code class="mono">PyTorch</code>）；勾选「修正原文」自动替换原文字幕错词。
@@ -3371,7 +3375,10 @@
     // 7. Stage 03: Terms In-Place Editor & Cascade Rerun
     async function loadTaskTerms(taskId) {
       const data = await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/terms`);
+      state.termsSummary = data.summary || '';
       state.terms = data.terms || [];
+      const sumInp = document.getElementById('terms-summary-input');
+      if (sumInp) sumInp.value = state.termsSummary;
       renderTermsTable();
     }
 
@@ -3430,15 +3437,24 @@
     async function saveTerms() {
       if (!state.activeTaskId) return;
       syncTermsFromDom();
-      await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}/terms`, {
+      const sumInp = document.getElementById('terms-summary-input');
+      const summary = sumInp ? sumInp.value.trim() : (state.termsSummary || '');
+      state.termsSummary = summary;
+      const res = await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}/terms`, {
         method: 'PUT',
-        body: JSON.stringify({ terms: state.terms }),
+        body: JSON.stringify({ summary, terms: state.terms }),
       });
+      if (res && res.promoted_to_global > 0) {
+        state.terms.forEach((t) => { t.promote_to_global = false; });
+        renderTermsTable();
+      }
+      return res;
     }
 
     document.getElementById('save-terms-btn').addEventListener('click', async () => {
-      await saveTerms();
-      flashSavedToast('术语表已保存');
+      const res = await saveTerms();
+      const msg = res?.promoted_to_global ? `术语表已保存（${res.promoted_to_global} 条已入全局库）` : '术语表已保存';
+      flashSavedToast(msg);
     });
 
     document.getElementById('save-terms-rerun-btn').addEventListener('click', async () => {

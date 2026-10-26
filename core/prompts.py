@@ -87,11 +87,14 @@ def get_summary_prompt(source_content, custom_terms_json=None):
     if custom_terms_json and custom_terms_json.get('terms'):
         terms_list = []
         for term in custom_terms_json['terms']:
-            terms_list.append(f"- {term['src']}: {term['tgt']} ({term.get('note', '')})")
+            aliases = term.get("aliases") or []
+            alias_str = f" [aliases: {', '.join(str(a) for a in aliases if str(a).strip())}]" if aliases else ""
+            terms_list.append(f"- {term['src']}{alias_str}: {term['tgt']} ({term.get('note', '')})")
         terms_note = (
             "\n### Reference & Existing Terms\n"
             "Exclude exact matches already listed below, but DO extract any ASR spelling/phonetic variants "
-            "of these terms that appear in the text and map them to the same translation:\n"
+            "of these terms that appear in the text by setting `src` to the canonical term, `aliases` to the "
+            "exact surface variant(s) in `<text>`, and `tgt` to the existing translation:\n"
             + "\n".join(terms_list)
         )
     
@@ -110,7 +113,7 @@ For the provided {src_lang} video transcript:
 1. **What to Extract (Must meet at least one)**:
    - **Proper Nouns & Entities**: Names of people, brands, studios, products, games, locations, specific weapons/skills/mechanisms.
    - **Domain Jargon & Polysemous Terms**: Words that have an everyday meaning but carry a specialized meaning in this video's context (where literal translation would be wrong).
-   - **ASR Misrecognitions / Spelling Variants**: Terms in `<text>` that are phonetically misrecognized or misspelled by ASR. Extract the **exact surface form as written in `<text>`** in `src`, and provide the correct `{tgt_lang}` translation in `tgt`.
+   - **ASR Misrecognitions / Spelling Variants**: Terms in `<text>` that are phonetically misrecognized or misspelled by ASR. Put the **canonical standard spelling** in `src` (when identifiable, otherwise the surface form), list the **exact ASR surface variant(s) appearing in `<text>`** in `aliases`, and provide the accurate `{tgt_lang}` translation in `tgt`.
    - **Technical Acronyms & Code Names**.
 2. **Counterfactual Exclusion Test (Strict Filter)**:
    - Before extracting any term, ask: *"If this word is NOT in the glossary and a translator translates it literally, will it be wrong or inconsistent?"*
@@ -129,9 +132,10 @@ For the provided {src_lang} video transcript:
   "theme": "Two-sentence video summary",
   "terms": [
     {{
-      "src": "exact {src_lang} term or ASR variant in text",
-      "tgt": "{tgt_lang} translation", 
-      "note": "Brief context or note (mention standard spelling if ASR variant)"
+      "src": "canonical {src_lang} term",
+      "tgt": "{tgt_lang} translation",
+      "aliases": ["exact ASR phonetic/spelling variant in text (if any)"],
+      "note": "Brief context or note"
     }}
   ]
 }}
@@ -140,6 +144,60 @@ For the provided {src_lang} video transcript:
 Note: Start your answer with ```json and end with ```, do not add any other text.
 """.strip()
     return summary_prompt
+
+
+def get_consolidate_terms_prompt(raw_terms: list[dict], theme: str = "", target_language: str | None = None):
+    src_lang = get_source_language()
+    tgt_lang = target_language or load_key("target_language")
+    raw_json = json.dumps(raw_terms, ensure_ascii=False, indent=2)
+    return f"""
+## Role
+You are a terminology consolidation and official localization specialist for **{src_lang}** to **{tgt_lang}** video translation.
+
+## Task
+Below is a raw terminology list extracted from chunks of a video transcript (Theme: {theme or "General"}).
+Some entries may include:
+- `kb_candidates`: fuzzy-matched candidates from an authoritative official glossary (`term-map.json`).
+- `source_hint: "kb_scan_candidate"`: official glossary entries detected directly in the transcript via N-gram scan that chunk extraction may have overlooked.
+
+Consolidate, deduplicate, and refine this list into a unified, accurate glossary:
+1. **Authoritative Glossary Alignment (`kb_candidates`)**:
+   - When an extracted term or its ASR variant corresponds to an official entry in `kb_candidates`, **adopt the official canonical `src` and official `{tgt_lang}` translation `tgt` from `kb_candidates`** (e.g., `Multimach` / `Multimoc` -> `src: "Multimach CCX"`, `tgt: "多机系统CCX"`; `DFA` -> `src: "D.F.A."`, `tgt: "死从天降"`; `Indebted Kindness` / `Loaded Kindness` -> `src: "Indebted Kindness"`, `tgt: "蒙恩"`).
+   - **CRITICAL**: Whenever `src` is normalized to a full canonical name (like `"Multimach CCX"` or `"D.F.A."`), **keep the exact shorthand or ASR surface forms that appeared in the transcript (like `"Multimach"`, `"Multimoc"`, `"DFA"`) inside `aliases`** so text matching can still find them in the transcript.
+2. **Verify Direct Glossary Scan Candidates (`source_hint: "kb_scan_candidate"`)**:
+   - Entries marked with `source_hint: "kb_scan_candidate"` matched the transcript text against the official glossary and include a `context_snippet` showing the surrounding words in the transcript.
+   - **Check `context_snippet` carefully**:
+     - **Keep** the entry ONLY if it is used as a genuine domain term, weapon, skill, perk, archetype, or proper noun in `context_snippet`.
+     - **Discard** the entry if `context_snippet` shows it is just an ordinary conversational phrase or number that coincidentally shares a name with a game item (e.g., `"it's cool"` in `"because it's cool"`, `"second chance"` in `"give this a second chance"`, `"plus one"` in `"14 plus one"`, `"single player"` in `"in single player"`).
+3. **Cross-Chunk ASR Variant & Shorthand Unification**:
+   - Merge duplicate entries that refer to the same entity under different ASR phonetic spellings, abbreviations, or inflections into a single entry, combining all transcript surface forms into `aliases` and using one consistent `{tgt_lang}` `tgt`.
+   - If an entry accidentally glues two distinct terms together (e.g., a perk + a weapon name), separate them into their respective canonical entries.
+4. **Preserve Domain Coverage & Prune Generic Noise**:
+   - Keep all genuine domain terms, proper nouns, perks, items, acronyms, and technical jargon across all chunks.
+   - Remove purely generic everyday words where literal translation is already unambiguous.
+
+## Raw Extracted Terms
+```json
+{raw_json}
+```
+
+## Output in only JSON format and no other text
+```json
+{{
+  "terms": [
+    {{
+      "src": "canonical {src_lang} term",
+      "tgt": "accurate unified {tgt_lang} translation",
+      "aliases": ["exact transcript surface form or ASR variant (if any)"],
+      "note": "concise context note"
+    }}
+  ]
+}}
+```
+
+Note: Start your answer with ```json and end with ```, do not add any other text.
+""".strip()
+
 
 ## ================================================================
 # @ step5_translate.py & translate_lines.py

@@ -116,6 +116,7 @@ def _try_direct_utterance_timestamps(df_words, sentences_list: list[str]) -> lis
         return None
 
     n_words = len(df_words)
+    all_spans_cover_df = int(utterances[-1].get("word_span", [0, 0])[1]) == n_words
     if [str(u.get("src", "")).strip() for u in utterances] == sentences_list:
         stamps: list[tuple[float, float]] = []
         for u in utterances:
@@ -125,10 +126,11 @@ def _try_direct_utterance_timestamps(df_words, sentences_list: list[str]) -> lis
             w_a, w_b = int(span[0]), int(span[1])
             if not (0 <= w_a < w_b <= n_words):
                 return None
-            w_a_Text = remove_punctuation(str(df_words["text"].iloc[w_a]).lower()).replace(" ", "")
-            u_clean = remove_punctuation(str(u.get("src_raw") or u.get("src", "")).lower()).replace(" ", "")
-            if w_a_Text and u_clean and not u_clean.startswith(w_a_Text[:1]):
-                return None
+            if not all_spans_cover_df:
+                w_a_text = remove_punctuation(str(df_words["text"].iloc[w_a]).lower()).replace(" ", "")
+                u_clean = remove_punctuation(str(u.get("src_raw") or u.get("src", "")).lower()).replace(" ", "")
+                if w_a_text and u_clean and not u_clean.startswith(w_a_text[:1]):
+                    return None
             stamps.append((float(df_words["start"].iloc[w_a]), float(df_words["end"].iloc[w_b - 1])))
         return stamps
 
@@ -142,11 +144,10 @@ def _try_direct_utterance_timestamps(df_words, sentences_list: list[str]) -> lis
             w_a, w_b = int(span[0]), int(span[1])
             if not (0 <= w_a < w_b <= n_words):
                 return None
-            w_a_text = remove_punctuation(str(df_words["text"].iloc[w_a]).lower()).replace(" ", "")
-            c_clean = remove_punctuation(str(c.get("src", "")).lower()).replace(" ", "")
-            if w_a_text and c_clean and not c_clean.startswith(w_a_text[:1]):
-                # Also check parent utterance src_raw in case fix_source or user edit changed the first word
-                if int(utterances[-1].get("word_span", [0, 0])[1]) != n_words:
+            if not all_spans_cover_df:
+                w_a_text = remove_punctuation(str(df_words["text"].iloc[w_a]).lower()).replace(" ", "")
+                c_clean = remove_punctuation(str(c.get("src", "")).lower()).replace(" ", "")
+                if w_a_text and c_clean and not c_clean.startswith(w_a_text[:1]):
                     return None
             stamps.append((float(df_words["start"].iloc[w_a]), float(df_words["end"].iloc[w_b - 1])))
         return stamps

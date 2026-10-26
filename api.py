@@ -579,27 +579,7 @@ def update_task_terms(task_id: str, request: TermsUpdateRequest):
         request.summary if request.summary is not None else current.get("summary", "")
     )
     ws.save_terms(summary, request.terms)
-
-    # Also keep legacy terminology.json synchronized for pipeline compatibility
     loaded = ws.load_terms()
-    legacy_payload = {
-        "theme": loaded["summary"],
-        "terms": [
-            {
-                "src": t["src"],
-                "tgt": t["tgt"],
-                "note": t.get("note", ""),
-                "aliases": t.get("aliases", []),
-                "fix_source": t.get("fix_source", False),
-            }
-            for t in loaded["terms"]
-        ],
-    }
-    legacy_path = ws.log_dir / "terminology.json"
-    legacy_path.parent.mkdir(parents=True, exist_ok=True)
-    legacy_path.write_text(
-        json.dumps(legacy_payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
 
     to_promote = [t for t in request.terms if t.get("promote_to_global")]
     promoted = promote_terms_to_global(to_promote) if to_promote else 0

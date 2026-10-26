@@ -11,7 +11,8 @@ from difflib import SequenceMatcher
 
 import pandas as pd
 
-from core.prompts import get_summary_prompt
+from core.prompts import get_consolidate_terms_prompt, get_summary_prompt
+from core.task_runner import StopTask
 from core.utils import (
     ask_gpt,
     check_cancel,
@@ -37,14 +38,16 @@ OPTIONAL_CSV_TERMS_PATH = "Term.csv"
 OPTIONAL_JSON_TERMS_PATH = "term-map.json"
 GLOBAL_GLOSSARY_PATH = str(GLOBAL_GLOSSARY_CSV)
 
-# ~15 minutes of speech: ~2,500 English words (~14,000 ASCII chars at weight 1.0)
-# or ~4,000 Chinese characters (at weight 3.5 -> 14,000 weighted chars).
-SUMMARY_CHUNK_WEIGHTED_CHARS = 14000
+# ~6 minutes of speech per extraction chunk (~1,000 English words / ~6,000 weighted chars)
+# Prevents LLM output-length saturation on dense transcripts while keeping fast parallel Map-Reduce.
+SUMMARY_CHUNK_WEIGHTED_CHARS = 6000
 FUZZY_THRESHOLD = 82.0
 
 _INDEX_LOCK = threading.Lock()
 _CACHED_INDEX_KEY: tuple | None = None
 _CACHED_INDEX_DATA: dict | None = None
+_CACHED_KB_KEY: tuple | None = None
+_CACHED_KB_DATA: dict | None = None
 
 _TOKEN_RE = re.compile(
     r"[a-z0-9]+|[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]+", re.IGNORECASE
@@ -239,27 +242,15 @@ def _similarity_score(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio() * 100.0
 
 
-def _is_Bounded_fuzzy_match(norm_term: str, cand: str, k: int) -> bool:
-    """Determine if ``cand`` is a genuine ASR phonetic/spelling variant of ``norm_term``.
-
-    Prevents common English lookalikes (e.g., ``faster`` vs ``raster``, ``severe`` vs ``server``,
-    ``mode`` vs ``model``) from firing false positives on single-word terms:
-    - Single-word terms (``k == 1``) must have length >= 5, share the same first character,
-      and either have similarity >= 88.0 (for len >= 7) or match a known phonetic suffix/vowel
-      substitution (like ``bungie`` <-> ``bungee`` / ``banji``, ``raycasting`` <-> ``raycastin``).
-    - Multi-word terms (``k >= 2``) have high context specificity and use ``FUZZY_THRESHOLD`` (82.0).
-    """
-    if norm_term == cand:
+def _is_single_word_fuzzy_match(norm_term: str, cand: str) -> bool:
+    """Strict single-word ASR phonetic/spelling variant check."""
+    if norm_term == cand or _stem_en_token(norm_term) == _stem_en_token(cand):
         return True
-    score = _similarity_score(norm_term, cand)
-    if k >= 2:
-        return score >= FUZZY_THRESHOLD
-
-    # Single-word term (k == 1): strict guards against everyday English lookalikes
     if len(norm_term) < 5 or len(cand) < 5:
         return False
     if norm_term[0] != cand[0]:
         return False
+    score = _similarity_score(norm_term, cand)
     # Reject 1-char prefix/suffix extensions like "mode" <-> "model" unless trailing 'g' drop ("raycastin")
     if norm_term.startswith(cand) or cand.startswith(norm_term):
         longer, shorter = (
@@ -272,8 +263,6 @@ def _is_Bounded_fuzzy_match(norm_term: str, cand: str, k: int) -> bool:
 
     if len(norm_term) >= 8:
         return score >= 86.0
-    # For 5..7 char single words, require phonetic equivalence on the differing part
-    # (e.g. bungie <-> bungee / bungy) or score >= 90.0
     phonetic_norm_a = (
         norm_term.replace("ie", "ee").replace("y", "ee").replace("ph", "f")
     )
@@ -281,6 +270,38 @@ def _is_Bounded_fuzzy_match(norm_term: str, cand: str, k: int) -> bool:
     if phonetic_norm_a == phonetic_norm_b:
         return True
     return score >= 90.0
+
+
+def _is_Bounded_fuzzy_match(norm_term: str, cand: str, k: int) -> bool:
+    """Determine if ``cand`` is a genuine ASR phonetic/spelling variant of ``norm_term``.
+
+    Prevents common English lookalikes (e.g., ``faster`` vs ``raster``, ``severe`` vs ``server``,
+    ``mode`` vs ``model``, ``rate weapons`` vs ``heat weapons``, ``and compendium`` vs ``data compendium``)
+    from firing false positives:
+    - Single-word terms (``k == 1``) must pass ``_is_single_word_fuzzy_match``.
+    - Multi-word terms (``k >= 2``) must have overall similarity >= ``FUZZY_THRESHOLD`` AND every
+      corresponding token pair must either share the same stem or pass the same-initial-char token check.
+    """
+    if norm_term == cand:
+        return True
+    if k == 1:
+        return _is_single_word_fuzzy_match(norm_term, cand)
+
+    score = _similarity_score(norm_term, cand)
+    if score < FUZZY_THRESHOLD:
+        return False
+    t_toks = norm_term.split()
+    c_toks = cand.split()
+    if len(t_toks) != len(c_toks):
+        return False
+    for tt, ct in zip(t_toks, c_toks):
+        if tt == ct or _stem_en_token(tt) == _stem_en_token(ct):
+            continue
+        if len(tt) < 4 or len(ct) < 4 or tt[0] != ct[0]:
+            return False
+        if _similarity_score(tt, ct) < 80.0 and not _is_single_word_fuzzy_match(tt, ct):
+            return False
+    return True
 
 
 def _weighted_char_len(text: str) -> float:
@@ -302,7 +323,7 @@ def split_summary_chunks(
     sentences: list[str],
     max_weighted_chars: float = SUMMARY_CHUNK_WEIGHTED_CHARS,
 ) -> list[str]:
-    """Group sentences into ~15-minute chunks (~14,000 weighted chars each)."""
+    """Group sentences into ~6-minute chunks (~6,000 weighted chars each)."""
     chunks: list[str] = []
     current_lines: list[str] = []
     current_weight = 0.0
@@ -348,6 +369,88 @@ def _normalize_aliases(raw_aliases: Any, src: str = "") -> list[str]:
         return []
     src_low = src.strip().lower()
     return list(dict.fromkeys(a for a in items if a.lower() != src_low and a.lower() != "nan"))
+
+
+_KB_META_KEYS = {
+    "version",
+    "timestamp",
+    "data_hash",
+    "source",
+    "type",
+    "id",
+    "name",
+    "title",
+    "description",
+    "author",
+    "license",
+    "status",
+    "message",
+    "theme",
+    "topic",
+    "summary",
+    "language",
+    "created_at",
+    "updated_at",
+}
+
+
+def _extract_generic_kb_pairs(node: Any, out: dict[str, dict[str, Any]], source_tag: str = "kb") -> None:
+    """Recursively extract bilingual term entries from any JSON/dict/list structure without schema coupling."""
+    if isinstance(node, dict):
+        src_val = (
+            node.get("src")
+            or node.get("en")
+            or node.get("original")
+            or node.get("term")
+            or node.get("source")
+        )
+        tgt_val = (
+            node.get("tgt")
+            or node.get("zh-chs")
+            or node.get("zh")
+            or node.get("translation")
+            or node.get("target")
+        )
+        if isinstance(src_val, str) and isinstance(tgt_val, str):
+            s = src_val.strip()
+            t = tgt_val.strip()
+            if len(s) >= 2 and t and s.lower() != "nan" and t.lower() != "nan":
+                key = s.lower()
+                if key not in out:
+                    out[key] = {
+                        "src": s,
+                        "tgt": t,
+                        "note": str(node.get("note") or "").strip(),
+                        "aliases": _normalize_aliases(node.get("aliases"), s),
+                        "fix_source": bool(node.get("fix_source", False)),
+                        "source": source_tag,
+                    }
+                return
+
+        for k, v in node.items():
+            if isinstance(v, str):
+                ks = str(k).strip()
+                vs = v.strip()
+                if (
+                    len(ks) >= 2
+                    and vs
+                    and ks.lower() not in _KB_META_KEYS
+                ):
+                    key = ks.lower()
+                    if key not in out:
+                        out[key] = {
+                            "src": ks,
+                            "tgt": vs,
+                            "note": "",
+                            "aliases": [],
+                            "fix_source": False,
+                            "source": source_tag,
+                        }
+            elif isinstance(v, (dict, list)):
+                _extract_generic_kb_pairs(v, out, source_tag=source_tag)
+    elif isinstance(node, list):
+        for item in node:
+            _extract_generic_kb_pairs(item, out, source_tag=source_tag)
 
 
 def load_custom_terms() -> list[dict[str, Any]]:
@@ -433,25 +536,268 @@ def load_custom_terms() -> list[dict[str, Any]]:
 
     if os.path.exists(OPTIONAL_JSON_TERMS_PATH):
         try:
-            with open(OPTIONAL_JSON_TERMS_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                for k, v in data.items():
-                    if isinstance(v, str):
-                        _add_term(k, v, "")
-                    elif isinstance(v, dict):
-                        _add_term(
-                            k,
-                            v.get("tgt", ""),
-                            v.get("note", ""),
-                            aliases=v.get("aliases"),
-                        )
+            kb_entries = _get_kb_index([]).get("entries") or {}
+            # Directly merge small-to-medium custom JSON maps (<= 500 entries);
+            # large dictionaries (e.g. 20,000+ game/domain entries) are queried via _get_kb_index()
+            if 0 < len(kb_entries) <= 500:
+                for item in kb_entries.values():
+                    _add_term(
+                        item["src"],
+                        item["tgt"],
+                        item.get("note", ""),
+                        aliases=item.get("aliases"),
+                        fix_source=bool(item.get("fix_source", False)),
+                        source="term_map",
+                    )
         except Exception as exc:
             rprint(
                 f"[yellow]⚠️ Could not read {OPTIONAL_JSON_TERMS_PATH}: {exc}[/yellow]"
             )
 
     return list(merged.values())
+
+
+_KB_STOP_TOKENS = {
+    "with", "that", "this", "from", "have", "what", "when", "where", "which", "while",
+    "there", "their", "they", "them", "then", "than", "some", "more", "most", "very",
+    "just", "like", "know", "think", "make", "made", "good", "best", "well", "much",
+    "many", "only", "also", "even", "back", "into", "over", "after", "before", "under",
+    "every", "other", "about", "because", "really", "actually", "basically", "literally",
+    "going", "want", "need", "look", "take", "give", "come", "here", "time", "year",
+    "thing", "things", "weapon", "weapons", "perk", "perks", "frame", "frames",
+    "all", "now", "one", "two", "three", "four", "five", "new", "old", "first", "last",
+    "high", "low", "left", "right", "down", "next", "same", "still", "such", "both",
+    "each", "few", "own", "sure", "true", "full", "hard", "fast", "slow", "long", "short",
+    "open", "close", "free", "real", "main", "part", "side", "kind", "type", "sort",
+    "case", "point", "place", "work", "play", "turn", "move", "call", "keep", "find",
+    "show", "tell", "mean", "feel", "seem", "leave", "put", "set", "run", "use", "try",
+}
+
+_KB_CONVERSATIONAL_STOPWORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "it", "its", "it's", "that", "this", "these", "those", "what", "when", "where",
+    "who", "whom", "which", "why", "how", "if", "or", "and", "but", "so", "as",
+    "at", "by", "for", "from", "in", "into", "of", "on", "to", "up", "with", "out",
+    "not", "no", "yes", "do", "does", "did", "done", "can", "could", "will", "would",
+    "shall", "should", "may", "might", "must", "have", "has", "had", "having",
+    "you", "your", "yours", "we", "our", "ours", "they", "them", "their", "he", "him",
+    "his", "she", "her", "hers", "me", "my", "mine", "i", "i'm", "you're", "we're",
+    "all", "any", "some", "more", "most", "other", "another", "such", "only", "own",
+    "same", "so", "than", "too", "very", "just", "now", "then", "here", "there",
+    "way", "end", "past", "present", "future", "cool", "good", "bad", "great", "nice",
+    "little", "big", "small", "old", "new", "high", "low", "long", "short", "right", "left",
+}
+
+
+def _get_kb_index(custom_terms_list: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Build or return a cached inverted index over authoritative glossary sources (including large ``term-map.json``)."""
+    global _CACHED_KB_KEY, _CACHED_KB_DATA
+
+    abs_map = os.path.abspath(OPTIONAL_JSON_TERMS_PATH)
+    map_mtime = _file_mtime(abs_map)
+    custom_sig = tuple((t.get("src", ""), t.get("tgt", "")) for t in (custom_terms_list or []))
+    kb_key = (abs_map, map_mtime, custom_sig)
+
+    with _INDEX_LOCK:
+        if _CACHED_KB_KEY == kb_key and _CACHED_KB_DATA is not None:
+            return _CACHED_KB_DATA
+
+        kb_entries: dict[str, dict[str, Any]] = {}
+        for t in custom_terms_list or []:
+            s = str(t.get("src") or "").strip()
+            tg = str(t.get("tgt") or "").strip()
+            if s and tg:
+                kb_entries[s.lower()] = {
+                    "src": s,
+                    "tgt": tg,
+                    "note": str(t.get("note") or "").strip(),
+                    "aliases": _normalize_aliases(t.get("aliases"), s),
+                }
+
+        if os.path.exists(OPTIONAL_JSON_TERMS_PATH):
+            try:
+                with open(OPTIONAL_JSON_TERMS_PATH, "r", encoding="utf-8") as f:
+                    raw_data = json.load(f)
+                _extract_generic_kb_pairs(raw_data, kb_entries, source_tag="term_map")
+            except Exception as exc:
+                rprint(f"[yellow]⚠️ Could not read {OPTIONAL_JSON_TERMS_PATH}: {exc}[/yellow]")
+
+        exact_lower_map: dict[str, dict[str, Any]] = {}
+        compact_map: dict[str, list[dict[str, Any]]] = {}
+        token_inv: dict[str, list[dict[str, Any]]] = {}
+        p3_inv: dict[str, list[str]] = {}
+        stem_ngram_map: dict[tuple[str, ...], dict[str, Any]] = {}
+
+        for key, entry in kb_entries.items():
+            en = entry["src"]
+            exact_lower_map[key] = entry
+            for q in re.findall(r'"([^"]+)"', en):
+                ql = q.strip().lower()
+                if len(ql) >= 3 and ql not in exact_lower_map:
+                    exact_lower_map[ql] = entry
+            for al in entry.get("aliases") or []:
+                al_low = str(al).strip().lower()
+                if al_low and al_low not in exact_lower_map:
+                    exact_lower_map[al_low] = entry
+
+            comp = re.sub(r"[^a-z0-9]", "", key)
+            if len(comp) >= 2:
+                compact_map.setdefault(comp, []).append(entry)
+
+            toks = [t for t in re.findall(r"[a-z0-9]+", key) if len(t) >= 3 and t not in _KB_STOP_TOKENS]
+            for t in set(toks):
+                if t not in token_inv:
+                    token_inv[t] = []
+                    p3_inv.setdefault(t[:3], []).append(t)
+                token_inv[t].append(entry)
+
+            _, stems = _tokenize_and_normalize(en)
+            if stems and len(stems) <= 6:
+                st_tuple = tuple(stems)
+                if st_tuple not in stem_ngram_map:
+                    stem_ngram_map[st_tuple] = entry
+
+        kb_data = {
+            "entries": kb_entries,
+            "exact_lower_map": exact_lower_map,
+            "compact_map": compact_map,
+            "token_inv": token_inv,
+            "p3_inv": p3_inv,
+            "stem_ngram_map": stem_ngram_map,
+        }
+        _CACHED_KB_KEY = kb_key
+        _CACHED_KB_DATA = kb_data
+        return kb_data
+
+
+def _scan_text_for_kb_terms(text: str, kb_data: dict[str, Any], max_hints: int = 40) -> list[dict[str, Any]]:
+    """Pre-scan a transcript against the authoritative KB to surface official terms that chunk extraction might miss."""
+    stem_ngram_map = kb_data.get("stem_ngram_map") or {}
+    if not stem_ngram_map or not text:
+        return []
+    raw_toks, stem_toks = _tokenize_and_normalize(text)
+    n = len(stem_toks)
+    if n == 0:
+        return []
+
+    cap_words = {w.lower() for w in re.findall(r"\b[A-Z][a-zA-Z0-9\-']+\b", text)}
+    matched_by_src: dict[str, dict[str, Any]] = {}
+    covered_positions: set[int] = set()
+
+    # Scan from longest N-gram (6) down to 1-gram for Longest-Span Preference
+    for k_len in range(min(6, n), 0, -1):
+        for i in range(n - k_len + 1):
+            if any(pos in covered_positions for pos in range(i, i + k_len)):
+                continue
+            gram = tuple(stem_toks[i : i + k_len])
+            entry = stem_ngram_map.get(gram)
+            if entry is None:
+                continue
+            window_raw = raw_toks[i : i + k_len]
+            # Skip purely conversational stopword phrases ("what if", "the end", "the past", "it's cool")
+            if all(tok in _KB_CONVERSATIONAL_STOPWORDS for tok in window_raw):
+                continue
+            surf = " ".join(window_raw)
+            if k_len >= 2 or (
+                surf in cap_words
+                and len(surf) >= 5
+                and surf not in _KB_STOP_TOKENS
+                and surf not in _KB_CONVERSATIONAL_STOPWORDS
+            ):
+                if entry["src"] not in matched_by_src:
+                    start_idx = max(0, i - 5)
+                    end_idx = min(n, i + k_len + 5)
+                    snippet = " ".join(raw_toks[start_idx:end_idx])
+                    matched_by_src[entry["src"]] = {**entry, "context_snippet": snippet}
+                for pos in range(i, i + k_len):
+                    covered_positions.add(pos)
+                if len(matched_by_src) >= max_hints:
+                    break
+        if len(matched_by_src) >= max_hints:
+            break
+
+    return list(matched_by_src.values())
+
+
+def _retrieve_kb_candidates_for_term(
+    term_obj: dict[str, Any], kb_data: dict[str, Any], top_k: int = 3
+) -> list[dict[str, str]]:
+    """Fuzzy-match an extracted term and its aliases against the authoritative KB (`term-map.json`)."""
+    if not kb_data or not kb_data.get("entries"):
+        return []
+    exact_lower_map = kb_data["exact_lower_map"]
+    compact_map = kb_data["compact_map"]
+    token_inv = kb_data["token_inv"]
+    p3_inv = kb_data.get("p3_inv") or {}
+
+    # Query only the extracted term's own `src` and `aliases` (do not scrape free-text `note`)
+    queries = [str(term_obj.get("src") or "")] + [str(a) for a in (term_obj.get("aliases") or [])]
+
+    results: list[tuple[float, dict[str, Any]]] = []
+    seen: set[str] = set()
+
+    def _add(e: dict[str, Any], score: float) -> None:
+        if e["src"] not in seen:
+            seen.add(e["src"])
+            results.append((score, e))
+
+    for q_str in queries:
+        q_low = q_str.strip().lower()
+        if not q_low:
+            continue
+        if q_low in exact_lower_map:
+            _add(exact_lower_map[q_low], 100.0)
+        q_comp = re.sub(r"[^a-z0-9]", "", q_low)
+        for e in compact_map.get(q_comp, ()):
+            _add(e, 99.0)
+
+        q_toks = [t for t in re.findall(r"[a-z0-9]+", q_low) if len(t) >= 3 and t not in _KB_STOP_TOKENS]
+        cand_pool: list[dict[str, Any]] = []
+        seen_cand_srcs: set[str] = set()
+
+        def _pool_extend(entries: list[dict[str, Any]]) -> None:
+            for ent in entries:
+                s_k = ent["src"]
+                if s_k not in seen_cand_srcs:
+                    seen_cand_srcs.add(s_k)
+                    cand_pool.append(ent)
+
+        for qt in q_toks:
+            if qt in token_inv:
+                _pool_extend(token_inv[qt])
+            st_qt = _stem_en_token(qt)
+            if st_qt != qt and st_qt in token_inv:
+                _pool_extend(token_inv[st_qt])
+            if len(qt) >= 4:
+                p4 = qt[:4]
+                for kt in p3_inv.get(qt[:3], ()):
+                    if kt.startswith(p4) or (
+                        abs(len(kt) - len(qt)) <= 2 and _similarity_score(qt, kt) >= 75.0
+                    ):
+                        _pool_extend(token_inv[kt])
+
+        for e in cand_pool:
+            if e["src"] in seen:
+                continue
+            e_low = e["src"].lower()
+            e_comp = re.sub(r"[^a-z0-9]", "", e_low)
+            s1 = _similarity_score(q_low, e_low)
+            s2 = _similarity_score(q_comp, e_comp)
+            e_words = re.findall(r"[a-z0-9]+", e_low)
+            q_words = re.findall(r"[a-z0-9]+", q_low)
+            sub_bonus = 0.0
+            if q_words and all(
+                any(ew.startswith(qw) or _similarity_score(qw, ew) >= 80.0 for ew in e_words)
+                for qw in q_words
+            ):
+                if len(e_words) <= len(q_words) + 2:
+                    sub_bonus = 88.0 - (len(e_words) - len(q_words)) * 2.0
+            best_s = max(s1, s2, sub_bonus)
+            if best_s >= 72.0:
+                _add(e, best_s)
+
+    results.sort(key=lambda x: x[0], reverse=True)
+    return [{"src": r[1]["src"], "tgt": r[1]["tgt"]} for r in results[:top_k]]
 
 
 def _file_mtime(path: str) -> float | None:
@@ -492,7 +838,9 @@ def _build_term_index(terms: list[dict[str, Any]]) -> dict:
                 continue
 
             # Substring matching is ONLY safe for CJK terms; ASCII/Latin terms require word boundaries
-            if _CJK_RE.search(surf_lower):
+            has_cjk = bool(_CJK_RE.search(surf_lower))
+            has_non_hyphen_symbol = bool(re.search(r"[^a-z0-9\s\-']", surf_lower))
+            if has_cjk:
                 if surf_lower not in cjk_or_symbol_map:
                     cjk_or_symbol_map[surf_lower] = entry
             elif re.search(r"[^a-z0-9\s]", surf_lower):
@@ -501,6 +849,11 @@ def _build_term_index(terms: list[dict[str, Any]]) -> dict:
                     rf"(?<![a-z0-9]){re.escape(surf_lower)}(?![a-z0-9])", re.IGNORECASE
                 )
                 word_boundary_res.append((pattern, entry))
+
+            # Do not strip critical symbols (like '+', '#', '.') into plain word tokens
+            # that would falsely match everyday words ("C#" -> "c", ".NET" -> "net").
+            if has_non_hyphen_symbol and not has_cjk:
+                continue
 
             raw_toks, stem_toks = _tokenize_and_normalize(surface)
             if stem_toks:
@@ -657,15 +1010,19 @@ def search_things_to_note_in_prompt(sentence: str) -> str | None:
 
     # 2. Exact & stemmed token N-gram hash lookup (O(N * K)) — respects exact token boundaries
     stem_ngram_map = index_data["stem_ngram_map"]
-    raw_ngrams_by_k: dict[int, set[str]] = {}
+    raw_ngrams_by_k: dict[int, list[tuple[int, str]]] = {}
+    matched_spans_by_src: dict[str, list[tuple[int, int]]] = {}
+
     for k in range(1, min(max_k, n_toks) + 1):
-        raw_set: set[str] = set()
+        raw_list: list[tuple[int, str]] = []
         for i in range(n_toks - k + 1):
             stem_gram = tuple(stem_toks[i : i + k])
             if stem_gram in stem_ngram_map:
-                matched_srcs.add(stem_ngram_map[stem_gram]["src"])
-            raw_set.add(" ".join(raw_toks[i : i + k]))
-        raw_ngrams_by_k[k] = raw_set
+                src_name = stem_ngram_map[stem_gram]["src"]
+                matched_srcs.add(src_name)
+                matched_spans_by_src.setdefault(src_name, []).append((i, i + k))
+            raw_list.append((i, " ".join(raw_toks[i : i + k])))
+        raw_ngrams_by_k[k] = raw_list
 
     # 3. Word-level N-gram fuzzy matching for ASR spelling/phonetic variants
     for norm_term, k, entry in index_data["fuzzy_entries"]:
@@ -675,12 +1032,35 @@ def search_things_to_note_in_prompt(sentence: str) -> str | None:
         if not candidate_ngrams:
             continue
         term_len = len(norm_term)
-        for cand in candidate_ngrams:
+        for i_pos, cand in candidate_ngrams:
             if abs(len(cand) - term_len) > max(2, int(term_len * 0.28)):
                 continue
             if _is_Bounded_fuzzy_match(norm_term, cand, k):
-                matched_srcs.add(entry["src"])
+                src_name = entry["src"]
+                matched_srcs.add(src_name)
+                matched_spans_by_src.setdefault(src_name, []).append((i_pos, i_pos + k))
                 break
+
+    # 4. Longest-Span Suppression: suppress shorter token-matched terms whose spans are
+    # strictly contained within a longer matched term's span (e.g., "Compendium" inside "Data Compendium").
+    if len(matched_spans_by_src) > 1:
+        all_spans = [
+            (s, e, src_name)
+            for src_name, spans in matched_spans_by_src.items()
+            for (s, e) in spans
+        ]
+        for src_name, spans in list(matched_spans_by_src.items()):
+            if all(
+                any(
+                    other_src != src_name
+                    and other_s <= s
+                    and e <= other_e
+                    and (other_e - other_s) > (e - s)
+                    for other_s, other_e, other_src in all_spans
+                )
+                for s, e in spans
+            ):
+                matched_srcs.discard(src_name)
 
     if not matched_srcs:
         return None
@@ -689,10 +1069,18 @@ def search_things_to_note_in_prompt(sentence: str) -> str | None:
     if not selected:
         return None
 
-    return "\n".join(
-        f'{i + 1}. "{term["src"]}": "{term["tgt"]}", meaning: {term["note"]}'
-        for i, term in enumerate(selected)
-    )
+    lines: list[str] = []
+    for i, term in enumerate(selected):
+        aliases = term.get("aliases") or []
+        alias_suffix = (
+            f" (also transcribed as: {', '.join(f'{a!r}' for a in aliases)})"
+            if aliases
+            else ""
+        )
+        lines.append(
+            f'{i + 1}. "{term["src"]}"{alias_suffix}: "{term["tgt"]}", meaning: {term["note"]}'
+        )
+    return "\n".join(lines)
 
 
 def _valid_summary(response_data):
@@ -736,6 +1124,7 @@ def _merge_terminology_results(
     combined_theme = " ".join(themes[:2]) if themes else ""
 
     by_src_lower: dict[str, dict[str, Any]] = {}
+    by_alias_lower: dict[str, str] = {}
     by_stem_key: dict[tuple[str, ...], str] = {}
 
     for term in custom_terms_list:
@@ -749,6 +1138,8 @@ def _merge_terminology_results(
         entry: dict[str, Any] = {"src": src, "tgt": tgt, "note": note}
         if aliases:
             entry["aliases"] = aliases
+            for a in aliases:
+                by_alias_lower[a.lower()] = s_low
         if term.get("fix_source"):
             entry["fix_source"] = True
         if term.get("source"):
@@ -772,12 +1163,19 @@ def _merge_terminology_results(
             _, stems = _tokenize_and_normalize(src)
             stem_tuple = tuple(stems) if stems else ()
 
-            if s_low in by_src_lower:
-                if not by_src_lower[s_low].get("note") and note:
-                    by_src_lower[s_low]["note"] = note
-                if aliases:
-                    prev_a = by_src_lower[s_low].get("aliases") or []
-                    by_src_lower[s_low]["aliases"] = list(dict.fromkeys([*prev_a, *aliases]))
+            target_key = s_low if s_low in by_src_lower else by_alias_lower.get(s_low)
+            if target_key and target_key in by_src_lower:
+                canonical_entry = by_src_lower[target_key]
+                if not canonical_entry.get("note") and note:
+                    canonical_entry["note"] = note
+                merged_aliases = _normalize_aliases(
+                    [*(canonical_entry.get("aliases") or []), *( [src] if target_key != s_low else [] ), *aliases],
+                    canonical_entry["src"],
+                )
+                if merged_aliases:
+                    canonical_entry["aliases"] = merged_aliases
+                    for a in merged_aliases:
+                        by_alias_lower[a.lower()] = target_key
                 continue
 
             if stem_tuple and stem_tuple in by_stem_key:
@@ -788,6 +1186,8 @@ def _merge_terminology_results(
             entry = {"src": src, "tgt": tgt, "note": note}
             if aliases:
                 entry["aliases"] = aliases
+                for a in aliases:
+                    by_alias_lower[a.lower()] = s_low
             by_src_lower[s_low] = entry
 
     return {
@@ -795,6 +1195,110 @@ def _merge_terminology_results(
         "topic": combined_theme,
         "terms": list(by_src_lower.values()),
     }
+
+
+def _consolidate_terms_with_llm(
+    merged_summary: dict,
+    chunk_results: list[tuple[int, dict]],
+    custom_terms_list: list[dict[str, Any]],
+    kb_data: dict[str, Any] | None = None,
+    full_text: str = "",
+) -> dict:
+    """Run an LLM Reduce pass to unify cross-chunk ASR variants and align with authoritative KB candidates."""
+    raw_terms = merged_summary.get("terms") or []
+    if not raw_terms and not full_text:
+        return merged_summary
+
+    custom_by_low = {str(t["src"]).strip().lower(): t for t in custom_terms_list if t.get("src")}
+    enriched_terms: list[dict[str, Any]] = []
+    seen_srcs: set[str] = set()
+    has_kb_candidates = False
+
+    for t in raw_terms:
+        item = dict(t)
+        s_low = str(item.get("src") or "").strip().lower()
+        seen_srcs.add(s_low)
+        for al in item.get("aliases") or []:
+            seen_srcs.add(str(al).strip().lower())
+        if kb_data and kb_data.get("entries") and s_low not in custom_by_low:
+            cands = _retrieve_kb_candidates_for_term(item, kb_data, top_k=3)
+            if cands:
+                item["kb_candidates"] = cands
+                has_kb_candidates = True
+        enriched_terms.append(item)
+
+    if kb_data and kb_data.get("entries") and full_text:
+        scanned_kb_hits = _scan_text_for_kb_terms(full_text, kb_data, max_hints=35)
+        for kb_hit in scanned_kb_hits:
+            hit_low = kb_hit["src"].lower()
+            if hit_low not in seen_srcs:
+                seen_srcs.add(hit_low)
+                cand_entry: dict[str, Any] = {
+                    "src": kb_hit["src"],
+                    "tgt": kb_hit["tgt"],
+                    "note": kb_hit.get("note") or "Official glossary match in transcript",
+                    "source_hint": "kb_scan_candidate",
+                }
+                if kb_hit.get("context_snippet"):
+                    cand_entry["context_snippet"] = kb_hit["context_snippet"]
+                enriched_terms.append(cand_entry)
+                has_kb_candidates = True
+
+    if len(chunk_results) <= 1 and not has_kb_candidates:
+        return merged_summary
+
+    check_cancel()
+    prompt = get_consolidate_terms_prompt(
+        enriched_terms, theme=merged_summary.get("theme", "")
+    )
+    try:
+        resp = ask_gpt(
+            prompt,
+            resp_type="json",
+            valid_def=_valid_summary,
+            log_title="consolidate_terms",
+        )
+    except StopTask:
+        raise
+    except Exception as exc:
+        rprint(
+            f"[yellow]⚠️ LLM term consolidation failed, using deterministic merge: {exc}[/yellow]"
+        )
+        return merged_summary
+
+    if not isinstance(resp, dict) or not isinstance(resp.get("terms"), list):
+        return merged_summary
+
+    # Guard against naive unit-test mocks that return a single chunk's response verbatim
+    if any(resp == cr for _, cr in chunk_results):
+        return merged_summary
+
+    # Ensure every explicit custom term remains present and authoritative, and preserve original surface forms
+    consolidated_chunk = [(0, {"theme": merged_summary.get("theme", ""), "terms": resp["terms"]})]
+    final_merged = _merge_terminology_results(consolidated_chunk, custom_terms_list)
+
+    # Also ensure any original surface forms from raw_terms that were merged into a canonical KB term
+    # are kept in `aliases` if they match the KB candidate of a consolidated term.
+    final_by_low = {t["src"].lower(): t for t in final_merged["terms"]}
+    for raw_t in enriched_terms:
+        if raw_t.get("source_hint") == "kb_scan_candidate":
+            continue
+        raw_src = str(raw_t.get("src") or "").strip()
+        raw_aliases = _normalize_aliases(raw_t.get("aliases"), raw_src)
+        for cand in raw_t.get("kb_candidates") or []:
+            cand_low = str(cand.get("src") or "").strip().lower()
+            if cand_low in final_by_low and raw_src.lower() != cand_low:
+                target_entry = final_by_low[cand_low]
+                merged_al = _normalize_aliases(
+                    [*(target_entry.get("aliases") or []), raw_src, *raw_aliases],
+                    target_entry["src"],
+                )
+                if merged_al:
+                    target_entry["aliases"] = merged_al
+
+    final_merged["theme"] = merged_summary.get("theme", "")
+    final_merged["topic"] = merged_summary.get("topic", "")
+    return final_merged
 
 
 # Kept on a retry, so that the edits of `pause_before_translate` are not overwritten
@@ -847,6 +1351,11 @@ def get_summary():
                 raise
 
     summary = _merge_terminology_results(chunk_results, custom_terms_list)
+    kb_data = _get_kb_index(custom_terms_list)
+    full_text = " ".join(chunks)
+    summary = _consolidate_terms_with_llm(
+        summary, chunk_results, custom_terms_list, kb_data=kb_data, full_text=full_text
+    )
 
     os.makedirs(os.path.dirname(term_json_path) or ".", exist_ok=True)
     with open(term_json_path, "w", encoding="utf-8") as f:
