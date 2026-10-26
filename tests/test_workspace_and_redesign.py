@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from unittest.mock import patch
 import wave
 
@@ -62,10 +63,14 @@ def test_zero_copy_local_media_survives_source_move_and_delete(tmp_path: Path):
     assert media_type == "video"
 
 
-def test_config_schema_backfill_and_thread_local_task_override(tmp_path: Path, monkeypatch):
+def test_config_schema_backfill_and_thread_local_task_override(
+    tmp_path: Path, monkeypatch
+):
     """ensure_config_schema backfills missing keys; task_config_context isolates task overrides."""
     cfg_path = tmp_path / "config.yaml"
-    cfg_path.write_text("display_language: zh-CN\nwhisper:\n  language: en\n", encoding="utf-8")
+    cfg_path.write_text(
+        "display_language: zh-CN\nwhisper:\n  language: en\n", encoding="utf-8"
+    )
     monkeypatch.setattr(config_utils, "CONFIG_PATH", str(cfg_path))
 
     changed = config_utils.ensure_config_schema()
@@ -73,7 +78,9 @@ def test_config_schema_backfill_and_thread_local_task_override(tmp_path: Path, m
     assert config_utils.load_key("burn_subtitles") is True
 
     # Thread-local override must not mutate disk config.yaml
-    with config_utils.task_config_context({"target_language": " Français ", "burn_subtitles": False}):
+    with config_utils.task_config_context(
+        {"target_language": " Français ", "burn_subtitles": False}
+    ):
         assert config_utils.load_key("target_language") == " Français "
         assert config_utils.load_key("burn_subtitles") is False
 
@@ -85,7 +92,9 @@ def test_stage_fingerprint_dag_cascading_invalidation(tmp_path: Path):
     ws = TaskWorkspace(tmp_path / "output" / "task_dag")
     ws.ensure_dirs()
 
-    fp_translate = json_content_fingerprint({"stage": "translate", "target_language": "zh"})
+    fp_translate = json_content_fingerprint(
+        {"stage": "translate", "target_language": "zh"}
+    )
     fp_split = json_content_fingerprint({"stage": "sub_split", "max_length": 75})
     fp_tts = json_content_fingerprint({"stage": "dub_tts", "tts_method": "azure_tts"})
 
@@ -94,7 +103,9 @@ def test_stage_fingerprint_dag_cascading_invalidation(tmp_path: Path):
     ws.record_stage_fingerprint("dub_tts", fp_tts)
 
     # Create dummy downstream artifacts and TTS scratch files
-    (ws.root / "trans.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nhi\n", encoding="utf-8")
+    (ws.root / "trans.srt").write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nhi\n", encoding="utf-8"
+    )
     (ws.tmp_dir / "1_temp.wav").write_bytes(b"RIFF")
     (ws.segs_dir / "1.wav").write_bytes(b"RIFF")
 
@@ -118,9 +129,19 @@ def test_acoustic_pause_prompt_internal_commas_and_long_sentence_split():
     """Step 3 injects ‖ on >=0.4s gaps, projects internal commas onto punct_after, and splits Plan B."""
     word_dicts = [
         {"idx": 0, "text": "Hello", "start": 0.0, "end": 0.4},
-        {"idx": 1, "text": "world", "start": 0.9, "end": 1.3},  # gap before idx 1 is 0.5s >= 0.4s
+        {
+            "idx": 1,
+            "text": "world",
+            "start": 0.9,
+            "end": 1.3,
+        },  # gap before idx 1 is 0.5s >= 0.4s
         {"idx": 2, "text": "Plan", "start": 1.4, "end": 1.7},
-        {"idx": 3, "text": "B", "start": 1.7, "end": 2.0},      # gap after "B" is 0.6s >= 0.3s
+        {
+            "idx": 3,
+            "text": "B",
+            "start": 1.7,
+            "end": 2.0,
+        },  # gap after "B" is 0.6s >= 0.3s
         {"idx": 4, "text": "works", "start": 2.6, "end": 3.0},
     ]
     captured_prompts: list[str] = []
@@ -175,16 +196,26 @@ def test_many_to_one_aliases_in_glossary_and_global_promotion(tmp_path: Path):
     assert "pie torch" in loaded[0]["aliases"]
 
 
-def test_proportional_subtitle_split_reruns_on_max_length_increase(tmp_path: Path, monkeypatch):
+def test_proportional_subtitle_split_reruns_on_max_length_increase(
+    tmp_path: Path, monkeypatch
+):
     """Step 5 records (max_length, multiplier) in utterances.json and re-runs when max_length increases."""
     root_cfg = Path(__file__).resolve().parents[1] / "config.yaml"
-    (tmp_path / "config.yaml").write_text(root_cfg.read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        root_cfg.read_text(encoding="utf-8"), encoding="utf-8"
+    )
     ws = TaskWorkspace(tmp_path / "output")
     ws.ensure_dirs()
     monkeypatch.chdir(tmp_path)
 
     words = [
-        {"idx": i, "text": f"word{i}", "punct_after": "," if i == 5 else "", "start": float(i), "end": float(i) + 0.4}
+        {
+            "idx": i,
+            "text": f"word{i}",
+            "punct_after": "," if i == 5 else "",
+            "start": float(i),
+            "end": float(i) + 0.4,
+        }
         for i in range(12)
     ]
     ws.save_words(words)
@@ -207,8 +238,11 @@ def test_proportional_subtitle_split_reruns_on_max_length_increase(tmp_path: Pat
         [{"Source": utterances[0]["src"], "Translation": utterances[0]["tgt"]}]
     ).to_excel(ws.log_dir / "translation_results.xlsx", index=False)
 
-    with workspace_context(ws), config_utils.task_config_context(
-        {"subtitle": {"max_length": 24, "target_multiplier": 1.0}}
+    with (
+        workspace_context(ws),
+        config_utils.task_config_context(
+            {"subtitle": {"max_length": 24, "target_multiplier": 1.0}}
+        ),
     ):
         _5_split_sub.split_for_sub_main()
         saved_utts = ws.load_utterances()
@@ -217,8 +251,11 @@ def test_proportional_subtitle_split_reruns_on_max_length_increase(tmp_path: Pat
         assert saved_utts[0]["sub_cues"][-1]["end"] == 11.4
 
     # Increasing max_length to 120 must re-split into a single cue instead of skipping!
-    with workspace_context(ws), config_utils.task_config_context(
-        {"subtitle": {"max_length": 120, "target_multiplier": 1.2}}
+    with (
+        workspace_context(ws),
+        config_utils.task_config_context(
+            {"subtitle": {"max_length": 120, "target_multiplier": 1.2}}
+        ),
     ):
         _5_split_sub.split_for_sub_main()
         saved_utts_wide = ws.load_utterances()
@@ -231,8 +268,12 @@ def test_single_pass_bi_ass_scales_portrait_9_16_coordinates(tmp_path: Path):
     trans_srt = tmp_path / "trans.srt"
     ass_out = tmp_path / "bi.ass"
 
-    src_srt.write_text("1\n00:00:00,000 --> 00:00:02,000\nHello vertical world\n\n", encoding="utf-8")
-    trans_srt.write_text("1\n00:00:00,000 --> 00:00:02,000\n你好竖屏世界\n\n", encoding="utf-8")
+    src_srt.write_text(
+        "1\n00:00:00,000 --> 00:00:02,000\nHello vertical world\n\n", encoding="utf-8"
+    )
+    trans_srt.write_text(
+        "1\n00:00:00,000 --> 00:00:02,000\n你好竖屏世界\n\n", encoding="utf-8"
+    )
 
     build_ass_from_srt_pair(
         source_srt=src_srt,
@@ -268,7 +309,9 @@ def test_single_char_tts_and_edge_silence_trimming(tmp_path: Path, monkeypatch):
             wf.setframerate(sr)
             wf.writeframes(samples.tobytes())
 
-    monkeypatch.setattr(tts_main_mod, "load_key", lambda k: "openai_tts" if k == "tts_method" else None)
+    monkeypatch.setattr(
+        tts_main_mod, "load_key", lambda k: "openai_tts" if k == "tts_method" else None
+    )
     monkeypatch.setattr(tts_main_mod, "openai_tts", fake_openai_tts)
 
     wav_path = tmp_path / "single_char.wav"
@@ -283,10 +326,14 @@ def test_single_char_tts_and_edge_silence_trimming(tmp_path: Path, monkeypatch):
     assert 0.30 <= after_dur <= 0.38
 
 
-def test_lossless_dub_wav_concatenation_and_step12_stream_copy(tmp_path: Path, monkeypatch):
+def test_lossless_dub_wav_concatenation_and_step12_stream_copy(
+    tmp_path: Path, monkeypatch
+):
     """Step 11 writes lossless dub.wav without cumulative drift; Step 12 reuses output_sub.mp4 with -c:v copy."""
     seg_path = tmp_path / "seg1.wav"
-    AudioSegment.silent(duration=500, frame_rate=32000).export(str(seg_path), format="wav")
+    AudioSegment.silent(duration=500, frame_rate=32000).export(
+        str(seg_path), format="wav"
+    )
     seg = _11_merge_audio.process_audio_segment(str(seg_path))
     assert seg.frame_rate == 32000
     assert seg.channels == 1
@@ -299,7 +346,9 @@ def test_lossless_dub_wav_concatenation_and_step12_stream_copy(tmp_path: Path, m
     bg_mp3 = tmp_path / "background.mp3"
     bg_mp3.write_bytes(b"bg")
     dub_wav = tmp_path / "dub.wav"
-    AudioSegment.silent(duration=1000, frame_rate=32000).export(str(dub_wav), format="wav")
+    AudioSegment.silent(duration=1000, frame_rate=32000).export(
+        str(dub_wav), format="wav"
+    )
     dub_srt = tmp_path / "dub.srt"
     dub_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\n你好\n", encoding="utf-8")
     trans_srt = tmp_path / "trans.srt"
@@ -312,7 +361,11 @@ def test_lossless_dub_wav_concatenation_and_step12_stream_copy(tmp_path: Path, m
     monkeypatch.setattr(_12_dub_to_vid, "DUB_VIDEO", str(tmp_path / "output_dub.mp4"))
     monkeypatch.setattr(_12_dub_to_vid, "SUB_VIDEO", str(sub_mp4))
     monkeypatch.setattr(_12_dub_to_vid, "_BACKGROUND_AUDIO_FILE", str(bg_mp3))
-    monkeypatch.setattr(_12_dub_to_vid, "normalize_dub_audio", lambda src, dst: Path(dst).write_bytes(b"norm"))
+    monkeypatch.setattr(
+        _12_dub_to_vid,
+        "normalize_dub_audio",
+        lambda src, dst: Path(dst).write_bytes(b"norm"),
+    )
 
     ffmpeg_calls: list[list[str]] = []
     monkeypatch.setattr(
@@ -321,12 +374,15 @@ def test_lossless_dub_wav_concatenation_and_step12_stream_copy(tmp_path: Path, m
         lambda cmd, **_kw: ffmpeg_calls.append(list(cmd)),
     )
 
-    with workspace_context(ws_tmp), config_utils.task_config_context(
-        {
-            "burn_subtitles": True,
-            "subtitle.dub_video_subtitles": "bilingual",
-            "subtitle.sub_video_subtitles": "bilingual",
-        }
+    with (
+        workspace_context(ws_tmp),
+        config_utils.task_config_context(
+            {
+                "burn_subtitles": True,
+                "subtitle.dub_video_subtitles": "bilingual",
+                "subtitle.sub_video_subtitles": "bilingual",
+            }
+        ),
     ):
         _12_dub_to_vid.merge_video_audio()
 
@@ -334,10 +390,14 @@ def test_lossless_dub_wav_concatenation_and_step12_stream_copy(tmp_path: Path, m
     cmd = ffmpeg_calls[0]
     assert "-c:v" in cmd and cmd[cmd.index("-c:v") + 1] == "copy"
     filter_arg = cmd[cmd.index("-filter_complex") + 1]
-    assert "amix=inputs=2:duration=longest:dropout_transition=0:normalize=0" in filter_arg
+    assert (
+        "amix=inputs=2:duration=longest:dropout_transition=0:normalize=0" in filter_arg
+    )
 
 
-def test_fastapi_webui_tasks_terms_and_utterances_endpoints(tmp_path: Path, monkeypatch):
+def test_fastapi_webui_tasks_terms_and_utterances_endpoints(
+    tmp_path: Path, monkeypatch
+):
     """FastAPI server serves Web UI, mounts local video into task workspace, and round-trips terms & utterances."""
     output_root = tmp_path / "output"
     output_root.mkdir()
@@ -349,26 +409,215 @@ def test_fastapi_webui_tasks_terms_and_utterances_endpoints(tmp_path: Path, monk
 
     client = TestClient(api.app)
 
-    # 1. Web UI root
+    # 1. Web UI root & parity controls
     res_root = client.get("/")
     assert res_root.status_code == 200
-    assert "VideoLingo Studio" in res_root.text
-    assert 'closedby="any"' in res_root.text
+    assert not re.findall(
+        r"[\U0001F300-\U0001F9FF\u2600-\u27BF\U0001FA00-\U0001FAFF]",
+        res_root.text,
+    ), "Spec violation: Zero-emoji constraint failed on GET /"
 
-    # 2. Mount local video task
+    required_dom_anchors = [
+        # Topbar & Shell
+        "VideoLingo Studio",
+        "v3.0.0",
+        '<meta name="color-scheme" content="light">',
+        'id="sse-indicator"',
+        'id="nav-tasks-btn"',
+        'id="queue-count"',
+        'id="ui-lang-select"',
+        'id="open-glossary-btn"',
+        'id="open-settings-btn"',
+        'class="brand-logo"',
+        'class="app-shell"',
+        # Sidebar & Panels
+        'class="acc-panel"',
+        'id="sidebar-save-toast"',
+        'id="sb-api-key"',
+        'id="sb-api-base-url"',
+        'id="sb-api-model"',
+        'id="llm-models-datalist"',
+        'id="btn-fetch-models"',
+        'id="sb-llm-json"',
+        'id="sb-max-workers"',
+        'id="btn-check-api"',
+        'id="api-check-result"',
+        'id="sb-whisper-runtime"',
+        'id="sb-whisper-backend"',
+        'id="sb-qwen-model"',
+        'id="sb-qwen-engine"',
+        'id="asr-field-mai"',
+        'id="btn-detect-mai-region"',
+        'id="sb-trans-style"',
+        'id="sb-sep-model"',
+        'id="sb-sub-maxlen"',
+        'id="btn-reset-maxlen"',
+        'id="sb-demucs"',
+        'id="sb-burn-subtitles"',
+        'id="sb-ffmpeg-gpu"',
+        'id="sb-pause-before"',
+        'id="sb-pause-after"',
+        'id="burn-style-section"',
+        'id="sb-burn-mode-sub"',
+        'id="sb-burn-mode-dub"',
+        'class="sub-preview-stage"',
+        'id="sub-preview-trans"',
+        'id="sub-preview-src"',
+        'id="sb-tts-provider"',
+        'id="sb-tts-method"',
+        'id="tts-provider-key-wrap"',
+        'id="tts-sub-edge"',
+        'id="tts-sub-openai"',
+        'id="tts-sub-fish"',
+        'id="tts-sub-sf-fish"',
+        'id="tts-sub-sovits"',
+        # View 1: Task Manager
+        'id="view-task-manager"',
+        'id="input-source-path"',
+        'id="pick-local-btn"',
+        'id="input-sub-path"',
+        'id="quick-ytb-res"',
+        'id="quick-ytb-cookies"',
+        'id="upload-dropzone"',
+        'id="input-file-upload"',
+        'id="task-src-lang"',
+        'id="task-tgt-lang"',
+        'id="task-stage"',
+        'id="task-autorun"',
+        'id="create-task-btn"',
+        'id="task-list"',
+        'id="empty-state"',
+        # View 2: Sticky Monitor
+        'id="view-task-detail"',
+        'class="sticky-monitor"',
+        'id="btn-back-to-tasks"',
+        'id="active-task-title"',
+        'id="active-task-state-badge"',
+        'id="btn-pause"',
+        'id="btn-stop"',
+        'id="btn-run-subtitles"',
+        'id="btn-run-transcribe"',
+        'id="btn-run-dubbing"',
+        'id="btn-resume"',
+        'id="btn-delete-task"',
+        'class="monitor-body"',
+        'class="monitor-video-wrap"',
+        'id="monitor-placeholder"',
+        'id="video-main-preview"',
+        'id="active-task-meta"',
+        'id="mon-src-sub"',
+        'id="mon-src-dub"',
+        'id="active-step-label"',
+        'id="sub-video-badge"',
+        'id="dub-video-badge"',
+        'id="active-progress-pct"',
+        'id="active-progress-bar"',
+        'id="pause-banner"',
+        'id="btn-save-and-resume"',
+        'id="error-banner"',
+        # 6-Step Waterfall
+        'id="linear-waterfall"',
+        'id="wf-stage-1"',
+        'id="wf-sum-1"',
+        'id="wf-body-1"',
+        'id="audio-stems-box"',
+        'id="wf-stage-2"',
+        'id="wf-body-2"',
+        'id="stage2-utt-count"',
+        'data-stage="asr"',
+        'data-stage="split"',
+        'id="wf-stage-3"',
+        'id="wf-body-3"',
+        'id="add-term-row-btn"',
+        'id="save-terms-btn"',
+        'id="save-terms-rerun-btn"',
+        'id="terms-tbody"',
+        'id="wf-stage-4"',
+        'id="wf-body-4"',
+        'id="utt-search-input"',
+        'id="sync-tgt-to-tts-btn"',
+        'id="save-utterances-btn"',
+        'id="save-utt-rerun-btn"',
+        'id="utterances-tbody"',
+        'id="wf-stage-5"',
+        'id="btn-dl-sub-zip"',
+        'id="wf-body-5"',
+        'data-stage="sub_split"',
+        'data-stage="sub_video"',
+        'id="download-links-row"',
+        'id="wf-stage-6"',
+        'id="wf-body-6"',
+        'id="truncated-banner"',
+        'id="btn-jump-utterances"',
+        'id="btn-stage6-start-dub"',
+        'data-stage="dub_tts"',
+        'id="btn-clean-dub"',
+        # Dialogs & Modern Web
+        'id="glossary-dialog"',
+        'id="settings-dialog"',
+        'closedby="any"',
+        'class="table-wrapper"',
+    ]
+    for anchor in required_dom_anchors:
+        assert anchor in res_root.text, f"Spec anchor missing in GET /: {anchor}"
+
+    # 2. Mount local video task (with Chinese characters in title to verify RFC 5987 Content-Disposition)
     res_task = client.post(
         "/api/tasks",
-        json={"source": str(sample_video), "title": "Demo Video", "autorun": False},
+        json={
+            "source": str(sample_video),
+            "title": "大模型课程 Demo",
+            "autorun": False,
+        },
     )
     assert res_task.status_code == 202
-    task_id = res_task.json()["task_id"]
+    task_data = res_task.json()
+    task_id = task_data["task_id"]
+    assert "stages_done" in task_data
+    assert "truncated" in task_data
+
+    # 2b. Subtitle ZIP download endpoint with non-ASCII title
+    ws_demo = TaskWorkspace(output_root / task_id)
+    (ws_demo.root / "src.srt").write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8"
+    )
+    (ws_demo.root / "trans.srt").write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\n你好\n", encoding="utf-8"
+    )
+    res_zip = client.get(f"/api/tasks/{task_id}/subtitles.zip")
+    assert res_zip.status_code == 200
+    assert res_zip.headers["content-type"] == "application/zip"
+    assert "filename*=UTF-8''" in res_zip.headers["content-disposition"]
+
+    # 2c. Inactive task control guards (pause / resume / stop on idle task must return 409)
+    assert client.post(f"/api/tasks/{task_id}/pause").status_code == 409
+    assert client.post(f"/api/tasks/{task_id}/resume").status_code == 409
+    assert client.post(f"/api/tasks/{task_id}/stop").status_code == 409
+
+    # 2d. Reject unsupported upload format before creating workspace directory
+    existing_dirs = set(output_root.iterdir())
+    res_bad_upload = client.post(
+        "/api/tasks/upload",
+        files={"file": ("malware.exe", b"MZ-fake-binary", "application/octet-stream")},
+        data={"autorun": "false"},
+    )
+    assert res_bad_upload.status_code == 422
+    assert set(output_root.iterdir()) == existing_dirs
 
     # 3. Round-trip terms
     res_put_terms = client.put(
         f"/api/tasks/{task_id}/terms",
         json={
             "summary": "AI demo",
-            "terms": [{"src": "LLM", "tgt": "大语言模型", "aliases": ["L L M"], "note": "AI", "fix_source": False}],
+            "terms": [
+                {
+                    "src": "LLM",
+                    "tgt": "大语言模型",
+                    "aliases": ["L L M"],
+                    "note": "AI",
+                    "fix_source": False,
+                }
+            ],
         },
     )
     assert res_put_terms.status_code == 200
@@ -410,7 +659,12 @@ def test_threadpool_workers_inherit_workspace_and_config_overrides(tmp_path: Pat
     ws = TaskWorkspace(tmp_path / "output" / "worker_task")
     ws.ensure_dirs()
 
-    with workspace_context(ws), config_utils.task_config_context({"target_language": "Español", "max_workers": 2}):
+    with (
+        workspace_context(ws),
+        config_utils.task_config_context(
+            {"target_language": "Español", "max_workers": 2}
+        ),
+    ):
         with ThreadPoolExecutor(max_workers=2) as pool:
             f_path = pool.submit(resolve_task_path, "output/log/terminology.json")
             f_lang = pool.submit(config_utils.load_key, "target_language")
@@ -421,15 +675,25 @@ def test_threadpool_workers_inherit_workspace_and_config_overrides(tmp_path: Pat
     assert lang_in_child == "Español"
 
 
-def test_multi_task_isolation_fix_source_and_inline_tts_text_flow(tmp_path: Path, monkeypatch):
+def test_multi_task_isolation_fix_source_and_inline_tts_text_flow(
+    tmp_path: Path, monkeypatch
+):
     """Two task workspaces stay isolated; fix_source rewrites aliases; inline src/tts_text edits flow into Step 6 & 8."""
-    from core import _4_2_translate, _6_gen_sub, _8_1_audio_task, _8_2_dub_chunks, pipeline
+    from core import (
+        _4_2_translate,
+        _6_gen_sub,
+        _8_1_audio_task,
+        _8_2_dub_chunks,
+        pipeline,
+    )
 
     output_root = tmp_path / "output"
     output_root.mkdir()
     monkeypatch.setattr("core.workspace.OUTPUT_ROOT", output_root)
     monkeypatch.setattr(api, "OUTPUT", output_root)
-    monkeypatch.setattr("core.workspace.GLOBAL_GLOSSARY_CSV", tmp_path / "glossary" / "custom_terms.csv")
+    monkeypatch.setattr(
+        "core.workspace.GLOBAL_GLOSSARY_CSV", tmp_path / "glossary" / "custom_terms.csv"
+    )
 
     ws_a = TaskWorkspace(output_root / "task_a")
     ws_b = TaskWorkspace(output_root / "task_b")
@@ -445,7 +709,9 @@ def test_multi_task_isolation_fix_source_and_inline_tts_text_flow(tmp_path: Path
     ]
     ws_a.save_words(words_a)
     pd.DataFrame(words_a).to_excel(ws_a.log_dir / "cleaned_chunks.xlsx", index=False)
-    (ws_a.log_dir / "split_by_meaning.txt").write_text("We use pie torch.\n", encoding="utf-8")
+    (ws_a.log_dir / "split_by_meaning.txt").write_text(
+        "We use pie torch.\n", encoding="utf-8"
+    )
     ws_a.save_utterances(
         [
             {
@@ -464,7 +730,15 @@ def test_multi_task_isolation_fix_source_and_inline_tts_text_flow(tmp_path: Path
     )
     ws_a.save_terms(
         "DL course",
-        [{"src": "PyTorch", "tgt": "PyTorch", "aliases": ["pie torch"], "note": "", "fix_source": True}],
+        [
+            {
+                "src": "PyTorch",
+                "tgt": "PyTorch",
+                "aliases": ["pie torch"],
+                "note": "",
+                "fix_source": True,
+            }
+        ],
     )
 
     with workspace_context(ws_a):
@@ -473,9 +747,9 @@ def test_multi_task_isolation_fix_source_and_inline_tts_text_flow(tmp_path: Path
         assert ws_a.load_utterances()[0]["src"] == "We use PyTorch."
 
     # Prepare translation_results.xlsx in task_a, then edit src, tgt, and tts_text via FastAPI
-    pd.DataFrame([{"Source": "We use PyTorch.", "Translation": "我们使用PyTorch。"}]).to_excel(
-        ws_a.log_dir / "translation_results.xlsx", index=False
-    )
+    pd.DataFrame(
+        [{"Source": "We use PyTorch.", "Translation": "我们使用PyTorch。"}]
+    ).to_excel(ws_a.log_dir / "translation_results.xlsx", index=False)
     client = TestClient(api.app)
     res_edit = client.put(
         "/api/tasks/task_a/utterances",
@@ -504,8 +778,12 @@ def test_multi_task_isolation_fix_source_and_inline_tts_text_flow(tmp_path: Path
         _5_split_sub.split_for_sub_main()
         _6_gen_sub.align_timestamp_main()
         # Display trans.srt has tgt ("我们使用PyTorch 2.0"), while trans_subs_for_audio.srt has tts_text!
-        assert "我们使用PyTorch 2.0" in (ws_a.root / "trans.srt").read_text(encoding="utf-8")
-        assert "我们使用派托奇二点零，非常快。" in (ws_a.audio_dir / "trans_subs_for_audio.srt").read_text(encoding="utf-8")
+        assert "我们使用PyTorch 2.0" in (ws_a.root / "trans.srt").read_text(
+            encoding="utf-8"
+        )
+        assert "我们使用派托奇二点零，非常快。" in (
+            ws_a.audio_dir / "trans_subs_for_audio.srt"
+        ).read_text(encoding="utf-8")
 
         # Step 8.1 and 8.2 in task_a must read task_a's files and preserve spoken tts_text without touching task_b
         sr = 16000
@@ -523,7 +801,13 @@ def test_multi_task_isolation_fix_source_and_inline_tts_text_flow(tmp_path: Path
     # Global glossary GET/PUT, nested audio/dub.wav file download, and DELETE task_b
     (ws_a.audio_dir / "dub.wav").write_bytes(b"RIFF-dub-wav")
     assert client.get("/api/tasks/task_a/files/audio/dub.wav").status_code == 200
-    assert client.put("/api/glossary", json={"terms": [{"src": "CUDA", "tgt": "CUDA架构", "aliases": []}]}).status_code == 200
+    assert (
+        client.put(
+            "/api/glossary",
+            json={"terms": [{"src": "CUDA", "tgt": "CUDA架构", "aliases": []}]},
+        ).status_code
+        == 200
+    )
     assert client.get("/api/glossary").json()["terms"][0]["src"] == "CUDA"
     assert client.delete("/api/tasks/task_b").status_code == 200
     assert not ws_b.root.exists()

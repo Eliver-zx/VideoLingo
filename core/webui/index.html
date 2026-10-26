@@ -3,7 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
+  <meta name="color-scheme" content="light">
+  <script>
+    try {
+      document.querySelector('meta[name="color-scheme"]').content = localStorage.getItem("color-scheme") ?? "light";
+    } catch (_) {}
+  </script>
   <title>VideoLingo Studio</title>
   <style>
     *, *::before, *::after {
@@ -14,156 +19,341 @@
 
     :root {
       color-scheme: light dark;
-      --bg-canvas-light: #f6f7f9;
-      --bg-canvas-dark: #0f1117;
-      --bg-surface-light: #ffffff;
-      --bg-surface-dark: #181b24;
-      --bg-muted-light: #eef1f6;
-      --bg-muted-dark: #222634;
-      --text-primary-light: #111827;
-      --text-primary-dark: #f3f4f6;
-      --text-secondary-light: #4b5563;
-      --text-secondary-dark: #9ca3af;
-      --border-light: #e2e8f0;
-      --border-dark: #2d3345;
-      --brand-light: #2563eb;
-      --brand-dark: #60a5fa;
-      --brand-text-light: #ffffff;
-      --brand-text-dark: #0b132b;
-      --success-light: #059669;
-      --success-dark: #34d399;
-      --warn-light: #d97706;
-      --warn-dark: #fbbf24;
-      --danger-light: #dc2626;
-      --danger-dark: #f87171;
+      &:has(> head > meta[name="color-scheme"][content="dark"]) {
+        color-scheme: dark;
+      }
+      &:has(> head > meta[name="color-scheme"][content="light"]) {
+        color-scheme: light;
+      }
 
-      --bg-canvas: var(--bg-canvas-light);
-      --bg-surface: var(--bg-surface-light);
-      --bg-muted: var(--bg-muted-light);
-      --text-primary: var(--text-primary-light);
-      --text-secondary: var(--text-secondary-light);
-      --border-color: var(--border-light);
-      --brand: var(--brand-light);
-      --brand-text: var(--brand-text-light);
-      --success: var(--success-light);
-      --warn: var(--warn-light);
-      --danger: var(--danger-light);
+      /* Crisp Daylight Editorial Light Palette (Default) */
+      --bg-canvas-light: #f6f7f9;
+      --bg-surface-light: #ffffff;
+      --bg-elevated-light: #f9fafb;
+      --bg-muted-light: #f1f3f6;
+      --bg-hover-light: #ebedf2;
+
+      --text-primary-light: #111318;
+      --text-secondary-light: #4b5362;
+      --text-muted-light: #7c8596;
+
+      --border-light: #e4e7ec;
+      --border-strong-light: #cfd5df;
+
+      --brand-light: #1d4ed8;
+      --brand-hover-light: #1e40af;
+      --brand-soft-light: #eff4ff;
+      --brand-border-light: #bfdbfe;
+      --brand-text-light: #ffffff;
+
+      --success-light: #047857;
+      --success-soft-light: #ecfdf5;
+      --success-border-light: #a7f3d0;
+
+      --warn-light: #b45309;
+      --warn-soft-light: #fffbeb;
+      --warn-border-light: #fde68a;
+
+      --danger-light: #b91c1c;
+      --danger-soft-light: #fef2f2;
+      --danger-border-light: #fecaca;
+
+      /* Dark Palette (Optional Override) */
+      --bg-canvas-dark: #0c0e12;
+      --bg-surface-dark: #13161c;
+      --bg-elevated-dark: #181c24;
+      --bg-muted-dark: #1f242f;
+      --bg-hover-dark: #272d3b;
+
+      --text-primary-dark: #f1f3f7;
+      --text-secondary-dark: #9ba3b2;
+      --text-muted-dark: #687080;
+
+      --border-dark: #252b37;
+      --border-strong-dark: #353d4e;
+
+      --brand-dark: #3b82f6;
+      --brand-hover-dark: #2563eb;
+      --brand-soft-dark: #172554;
+      --brand-border-dark: #1e3a8a;
+      --brand-text-dark: #ffffff;
+
+      --success-dark: #10b981;
+      --success-soft-dark: #064e3b;
+      --success-border-dark: #065f46;
+
+      --warn-dark: #f59e0b;
+      --warn-soft-dark: #451a03;
+      --warn-border-dark: #78350f;
+
+      --danger-dark: #ef4444;
+      --danger-soft-dark: #450a0a;
+      --danger-border-dark: #7f1d1d;
+
+      --bg-canvas: light-dark(var(--bg-canvas-light), var(--bg-canvas-dark));
+      --bg-surface: light-dark(var(--bg-surface-light), var(--bg-surface-dark));
+      --bg-elevated: light-dark(var(--bg-elevated-light), var(--bg-elevated-dark));
+      --bg-muted: light-dark(var(--bg-muted-light), var(--bg-muted-dark));
+      --bg-hover: light-dark(var(--bg-hover-light), var(--bg-hover-dark));
+
+      --text-primary: light-dark(var(--text-primary-light), var(--text-primary-dark));
+      --text-secondary: light-dark(var(--text-secondary-light), var(--text-secondary-dark));
+      --text-muted: light-dark(var(--text-muted-light), var(--text-muted-dark));
+
+      --border-color: light-dark(var(--border-light), var(--border-dark));
+      --border-strong: light-dark(var(--border-strong-light), var(--border-strong-dark));
+
+      --brand: light-dark(var(--brand-light), var(--brand-dark));
+      --brand-hover: light-dark(var(--brand-hover-light), var(--brand-hover-dark));
+      --brand-soft: light-dark(var(--brand-soft-light), var(--brand-soft-dark));
+      --brand-border: light-dark(var(--brand-border-light), var(--brand-border-dark));
+      --brand-text: light-dark(var(--brand-text-light), var(--brand-text-dark));
+
+      --success: light-dark(var(--success-light), var(--success-dark));
+      --success-soft: light-dark(var(--success-soft-light), var(--success-soft-dark));
+      --success-border: light-dark(var(--success-border-light), var(--success-border-dark));
+
+      --warn: light-dark(var(--warn-light), var(--warn-dark));
+      --warn-soft: light-dark(var(--warn-soft-light), var(--warn-soft-dark));
+      --warn-border: light-dark(var(--warn-border-light), var(--warn-border-dark));
+
+      --danger: light-dark(var(--danger-light), var(--danger-dark));
+      --danger-soft: light-dark(var(--danger-soft-light), var(--danger-soft-dark));
+      --danger-border: light-dark(var(--danger-border-light), var(--danger-border-dark));
+
+      --shadow-xs: light-dark(0 1px 2px rgba(16, 24, 40, 0.03), 0 1px 2px rgba(0, 0, 0, 0.25));
+      --shadow-sm: light-dark(0 1px 3px rgba(16, 24, 40, 0.05), 0 1px 2px rgba(16, 24, 40, 0.03), 0 2px 6px rgba(0, 0, 0, 0.35));
+      --shadow-lg: light-dark(0 16px 36px -6px rgba(16, 24, 40, 0.12), 0 4px 12px -2px rgba(16, 24, 40, 0.06), 0 20px 44px rgba(0, 0, 0, 0.65));
+
+      --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+      --scrollbar-thumb: light-dark(#cfd5df, #353d4e);
+      --scrollbar-track: transparent;
       accent-color: var(--brand);
     }
 
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg-canvas: var(--bg-canvas-dark);
-        --bg-surface: var(--bg-surface-dark);
-        --bg-muted: var(--bg-muted-dark);
-        --text-primary: var(--text-primary-dark);
-        --text-secondary: var(--text-secondary-dark);
-        --border-color: var(--border-dark);
-        --brand: var(--brand-dark);
-        --brand-text: var(--brand-text-dark);
-        --success: var(--success-dark);
-        --warn: var(--warn-dark);
-        --danger: var(--danger-dark);
+    aside.sidebar,
+    main.workspace,
+    .table-wrapper,
+    dialog {
+      scrollbar-width: thin;
+      scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+    }
+
+    @supports not (scrollbar-color: auto) {
+      aside.sidebar::-webkit-scrollbar,
+      main.workspace::-webkit-scrollbar,
+      .table-wrapper::-webkit-scrollbar,
+      dialog::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      aside.sidebar::-webkit-scrollbar-thumb,
+      main.workspace::-webkit-scrollbar-thumb,
+      .table-wrapper::-webkit-scrollbar-thumb,
+      dialog::-webkit-scrollbar-thumb {
+        background: var(--scrollbar-thumb);
+        border-radius: 4px;
+      }
+      aside.sidebar::-webkit-scrollbar-track,
+      main.workspace::-webkit-scrollbar-track,
+      .table-wrapper::-webkit-scrollbar-track,
+      dialog::-webkit-scrollbar-track {
+        background: var(--scrollbar-track);
       }
     }
 
-    @supports (color: light-dark(red, blue)) {
-      :root {
-        --bg-canvas: light-dark(var(--bg-canvas-light), var(--bg-canvas-dark));
-        --bg-surface: light-dark(var(--bg-surface-light), var(--bg-surface-dark));
-        --bg-muted: light-dark(var(--bg-muted-light), var(--bg-muted-dark));
-        --text-primary: light-dark(var(--text-primary-light), var(--text-primary-dark));
-        --text-secondary: light-dark(var(--text-secondary-light), var(--text-secondary-dark));
-        --border-color: light-dark(var(--border-light), var(--border-dark));
-        --brand: light-dark(var(--brand-light), var(--brand-dark));
-        --brand-text: light-dark(var(--brand-text-light), var(--brand-text-dark));
-        --success: light-dark(var(--success-light), var(--success-dark));
-        --warn: light-dark(var(--warn-light), var(--warn-dark));
-        --danger: light-dark(var(--danger-light), var(--danger-dark));
-      }
+    h1, h2, h3, h4, h5, h6 {
+      text-wrap: balance;
     }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+      font-family: var(--font-sans);
       background-color: var(--bg-canvas);
       color: var(--text-primary);
       line-height: 1.5;
       min-block-size: 100vh;
       display: flex;
       flex-direction: column;
+      -webkit-font-smoothing: antialiased;
     }
 
+    svg.icon {
+      inline-size: 15px;
+      block-size: 15px;
+      stroke: currentColor;
+      stroke-width: 1.75;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+      flex-shrink: 0;
+    }
+
+    svg.icon-sm {
+      inline-size: 13px;
+      block-size: 13px;
+    }
+
+    /* ─── Top Navigation Bar ─── */
     header.topbar {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0.75rem 1.25rem;
+      min-block-size: 52px;
+      padding-block: 0.45rem;
+      padding-inline: 1.25rem;
       background: var(--bg-surface);
       border-block-end: 1px solid var(--border-color);
-      gap: 1rem;
+      gap: 0.75rem;
+      position: sticky;
+      inset-block-start: 0;
+      z-index: 40;
+      flex-wrap: wrap;
+    }
+
+    .brand-cluster {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      flex-shrink: 0;
+    }
+
+    .brand-logo {
+      block-size: 24px;
+      inline-size: auto;
+      display: block;
+      transition: filter 0.15s ease;
+    }
+
+    :root:has(> head > meta[name="color-scheme"][content="dark"]) .brand-logo {
+      filter: brightness(0) invert(1) opacity(0.92);
+    }
+
+    .brand-divider {
+      inline-size: 1px;
+      block-size: 16px;
+      background: var(--border-color);
+      flex-shrink: 0;
     }
 
     .brand-title {
       display: flex;
       align-items: center;
-      gap: 0.6rem;
-      font-size: 1.15rem;
-      font-weight: 700;
+      gap: 0.45rem;
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      letter-spacing: -0.01em;
+      white-space: nowrap;
     }
 
-    .sse-pill {
-      font-size: 0.75rem;
-      padding: 0.15rem 0.55rem;
-      border-radius: 999px;
+    .version-tag {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      font-weight: 500;
+      padding: 0.08rem 0.4rem;
+      border-radius: 4px;
       background: var(--bg-muted);
       color: var(--text-secondary);
       border: 1px solid var(--border-color);
+      white-space: nowrap;
+    }
+
+    .sse-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.74rem;
+      font-weight: 500;
+      padding: 0.16rem 0.55rem;
+      border-radius: 999px;
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+      border: 1px solid var(--border-color);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .sse-dot {
+      inline-size: 6px;
+      block-size: 6px;
+      border-radius: 50%;
+      background: var(--warn);
     }
 
     .sse-pill.connected {
       color: var(--success);
-      border-color: var(--success);
+      background: var(--success-soft);
+      border-color: var(--success-border);
     }
 
-    .layout {
-      display: grid;
-      grid-template-columns: 340px 1fr;
+    .sse-pill.connected .sse-dot {
+      background: var(--success);
+    }
+
+    /* ─── Studio NLE Workbench Shell ─── */
+    .app-shell {
       flex: 1;
-      min-block-size: 0;
+      display: grid;
+      grid-template-columns: 364px minmax(0, 1fr);
+      block-size: calc(100vh - 52px);
+      overflow: hidden;
     }
 
-    @media (max-width: 960px) {
-      .layout {
+    @media (max-width: 1024px) {
+      .app-shell {
         grid-template-columns: 1fr;
+        block-size: auto;
+        overflow: visible;
+      }
+      aside.sidebar {
+        order: 2;
+        border-inline-end: none;
+        border-block-start: 1px solid var(--border-color);
+      }
+      main.workspace {
+        order: 1;
       }
     }
 
     aside.sidebar {
       background: var(--bg-surface);
       border-inline-end: 1px solid var(--border-color);
-      padding: 1rem;
+      padding: 0.9rem 0.95rem 1.25rem;
       display: flex;
       flex-direction: column;
-      gap: 1rem;
+      gap: 0.75rem;
       overflow-y: auto;
     }
 
     main.workspace {
-      padding: 1.25rem;
+      padding: 1.25rem 1.5rem 2.5rem;
       display: flex;
       flex-direction: column;
-      gap: 1rem;
+      gap: 1.1rem;
       overflow-y: auto;
     }
 
+    /* ─── Surfaces & Cards ─── */
     .card {
       background: var(--bg-surface);
       border: 1px solid var(--border-color);
-      border-radius: 0.6rem;
-      padding: 1rem;
+      border-radius: 8px;
+      padding: 1rem 1.15rem;
       display: flex;
       flex-direction: column;
       gap: 0.75rem;
+      box-shadow: var(--shadow-xs);
+    }
+
+    .card-subtle {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 0.7rem 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
     }
 
     .card-header {
@@ -172,15 +362,89 @@
       justify-content: space-between;
       gap: 0.5rem;
       font-weight: 600;
-      font-size: 0.95rem;
+      font-size: 0.9rem;
+      color: var(--text-primary);
     }
 
+    .section-kicker {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+
+    /* ─── Accordion Panels (Left Sidebar Settings) ─── */
+    details.acc-panel {
+      border: 1px solid var(--border-color);
+      border-radius: 7px;
+      background: var(--bg-surface);
+      overflow: hidden;
+    }
+
+    details.acc-panel summary {
+      padding: 0.6rem 0.8rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      cursor: pointer;
+      background: var(--bg-elevated);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      user-select: none;
+      list-style: none;
+      transition: background-color 0.12s;
+    }
+
+    details.acc-panel summary:hover {
+      background: var(--bg-muted);
+    }
+
+    details.acc-panel summary::-webkit-details-marker {
+      display: none;
+    }
+
+    details.acc-panel summary::after {
+      content: "";
+      inline-size: 6px;
+      block-size: 6px;
+      border-inline-end: 1.5px solid var(--text-secondary);
+      border-block-end: 1.5px solid var(--text-secondary);
+      transform: rotate(45deg);
+      transition: transform 0.15s ease;
+      margin-inline-end: 2px;
+    }
+
+    details.acc-panel[open] summary::after {
+      transform: rotate(-135deg);
+    }
+
+    details.acc-panel[open] summary {
+      border-block-end: 1px solid var(--border-color);
+    }
+
+    .acc-body {
+      padding: 0.75rem 0.8rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+
+    /* ─── Form Fields & Typography ─── */
     label.field {
       display: flex;
       flex-direction: column;
       gap: 0.25rem;
-      font-size: 0.82rem;
+      font-size: 0.78rem;
+      font-weight: 500;
       color: var(--text-secondary);
+    }
+
+    .field-hint {
+      font-size: 0.71rem;
+      color: var(--text-muted);
+      font-weight: 400;
     }
 
     input[type="text"],
@@ -189,34 +453,94 @@
     select,
     textarea {
       width: 100%;
-      padding: 0.45rem 0.6rem;
+      padding: 0.4rem 0.6rem;
       border: 1px solid var(--border-color);
-      border-radius: 0.4rem;
-      background: var(--bg-canvas);
+      border-radius: 6px;
+      background: var(--bg-surface);
       color: var(--text-primary);
-      font-size: 0.88rem;
+      font-size: 0.82rem;
       font-family: inherit;
+      transition: border-color 0.12s, box-shadow 0.12s;
     }
 
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 14%, transparent);
+    }
+
+    input[type="color"] {
+      inline-size: 32px;
+      block-size: 26px;
+      padding: 2px;
+      border: 1px solid var(--border-color);
+      border-radius: 5px;
+      background: var(--bg-surface);
+      cursor: pointer;
+    }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.6rem;
+      font-size: 0.79rem;
+      color: var(--text-primary);
+      padding: 0.18rem 0;
+    }
+
+    .toggle-row > span {
+      flex: 1;
+      min-inline-size: 0;
+      line-height: 1.35;
+    }
+
+    input[type="checkbox"] {
+      inline-size: 15px;
+      block-size: 15px;
+      flex-shrink: 0;
+      cursor: pointer;
+      margin: 0;
+    }
+
+    textarea.utt-cell {
+      field-sizing: content;
+      min-block-size: 3.35rem;
+      line-height: 1.45;
+      padding: 0.38rem 0.55rem;
+      resize: vertical;
+      font-size: 0.8rem;
+    }
+
+    /* ─── Clean Buttons ─── */
     button {
       cursor: pointer;
-      padding: 0.45rem 0.8rem;
-      border-radius: 0.4rem;
+      padding: 0.38rem 0.72rem;
+      border-radius: 6px;
       border: 1px solid var(--border-color);
-      background: var(--bg-muted);
+      background: var(--bg-surface);
       color: var(--text-primary);
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       font-weight: 500;
-      transition: opacity 0.15s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.35rem;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+      box-shadow: var(--shadow-xs);
     }
 
     button:hover:not(:disabled) {
-      opacity: 0.88;
+      background: var(--bg-elevated);
+      border-color: var(--border-strong);
     }
 
     button:disabled {
       opacity: 0.45;
       cursor: not-allowed;
+      box-shadow: none;
     }
 
     button.primary {
@@ -225,132 +549,507 @@
       border-color: var(--brand);
     }
 
+    button.primary:hover:not(:disabled) {
+      background: var(--brand-hover);
+      border-color: var(--brand-hover);
+    }
+
     button.success {
       background: var(--success);
-      color: #fff;
+      color: #ffffff;
       border-color: var(--success);
     }
 
     button.danger {
-      background: transparent;
+      background: var(--bg-surface);
       color: var(--danger);
-      border-color: var(--danger);
+      border-color: var(--danger-border);
+    }
+
+    button.danger:hover:not(:disabled) {
+      background: var(--danger-soft);
+    }
+
+    button.sm {
+      padding: 0.25rem 0.55rem;
+      font-size: 0.75rem;
+      border-radius: 5px;
     }
 
     .row {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
+      gap: 0.45rem;
       flex-wrap: wrap;
     }
 
     .grid-2 {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 0.6rem;
+      gap: 0.65rem;
     }
 
-    .task-list {
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.65rem;
+    }
+
+    @media (max-width: 780px) {
+      .grid-2, .grid-3 {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* ─── Dropzone ─── */
+    .dropzone {
+      border: 1px dashed var(--border-strong);
+      border-radius: 6px;
+      padding: 0.85rem 1rem;
+      text-align: center;
+      background: var(--bg-elevated);
+      cursor: pointer;
+      transition: border-color 0.15s, background-color 0.15s;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      align-items: center;
+      justify-content: center;
+      gap: 0.25rem;
+      min-block-size: 96px;
     }
 
-    .task-item {
-      padding: 0.65rem 0.75rem;
-      border-radius: 0.5rem;
+    .dropzone:hover, .dropzone.dragover {
+      border-color: var(--brand);
+      background: var(--brand-soft);
+      color: var(--brand);
+    }
+
+    /* ─── Task Management Grid Cards ─── */
+    .task-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+      gap: 0.85rem;
+    }
+
+    .task-card {
+      padding: 0.9rem 1rem;
+      border-radius: 8px;
       border: 1px solid var(--border-color);
-      background: var(--bg-canvas);
+      background: var(--bg-surface);
       cursor: pointer;
       display: flex;
       flex-direction: column;
-      gap: 0.3rem;
+      gap: 0.55rem;
+      transition: border-color 0.14s, box-shadow 0.14s, transform 0.14s;
+      box-shadow: var(--shadow-xs);
     }
 
-    .task-item.active {
+    .task-card:hover {
       border-color: var(--brand);
-      box-shadow: 0 0 0 1px var(--brand);
+      box-shadow: var(--shadow-sm);
     }
 
-    .task-item-top {
+    .task-card-top {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: space-between;
-      gap: 0.4rem;
-      font-size: 0.88rem;
-      font-weight: 600;
+      gap: 0.5rem;
     }
 
-    .task-item-title {
+    .task-card-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text-primary);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
     .badge {
-      font-size: 0.72rem;
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      font-weight: 500;
       padding: 0.1rem 0.45rem;
-      border-radius: 0.3rem;
+      border-radius: 4px;
       background: var(--bg-muted);
       color: var(--text-secondary);
       white-space: nowrap;
+      border: 1px solid var(--border-color);
     }
 
-    .badge.running { color: var(--brand); }
-    .badge.paused { color: var(--warn); }
-    .badge.completed { color: var(--success); }
-    .badge.error { color: var(--danger); }
+    .badge.running { color: var(--brand); background: var(--brand-soft); border-color: var(--brand-border); }
+    .badge.paused { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-border); }
+    .badge.completed { color: var(--success); background: var(--success-soft); border-color: var(--success-border); }
+    .badge.error { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-border); }
 
-    progress {
-      width: 100%;
-      block-size: 0.55rem;
+    .progress-track {
+      inline-size: 100%;
+      block-size: 5px;
       border-radius: 999px;
+      background: var(--bg-muted);
+      overflow: hidden;
     }
 
-    .tabs {
+    .progress-fill {
+      block-size: 100%;
+      background: var(--brand);
+      border-radius: 999px;
+      transition: width 0.25s ease;
+    }
+
+    .mini-dots {
       display: flex;
-      gap: 0.4rem;
-      border-block-end: 1px solid var(--border-color);
-      padding-block-end: 0.4rem;
+      align-items: center;
+      gap: 0.28rem;
     }
 
-    .tab-btn {
+    .mini-dot {
+      inline-size: 18px;
+      block-size: 4px;
+      border-radius: 2px;
+      background: var(--border-color);
+    }
+
+    .mini-dot.done {
+      background: var(--success);
+    }
+
+    .mini-dot.active {
+      background: var(--brand);
+    }
+
+    /* ─── Sticky Compact Media Bar (Top of Detail View) ─── */
+    .sticky-monitor {
+      position: sticky;
+      inset-block-start: -1.25rem;
+      z-index: 25;
+      background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 0.7rem 0.95rem;
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+    }
+
+    .monitor-body {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      gap: 0.95rem;
+      align-items: center;
+    }
+
+    @media (max-width: 820px) {
+      .monitor-body {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .monitor-video-wrap {
+      position: relative;
+      border-radius: 6px;
+      overflow: hidden;
+      background: radial-gradient(circle at 50% 35%, #1e293b 0%, #0f172a 100%);
+      border: 1px solid var(--border-color);
+      aspect-ratio: 16 / 9;
+    }
+
+    .monitor-placeholder {
+      position: absolute;
+      inset: 0 0 34px 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.22rem;
+      color: rgba(255, 255, 255, 0.72);
+      font-size: 0.68rem;
+      pointer-events: none;
+      text-align: center;
+      padding: 0.4rem;
+    }
+
+    .monitor-video-wrap video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    /* ─── 6-Stage Linear Waterfall Flow ─── */
+    .waterfall {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      padding-inline-start: 1.5rem;
+    }
+
+    .waterfall::before {
+      content: "";
+      position: absolute;
+      inset-inline-start: 0.55rem;
+      inset-block-start: 1.2rem;
+      inset-block-end: 1.2rem;
+      inline-size: 2px;
+      background: var(--border-color);
+      z-index: 0;
+    }
+
+    .wf-stage {
+      position: relative;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      box-shadow: var(--shadow-xs);
+      transition: border-color 0.15s, box-shadow 0.15s, opacity 0.15s;
+    }
+
+    .wf-stage::before {
+      content: "";
+      position: absolute;
+      inset-inline-start: -1.32rem;
+      inset-block-start: 1.1rem;
+      inline-size: 10px;
+      block-size: 10px;
+      border-radius: 50%;
+      background: var(--bg-surface);
+      border: 2px solid var(--border-strong);
+      z-index: 1;
+    }
+
+    .wf-stage:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      inset-inline-start: calc(-1.32rem + 4px);
+      inset-block-start: calc(1.1rem + 10px);
+      block-size: calc(100% + 0.85rem - 10px);
+      inline-size: 2px;
+      background: transparent;
+      z-index: 0;
+    }
+
+    .wf-stage.done:not(:last-child)::after {
+      background: var(--success);
+      opacity: 0.55;
+    }
+
+    .wf-stage.done {
+      border-color: var(--border-color);
+    }
+
+    .wf-stage.done::before {
+      background: var(--success);
+      border-color: var(--success);
+    }
+
+    .wf-stage.active {
+      border-color: var(--brand);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .wf-stage.active::before {
+      background: var(--brand);
+      border-color: var(--brand);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 22%, transparent);
+    }
+
+    .wf-stage.paused-checkpoint {
+      border-color: var(--warn);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .wf-stage.paused-checkpoint::before {
+      background: var(--warn);
+      border-color: var(--warn);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 24%, transparent);
+    }
+
+    .wf-stage.locked {
+      opacity: 0.62;
+      background: var(--bg-elevated);
+    }
+
+    .wf-header {
+      padding: 0.75rem 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      cursor: pointer;
+      user-select: none;
+      border-radius: 7px;
+      transition: background-color 0.12s;
+    }
+
+    .wf-header:hover {
+      background: color-mix(in srgb, var(--bg-elevated) 65%, transparent);
+    }
+
+    .wf-header-left {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      min-inline-size: 0;
+      flex: 1;
+    }
+
+    .wf-num {
+      font-family: var(--font-mono);
+      font-size: 0.73rem;
+      font-weight: 600;
+      padding: 0.12rem 0.42rem;
+      border-radius: 4px;
+      background: var(--bg-muted);
+      color: var(--text-secondary);
+      border: 1px solid var(--border-color);
+      flex-shrink: 0;
+    }
+
+    .wf-stage.done .wf-num {
+      color: var(--success);
+      background: var(--success-soft);
+      border-color: var(--success-border);
+    }
+
+    .wf-stage.active .wf-num {
+      color: var(--brand);
+      background: var(--brand-soft);
+      border-color: var(--brand-border);
+    }
+
+    .wf-stage.paused-checkpoint .wf-num {
+      color: var(--warn);
+      background: var(--warn-soft);
+      border-color: var(--warn-border);
+    }
+
+    .wf-title {
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      flex-shrink: 0;
+    }
+
+    .wf-summary {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .wf-body {
+      padding: 0 1rem 1rem;
+      border-block-start: 1px solid var(--border-color);
+      padding-block-start: 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    /* ─── Subtitle Style Live Preview Box ─── */
+    .sub-preview-stage {
+      position: relative;
+      min-block-size: 108px;
+      border-radius: 6px;
+      background: linear-gradient(180deg, #1e2430 0%, #11151c 100%);
+      border: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 1.65rem 0.65rem 0.6rem;
+      overflow: hidden;
+      gap: 0.18rem;
+    }
+
+    .sub-preview-label {
+      position: absolute;
+      inset-block-start: 6px;
+      inset-inline-start: 8px;
+      font-family: var(--font-mono);
+      font-size: 0.62rem;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.7);
+      background: rgba(15, 23, 42, 0.65);
+      padding: 1px 6px;
+      border-radius: 3px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      letter-spacing: 0.03em;
+      pointer-events: none;
+    }
+
+    #sub-preview-trans {
+      font-weight: 600;
+      text-align: center;
+      padding: 1px 7px;
+      border-radius: 3px;
+      line-height: 1.3;
+    }
+
+    #sub-preview-src {
+      text-align: center;
+      line-height: 1.25;
+    }
+
+    /* ─── Segmented Switcher ─── */
+    .segmented {
+      display: inline-flex;
+      gap: 0.2rem;
+      background: var(--bg-muted);
+      padding: 0.18rem;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+    }
+
+    .seg-btn {
       background: transparent;
       border: none;
-      padding: 0.4rem 0.75rem;
-      border-radius: 0.4rem;
+      box-shadow: none;
+      padding: 0.22rem 0.55rem;
+      border-radius: 4px;
       color: var(--text-secondary);
+      font-size: 0.74rem;
+      font-weight: 500;
+    }
+
+    .seg-btn.active {
+      background: var(--bg-surface);
+      color: var(--text-primary);
       font-weight: 600;
+      box-shadow: var(--shadow-xs);
     }
 
-    .tab-btn.active {
-      background: var(--bg-muted);
-      color: var(--brand);
-    }
-
-    /* Responsive Table (modern-web-guidance: responsive-table) */
+    /* ─── Responsive Table (modern-web-guidance: responsive-table) ─── */
     .table-wrapper {
       overflow: auto;
       max-inline-size: 100%;
-      max-block-size: min(520px, 72vh);
+      max-block-size: min(440px, 60vh);
       container-type: inline-size;
       border: 1px solid var(--border-color);
-      border-radius: 0.5rem;
+      border-radius: 7px;
+      background: var(--bg-surface);
     }
 
     table.data-table {
       width: 100%;
       border-collapse: separate;
       border-spacing: 0;
-      font-size: 0.85rem;
+      font-size: 0.81rem;
     }
 
     table.data-table caption {
       text-align: start;
-      padding: 0.5rem 0.75rem;
+      padding: 0.45rem 0.75rem;
       font-weight: 600;
+      font-size: 0.75rem;
       color: var(--text-secondary);
-      background: var(--bg-muted);
+      background: var(--bg-elevated);
       border-block-end: 1px solid var(--border-color);
     }
 
@@ -358,15 +1057,21 @@
       position: sticky;
       inset-block-start: 0;
       z-index: 2;
-      background: var(--bg-muted);
+      background: var(--bg-elevated);
     }
 
     table.data-table th,
     table.data-table td {
-      padding: 0.45rem 0.6rem;
+      padding: 0.42rem 0.65rem;
       border-block-end: 1px solid var(--border-color);
       text-align: start;
       vertical-align: middle;
+    }
+
+    table.data-table thead th {
+      font-size: 0.74rem;
+      font-weight: 600;
+      color: var(--text-secondary);
     }
 
     table.data-table tbody th {
@@ -376,6 +1081,93 @@
       background: var(--bg-surface);
       font-weight: 600;
       white-space: nowrap;
+    }
+
+    table.data-table tbody tr {
+      transition: background-color 0.1s;
+    }
+
+    table.data-table tbody tr:hover,
+    table.data-table tbody tr:hover th {
+      background: color-mix(in srgb, var(--bg-elevated) 75%, var(--bg-surface));
+    }
+
+    table.data-table tbody tr.active-cue,
+    table.data-table tbody tr.active-cue th {
+      background: var(--brand-soft);
+    }
+
+    table.data-table tbody tr.truncated-row,
+    table.data-table tbody tr.truncated-row th {
+      background: color-mix(in srgb, var(--warn-soft) 55%, var(--bg-surface));
+    }
+
+    table.data-table tbody tr.truncated-row textarea[data-ufield="tts_text"] {
+      border-color: var(--warn-border);
+      background: color-mix(in srgb, var(--warn-soft) 28%, var(--bg-surface));
+    }
+
+    .utt-cell-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .utt-meta-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.4rem;
+      font-family: var(--font-mono);
+      font-size: 0.67rem;
+      color: var(--text-muted);
+      padding-inline: 0.1rem;
+    }
+
+    .artifact-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.28rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      font-size: 0.76rem;
+      font-weight: 500;
+      text-decoration: none;
+      transition: border-color 0.12s, background-color 0.12s, box-shadow 0.12s;
+    }
+
+    .artifact-chip:hover {
+      border-color: var(--brand);
+      background: var(--brand-soft);
+      color: var(--brand);
+      box-shadow: var(--shadow-xs);
+    }
+
+    .artifact-chip .chip-tag {
+      font-family: var(--font-mono);
+      font-size: 0.63rem;
+      font-weight: 600;
+      padding: 0.04rem 0.34rem;
+      border-radius: 3px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+      text-transform: uppercase;
+    }
+
+    .artifact-chip.primary-chip {
+      border-color: var(--brand-border);
+      background: var(--brand-soft);
+      color: var(--brand);
+    }
+
+    .artifact-chip.primary-chip .chip-tag {
+      background: var(--brand);
+      color: var(--brand-text);
+      border-color: var(--brand);
     }
 
     @container (width < 600px) {
@@ -410,46 +1202,110 @@
       table.data-table td:nth-child(5)::before { content: var(--label-5, "") ": "; font-weight: 600; }
     }
 
-    /* Modal Dialog (modern-web-guidance: light-dismiss-a-dialog) */
+    /* ─── Modal Dialog with Top-Layer Animation ─── */
     dialog {
       margin: auto;
       padding: 1.25rem;
       border: 1px solid var(--border-color);
-      border-radius: 0.75rem;
+      border-radius: 10px;
       background: var(--bg-surface);
       color: var(--text-primary);
-      max-inline-size: min(720px, 94vw);
+      max-inline-size: min(980px, 95vw);
       inline-size: 100%;
-      max-block-size: 88vh;
+      max-block-size: 86vh;
       overflow-y: auto;
+      box-shadow: var(--shadow-lg);
+      opacity: 0;
+      transform: scale(0.97);
+      transition-property: opacity, transform, display, overlay;
+      transition-duration: 0.2s;
+      transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+      transition-behavior: allow-discrete;
     }
 
     dialog::backdrop {
-      background-color: rgba(0, 0, 0, 0.55);
+      background-color: rgba(15, 23, 42, 0);
       backdrop-filter: blur(2px);
+      transition-property: background-color, display, overlay;
+      transition-duration: 0.2s;
+      transition-timing-function: ease-out;
+      transition-behavior: allow-discrete;
     }
 
-    .video-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 1rem;
+    :is(dialog[open]):where(:not([data-closing])) {
+      opacity: 1;
+      transform: scale(1);
+
+      @starting-style {
+        opacity: 0;
+        transform: scale(0.97);
+      }
+
+      &::backdrop {
+        background-color: rgba(15, 23, 42, 0.42);
+
+        @starting-style {
+          background-color: rgba(15, 23, 42, 0);
+        }
+      }
     }
 
-    video, audio {
+    @media (prefers-reduced-motion: reduce) {
+      dialog {
+        transform: none;
+        transition-duration: 0.08s;
+      }
+      @starting-style {
+        dialog[open] {
+          transform: none;
+        }
+      }
+    }
+
+    audio {
       width: 100%;
-      border-radius: 0.45rem;
-      background: #000;
+      block-size: 30px;
+    }
+
+    .audio-stems-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(195px, 1fr));
+      gap: 0.55rem;
+    }
+
+    .stem-card {
+      padding: 0.5rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-elevated);
+      display: flex;
+      flex-direction: column;
+      gap: 0.28rem;
+      font-size: 0.75rem;
+      color: var(--text-secondary);
     }
 
     .alert-banner {
-      padding: 0.7rem 0.9rem;
-      border-radius: 0.5rem;
-      border: 1px solid var(--warn);
-      background: var(--bg-muted);
+      padding: 0.55rem 0.8rem;
+      border-radius: 6px;
+      border: 1px solid var(--warn-border);
+      background: var(--warn-soft);
+      color: var(--warn);
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 0.75rem;
+      font-size: 0.8rem;
+    }
+
+    .alert-banner.error {
+      border-color: var(--danger-border);
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+
+    .mono {
+      font-family: var(--font-mono);
     }
 
     .hidden {
@@ -459,207 +1315,827 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand-title">
-      <span>🎬 VideoLingo Studio</span>
-      <span id="sse-indicator" class="sse-pill">SSE 连接中...</span>
+    <div class="brand-cluster">
+      <img class="brand-logo" src="data:image/png;base64,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" alt="VideoLingo">
+      <div class="brand-divider"></div>
+      <div class="brand-title">
+        <span>VideoLingo Studio</span>
+        <span class="version-tag">v3.0.0</span>
+      </div>
+      <span id="sse-indicator" class="sse-pill">
+        <span class="sse-dot"></span>
+        <span id="sse-text">连接中</span>
+      </span>
     </div>
+
     <div class="row">
-      <button id="open-glossary-btn" type="button">📚 全局术语库</button>
-      <button id="open-settings-btn" type="button">⚙️ 全局配置 (config.yaml)</button>
+      <button id="nav-tasks-btn" type="button" class="sm">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        <span data-i18n="nav_task_manager">任务管理</span>
+        <span id="queue-count" class="badge" style="padding:0 0.35rem;">0</span>
+      </button>
+
+      <select id="ui-lang-select" style="width:auto; padding:0.32rem 0.6rem; font-size:0.78rem;" aria-label="Display Language">
+        <option value="zh-CN">简体中文</option>
+        <option value="en">English</option>
+        <option value="zh-HK">繁體中文</option>
+        <option value="ja">日本語</option>
+        <option value="es">Español</option>
+        <option value="fr">Français</option>
+        <option value="ru">Русский</option>
+      </select>
+
+      <button id="open-glossary-btn" type="button">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
+        <span data-i18n="btn_global_glossary">全局术语库</span>
+      </button>
+      <button id="open-settings-btn" type="button">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span data-i18n="btn_global_settings">全局配置与外观</span>
+      </button>
+      <a href="https://github.com/Huanshere/VideoLingo" target="_blank" rel="noopener" style="text-decoration:none;">
+        <button type="button" title="GitHub Repository">
+          <svg class="icon" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          <span>GitHub</span>
+        </button>
+      </a>
     </div>
   </header>
 
-  <div class="layout">
-    <!-- 左侧：导入任务与串行队列 -->
+  <div class="app-shell">
+    <!-- 左侧栏：保留完整实时管线参数配置抽屉（不用动） -->
     <aside class="sidebar">
-      <section class="card">
-        <div class="card-header">
-          <span>➕ 新建视频任务（零拷贝入队）</span>
+      <!-- 3. 实时管线参数抽屉（自动同步至 config.yaml） -->
+      <div style="display:flex; flex-direction:column; gap:0.55rem;">
+        <div class="row" style="justify-content:space-between; padding-inline:0.15rem;">
+          <span class="section-kicker" data-i18n="sidebar_cfg_kicker">管线参数配置 (实时同步 config.yaml)</span>
+          <span id="sidebar-save-toast" class="mono" style="font-size:0.7rem; color:var(--success);"></span>
         </div>
-        <label class="field">
-          <span>本地音视频/字幕路径（同盘 0 秒硬链接/克隆）</span>
-          <div class="row" style="flex-wrap:nowrap;">
-            <input id="input-source-path" type="text" placeholder="/Users/.../video.mp4 或 YouTube URL">
-            <button id="pick-local-btn" type="button" title="调用系统原生文件选择器">浏览...</button>
-          </div>
-        </label>
-        <label class="field">
-          <span>可选：外部 SRT 字幕路径或直接上传视频文件</span>
-          <input id="input-sub-path" type="text" placeholder="可选：/Users/.../sub.srt">
-          <input id="input-file-upload" type="file" accept="video/*,audio/*,.srt">
-        </label>
-        <div class="grid-2">
-          <label class="field">
-            <span>源语言 (Recog Lang)</span>
-            <select id="task-src-lang">
-              <option value="auto">自动检测 (auto)</option>
-              <option value="en" selected>English (en)</option>
-              <option value="zh">中文 (zh)</option>
-              <option value="ja">日本語 (ja)</option>
-              <option value="ko">한국어 (ko)</option>
-              <option value="es">Español (es)</option>
-              <option value="fr">Français (fr)</option>
-              <option value="de">Deutsch (de)</option>
-              <option value="ru">Русский (ru)</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>目标语言 (Target Lang)</span>
-            <input id="task-tgt-lang" type="text" value="简体中文">
-          </label>
-        </div>
-        <div class="grid-2">
-          <label class="field">
-            <span>执行阶段</span>
-            <select id="task-stage">
-              <option value="all">字幕 + 配音 (all)</option>
-              <option value="subtitles" selected>仅生成字幕 (subtitles)</option>
-              <option value="transcribe">仅识别源字幕 (transcribe)</option>
-              <option value="dubbing">仅生成配音 (dubbing)</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>入队后自动开始</span>
-            <select id="task-autorun">
-              <option value="true" selected>自动串行执行</option>
-              <option value="false">仅创建任务目录</option>
-            </select>
-          </label>
-        </div>
-        <button id="create-task-btn" class="primary" type="button">加入串行任务队列</button>
-      </section>
 
-      <section class="card" style="flex:1; min-block-size:200px;">
-        <div class="card-header">
-          <span>📋 任务工作区列表</span>
-          <span id="queue-count" class="badge">0 个任务</span>
-        </div>
-        <div id="task-list" class="task-list"></div>
-      </section>
+        <!-- 折叠面板 A: LLM 配置 -->
+        <details class="acc-panel" open>
+          <summary>LLM 模型与接口配置</summary>
+          <div class="acc-body">
+            <label class="field">
+              <span>API Key</span>
+              <input id="sb-api-key" type="password" placeholder="输入 LLM API 密钥" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>Base URL <span class="field-hint">(OpenAI 兼容端点)</span></span>
+              <input id="sb-api-base-url" type="text" placeholder="https://api.openai.com/v1">
+            </label>
+            <label class="field">
+              <span>Model <span class="field-hint">(可拉取列表或直接输入)</span></span>
+              <div class="row" style="flex-wrap:nowrap;">
+                <input id="sb-api-model" type="text" list="llm-models-datalist" placeholder="例如 claude-3-7-sonnet / gpt-4.1">
+                <datalist id="llm-models-datalist"></datalist>
+                <button id="btn-fetch-models" class="sm" type="button" title="从 /v1/models 拉取可用模型">获取列表</button>
+              </div>
+            </label>
+            <div class="row" style="justify-content:space-between;">
+              <label style="font-size:0.78rem; color:var(--text-secondary); display:flex; align-items:center; gap:0.35rem;">
+                <input id="sb-llm-json" type="checkbox"> JSON 模式支持
+              </label>
+              <label style="font-size:0.78rem; color:var(--text-secondary); display:flex; align-items:center; gap:0.35rem;">
+                并发线程 <input id="sb-max-workers" type="number" min="1" max="32" style="width:54px; padding:0.2rem 0.4rem;">
+              </label>
+            </div>
+            <button id="btn-check-api" class="sm" type="button" style="width:100%;">验证 API 连通性 (Check API)</button>
+            <div id="api-check-result" class="hidden" style="font-size:0.75rem; padding:0.4rem 0.55rem; border-radius:5px; background:var(--bg-muted);"></div>
+          </div>
+        </details>
+
+        <!-- 折叠面板 B: 字幕与语音识别 (ASR & Subtitles) -->
+        <details class="acc-panel">
+          <summary>语音识别 (ASR) 与字幕样式</summary>
+          <div class="acc-body">
+            <div class="grid-2">
+              <label class="field">
+                <span>ASR 运行环境</span>
+                <select id="sb-whisper-runtime">
+                  <option value="local">Local (本地)</option>
+                  <option value="elevenlabs">ElevenLabs</option>
+                  <option value="mai">MAI-Transcribe</option>
+                  <option value="deepgram">Deepgram</option>
+                  <option value="assembly">AssemblyAI</option>
+                  <option value="zero">Gladia Zero</option>
+                  <option value="replicate_parakeet">Replicate Parakeet</option>
+                  <option value="replicate_whisper">Replicate WhisperX</option>
+                </select>
+              </label>
+              <label class="field" id="wrap-local-backend">
+                <span>本地识别后端</span>
+                <select id="sb-whisper-backend">
+                  <option value="qwen">Qwen3-ASR</option>
+                  <option value="whisperx">WhisperX</option>
+                </select>
+              </label>
+            </div>
+
+            <!-- 动态 ASR 子配置区 -->
+            <div id="asr-sub-local" class="grid-2">
+              <label class="field">
+                <span>Qwen3 模型规格</span>
+                <select id="sb-qwen-model">
+                  <option value="1.7b">1.7B (高精)</option>
+                  <option value="0.6b">0.6B (快速)</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>推理引擎</span>
+                <select id="sb-qwen-engine">
+                  <option value="auto">auto (MLX 优先)</option>
+                  <option value="mlx">mlx</option>
+                  <option value="transformers">transformers</option>
+                </select>
+              </label>
+            </div>
+
+            <div id="asr-sub-cloud" class="hidden" style="display:flex; flex-direction:column; gap:0.45rem;">
+              <label class="field hidden" id="asr-field-elevenlabs">
+                <span>ElevenLabs API Key</span>
+                <input id="sb-elevenlabs-key" type="password">
+              </label>
+              <div class="hidden" id="asr-field-deepgram" style="display:flex; flex-direction:column; gap:0.4rem;">
+                <label class="field"><span>Deepgram API Key</span><input id="sb-deepgram-key" type="password"></label>
+                <label class="field"><span>Deepgram Model</span><input id="sb-deepgram-model" type="text" placeholder="nova-3"></label>
+              </div>
+              <div class="hidden" id="asr-field-assembly" style="display:flex; flex-direction:column; gap:0.4rem;">
+                <label class="field"><span>AssemblyAI API Key</span><input id="sb-assembly-key" type="password"></label>
+                <div class="grid-2">
+                  <label class="field"><span>Lang</span><input id="sb-assembly-lang" type="text" placeholder="en"></label>
+                  <label class="field"><span>Model</span><input id="sb-assembly-model" type="text" placeholder="universal"></label>
+                </div>
+              </div>
+              <label class="field hidden" id="asr-field-zero">
+                <span>Gladia Zero API Key</span>
+                <input id="sb-zero-key" type="password">
+              </label>
+              <label class="field hidden" id="asr-field-replicate">
+                <span>Replicate API Key</span>
+                <input id="sb-replicate-key" type="password">
+              </label>
+              <div class="hidden" id="asr-field-mai" style="display:flex; flex-direction:column; gap:0.4rem;">
+                <label class="field">
+                  <span>MAI 服务商</span>
+                  <select id="sb-mai-provider">
+                    <option value="azure">Azure Speech</option>
+                    <option value="openrouter">OpenRouter</option>
+                  </select>
+                </label>
+                <div id="mai-azure-box" style="display:flex; flex-direction:column; gap:0.4rem;">
+                  <label class="field"><span>Azure Speech 密钥</span><input id="sb-mai-key" type="password"></label>
+                  <label class="field">
+                    <span>Azure 区域或终结点</span>
+                    <div class="row" style="flex-wrap:nowrap;">
+                      <input id="sb-mai-region" type="text" placeholder="eastus 或留空自动检测">
+                      <button id="btn-detect-mai-region" class="sm" type="button">检测区域</button>
+                    </div>
+                  </label>
+                </div>
+                <label class="field hidden" id="mai-openrouter-box">
+                  <span>OpenRouter API 密钥</span>
+                  <input id="sb-mai-or-key" type="password">
+                </label>
+              </div>
+            </div>
+
+            <label class="field">
+              <span>翻译风格提示词 (Translation Style)</span>
+              <input id="sb-trans-style" type="text" placeholder="例如：口语化、简短自然、保留科技术语">
+            </label>
+
+            <div class="grid-2">
+              <label class="field">
+                <span>人声分离模型</span>
+                <select id="sb-sep-model">
+                  <option value="htdemucs">HTDemucs</option>
+                  <option value="mdx">MDX-Net</option>
+                  <option value="scnet">SCNet-Large</option>
+                  <option value="mel_band_roformer">Mel-RoFormer</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>单行最大字符</span>
+                <div class="row" style="flex-wrap:nowrap;">
+                  <input id="sb-sub-maxlen" type="number" min="20" max="200" value="75">
+                  <button id="btn-reset-maxlen" class="sm" type="button" title="恢复默认值 75">重置</button>
+                </div>
+              </label>
+            </div>
+
+            <div class="toggle-row">
+              <span>人声分离增强 (Vocal Separation)</span>
+              <input id="sb-demucs" type="checkbox">
+            </div>
+            <div class="toggle-row">
+              <span>烧录硬字幕进视频 (Burn-in Subtitles)</span>
+              <input id="sb-burn-subtitles" type="checkbox" checked>
+            </div>
+            <div class="toggle-row">
+              <span>FFmpeg 硬件编码加速 (VideoToolbox / NVENC)</span>
+              <input id="sb-ffmpeg-gpu" type="checkbox">
+            </div>
+            <div class="toggle-row">
+              <span>翻译前暂停审校术语表 (terms.json)</span>
+              <input id="sb-pause-before" type="checkbox">
+            </div>
+            <div class="toggle-row">
+              <span>翻译后暂停审校译文 (utterances.json)</span>
+              <input id="sb-pause-after" type="checkbox">
+            </div>
+
+            <!-- 烧录模式与实时字幕样式预览器 -->
+            <div id="burn-style-section" style="display:flex; flex-direction:column; gap:0.5rem; padding-block-start:0.4rem; border-block-start:1px solid var(--border-color);">
+              <div class="grid-2">
+                <label class="field">
+                  <span>字幕视频烧录模式</span>
+                  <select id="sb-burn-mode-sub">
+                    <option value="bilingual">双语字幕</option>
+                    <option value="translation">仅译文字幕</option>
+                    <option value="source">仅原文字幕</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>配音视频烧录模式</span>
+                  <select id="sb-burn-mode-dub">
+                    <option value="translation">仅译文字幕</option>
+                    <option value="bilingual">双语字幕</option>
+                    <option value="source">仅原文字幕</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="grid-2">
+                <div class="card-subtle" style="padding:0.5rem;">
+                  <strong style="font-size:0.74rem; color:var(--text-secondary);">译文字幕样式</strong>
+                  <input id="sb-tr-font" type="text" placeholder="默认系统字体" style="font-size:0.75rem; padding:0.26rem 0.45rem;">
+                  <div class="row" style="justify-content:space-between;">
+                    <label style="font-size:0.73rem; color:var(--text-secondary);">字号 <input id="sb-tr-size" type="number" min="8" max="60" value="17" style="width:50px; padding:0.18rem 0.35rem;"></label>
+                    <input id="sb-tr-color" type="color" value="#ffff00" title="译文颜色">
+                  </div>
+                </div>
+                <div class="card-subtle" style="padding:0.5rem;">
+                  <strong style="font-size:0.74rem; color:var(--text-secondary);">原文字幕样式</strong>
+                  <input id="sb-src-font" type="text" placeholder="默认系统字体" style="font-size:0.75rem; padding:0.26rem 0.45rem;">
+                  <div class="row" style="justify-content:space-between;">
+                    <label style="font-size:0.73rem; color:var(--text-secondary);">字号 <input id="sb-src-size" type="number" min="8" max="60" value="15" style="width:50px; padding:0.18rem 0.35rem;"></label>
+                    <input id="sb-src-color" type="color" value="#ffffff" title="原文颜色">
+                  </div>
+                </div>
+              </div>
+
+              <!-- 实时字幕视觉预览框 -->
+              <div class="sub-preview-stage">
+                <span class="sub-preview-label">ASS LIVE PREVIEW</span>
+                <div id="sub-preview-trans">欢迎使用 VideoLingo 智能双语字幕与配音工作台</div>
+                <div id="sub-preview-src">Welcome to VideoLingo bilingual subtitle & dubbing studio</div>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <!-- 折叠面板 C: 配音设置 (Dubbing & Provider Grouping) -->
+        <details class="acc-panel">
+          <summary>配音服务商与音色克隆 (TTS)</summary>
+          <div class="acc-body">
+            <div class="grid-2">
+              <label class="field">
+                <span>配音服务商</span>
+                <select id="sb-tts-provider">
+                  <option value="Microsoft Edge">Microsoft Edge</option>
+                  <option value="OpenLux">OpenLux / OpenAI</option>
+                  <option value="Fish Audio">Fish Audio</option>
+                  <option value="SiliconFlow">SiliconFlow (硅基流动)</option>
+                  <option value="302.ai">302.ai (F5-TTS)</option>
+                  <option value="Local service">本地服务 (GPT-SoVITS)</option>
+                  <option value="Custom provider">自定义服务 (Custom)</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>TTS 方法</span>
+                <select id="sb-tts-method">
+                  <option value="edge_tts">Edge TTS</option>
+                  <option value="openai_tts">OpenAI TTS</option>
+                  <option value="fish_audio">Fish Audio</option>
+                  <option value="sf_fish_tts">SiliconFlow Fish TTS</option>
+                  <option value="sf_cosyvoice2">SiliconFlow CosyVoice2</option>
+                  <option value="f5tts">F5-TTS</option>
+                  <option value="gpt_sovits">GPT-SoVITS</option>
+                  <option value="custom_tts">Custom TTS</option>
+                </select>
+              </label>
+            </div>
+
+            <!-- 服务商共享密钥 -->
+            <label class="field hidden" id="tts-provider-key-wrap">
+              <span id="tts-provider-key-label">服务商 API 密钥</span>
+              <input id="sb-tts-provider-key" type="password" placeholder="此服务商下的 TTS 方法共用">
+            </label>
+
+            <!-- 各 TTS 方法专属子项 -->
+            <div id="tts-sub-edge">
+              <label class="field">
+                <span>Edge TTS Voice</span>
+                <input id="sb-edge-voice" type="text" placeholder="zh-CN-XiaoxiaoNeural">
+              </label>
+            </div>
+
+            <div id="tts-sub-openai" class="hidden">
+              <label class="field">
+                <span>OpenAI Voice</span>
+                <input id="sb-openai-voice" type="text" placeholder="alloy / nova / shimmer">
+              </label>
+            </div>
+
+            <div id="tts-sub-fish" class="hidden" style="display:flex; flex-direction:column; gap:0.4rem;">
+              <label class="field">
+                <span>模式选择 (Mode)</span>
+                <select id="sb-fish-mode">
+                  <option value="clone">视频原声克隆 (Voice of the video)</option>
+                  <option value="preset">固定预设音色 (Fixed voice)</option>
+                </select>
+              </label>
+              <label class="field" id="fish-voice-id-wrap">
+                <span>音色 ID (fish.audio Voice ID)</span>
+                <input id="sb-fish-voice-id" type="text" placeholder="74c6aba5cbf94a15bbdc547ffce5cb38">
+              </label>
+            </div>
+
+            <div id="tts-sub-sf-fish" class="hidden" style="display:flex; flex-direction:column; gap:0.4rem;">
+              <label class="field">
+                <span>参考模式</span>
+                <select id="sb-sffish-mode">
+                  <option value="preset">预设 (Preset)</option>
+                  <option value="custom">稳定参考 (Refer_stable)</option>
+                  <option value="dynamic">动态参考 (Refer_dynamic)</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>预设 Voice</span>
+                <input id="sb-sffish-voice" type="text" placeholder="anna">
+              </label>
+            </div>
+
+            <div id="tts-sub-sovits" class="hidden" style="display:flex; flex-direction:column; gap:0.4rem;">
+              <label class="field">
+                <span>SoVITS 角色名 (Character)</span>
+                <input id="sb-sovits-char" type="text" placeholder="Huanyuv2">
+              </label>
+              <label class="field">
+                <span>参考音频模式 (Refer Mode)</span>
+                <select id="sb-sovits-mode">
+                  <option value="1">模式 1：仅用提供的参考音频</option>
+                  <option value="2">模式 2：用视频第一段音频作参考</option>
+                  <option value="3">模式 3：用视频每段音频作参考</option>
+                </select>
+              </label>
+            </div>
+          </div>
+        </details>
+      </div>
     </aside>
 
-    <!-- 右侧：当前任务控制台、内嵌术语/译文审校、成品预览 -->
+    <!-- 右侧主工作区：任务管理界面 (View 1) 与 6 步线性瀑布流详情页 (View 2) -->
     <main class="workspace">
-      <section id="empty-state" class="card">
-        <p style="color:var(--text-secondary);">请在左侧选择本地视频路径、上传文件或粘贴链接创建任务。所有任务均自动隔离在独立的 <code>output/&lt;task_id&gt;/</code> 目录中，无需手动归档。</p>
-      </section>
-
-      <div id="task-detail" class="hidden" style="display:flex; flex-direction:column; gap:1rem;">
-        <!-- 任务状态与控制栏 -->
+      <!-- =========================================================
+           VIEW 1: 任务管理界面 (Task Management View)
+           ========================================================= -->
+      <div id="view-task-manager" style="display:flex; flex-direction:column; gap:1.1rem;">
+        <!-- 1. 新建任务工作台卡片 -->
         <section class="card">
           <div class="card-header">
             <div>
-              <h2 id="active-task-title" style="font-size:1.1rem;">-</h2>
-              <small id="active-task-meta" style="color:var(--text-secondary);"></small>
+              <span class="section-kicker">NEW WORKSPACE TASK</span>
+              <h2 data-i18n="new_task_title" style="font-size:1.02rem; font-weight:600; margin-block-start:0.1rem;">新建音视频 / 字幕任务</h2>
             </div>
-            <div class="row">
-              <button id="btn-run-subtitles" class="primary" type="button">▶️ 运行字幕</button>
-              <button id="btn-run-dubbing" class="primary" type="button">🎙️ 运行配音</button>
-              <button id="btn-pause" type="button">⏸️ 暂停</button>
-              <button id="btn-resume" class="success hidden" type="button">▶️ 继续运行</button>
-              <button id="btn-stop" class="danger" type="button">⏹️ 停止</button>
-              <button id="btn-delete-task" class="danger" type="button" title="删除此任务工作区">🗑️ 删除任务</button>
+            <span class="badge" title="macOS APFS clonefile 或同盘硬链接零拷贝挂载">Zero-Copy Workspace</span>
+          </div>
+
+          <div class="grid-2" style="align-items:stretch;">
+            <!-- 左半侧：路径 / YouTube 输入 + 可选外部字幕 -->
+            <div style="display:flex; flex-direction:column; gap:0.6rem; justify-content:space-between;">
+              <label class="field">
+                <span data-i18n="source_path_label">本地媒体路径 或 YouTube 链接</span>
+                <div class="row" style="flex-wrap:nowrap;">
+                  <input id="input-source-path" type="text" placeholder="/Users/.../video.mp4 或 https://youtu.be/...">
+                  <button id="pick-local-btn" type="button" title="调用系统原生文件选择器" data-i18n="btn_browse">浏览</button>
+                </div>
+              </label>
+
+              <details class="acc-panel">
+                <summary style="padding:0.42rem 0.65rem; font-size:0.75rem; font-weight:500; color:var(--text-secondary);">可选：外部原文字幕 (.srt) 与 YouTube 下载参数</summary>
+                <div class="acc-body" style="padding:0.55rem 0.65rem;">
+                  <label class="field">
+                    <span>外部 SRT 路径（代替语音识别，保留原时间轴）</span>
+                    <input id="input-sub-path" type="text" placeholder="可选：/Users/.../sub.srt">
+                  </label>
+                  <div class="grid-2">
+                    <label class="field">
+                      <span>YouTube 分辨率</span>
+                      <select id="quick-ytb-res">
+                        <option value="1080">1080p Full HD</option>
+                        <option value="best">Best (最高画质)</option>
+                        <option value="360">360p (快速预览)</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Cookies 路径</span>
+                      <input id="quick-ytb-cookies" type="text" placeholder="可选 cookies.txt">
+                    </label>
+                  </div>
+                </div>
+              </details>
+            </div>
+
+            <!-- 右半侧：拖拽或点击上传区域 -->
+            <div id="upload-dropzone" class="dropzone">
+              <svg class="icon" viewBox="0 0 24 24" style="color:var(--text-muted);"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <div id="dropzone-label" data-i18n="dropzone_hint">拖拽本地音视频 / SRT 到此处，或点击上传</div>
+              <div class="mono" style="font-size:0.68rem; color:var(--text-muted);">MP4 · MOV · MKV · AVI · WEBM · MP3 · WAV · M4A · SRT</div>
+              <input id="input-file-upload" type="file" accept="video/*,audio/*,.srt" style="display:none;">
             </div>
           </div>
-          <div class="row" style="justify-content:space-between;">
-            <span id="active-step-label" style="font-size:0.88rem; font-weight:500;">就绪</span>
-            <span id="active-progress-pct" class="badge">0%</span>
-          </div>
-          <progress id="active-progress-bar" value="0" max="1"></progress>
-          <div id="pause-banner" class="alert-banner hidden">
-            <span id="pause-banner-text">⏸️ 任务已暂停等待人工审校，请在下方表格修改后点击「保存并继续」。</span>
-            <button id="btn-save-and-resume" class="success" type="button">✅ 保存修改并继续流水线</button>
-          </div>
-          <div id="error-banner" class="alert-banner hidden" style="border-color:var(--danger);">
-            <span id="error-banner-text" style="color:var(--danger);"></span>
+
+          <div style="display:grid; grid-template-columns: 1.05fr 1fr 1.65fr 1.35fr auto; gap:0.65rem; align-items:end;">
+            <label class="field">
+              <span data-i18n="recog_lang_label">识别语言 (Recog Lang)</span>
+              <select id="task-src-lang">
+                <option value="auto">Auto (自动检测)</option>
+                <option value="en" selected>English (en)</option>
+                <option value="zh">简体中文 (zh)</option>
+                <option value="yue">粵語 (yue)</option>
+                <option value="ja">日本語 (ja)</option>
+                <option value="ko">한국어 (ko)</option>
+                <option value="es">Español (es)</option>
+                <option value="fr">Français (fr)</option>
+                <option value="de">Deutsch (de)</option>
+                <option value="ru">Русский (ru)</option>
+                <option value="it">Italiano (it)</option>
+                <option value="pt">Português (pt)</option>
+                <option value="ar">العربية (ar)</option>
+                <option value="id">Bahasa Indonesia (id)</option>
+                <option value="th">ไทย (th)</option>
+                <option value="vi">Tiếng Việt (vi)</option>
+                <option value="tr">Türkçe (tr)</option>
+                <option value="hi">हिन्दी (hi)</option>
+                <option value="ms">Bahasa Melayu (ms)</option>
+                <option value="nl">Nederlands (nl)</option>
+                <option value="sv">Svenska (sv)</option>
+                <option value="da">Dansk (da)</option>
+                <option value="fi">Suomi (fi)</option>
+                <option value="pl">Polski (pl)</option>
+                <option value="cs">Čeština (cs)</option>
+                <option value="fil">Filipino (fil)</option>
+                <option value="fa">فارسی (fa)</option>
+                <option value="el">Ελληνικά (el)</option>
+                <option value="ro">Română (ro)</option>
+                <option value="hu">Magyar (hu)</option>
+                <option value="mk">Македонски (mk)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span data-i18n="target_lang_label">目标语言 (Target Lang)</span>
+              <input id="task-tgt-lang" type="text" value="简体中文" placeholder="自然语言描述，如 简体中文">
+            </label>
+            <label class="field">
+              <span data-i18n="exec_stage_label">流水线范围</span>
+              <select id="task-stage">
+                <option value="subtitles" selected>阶段 01–05 · 双语字幕成片</option>
+                <option value="all">阶段 01–06 · 字幕与配音全流程</option>
+                <option value="transcribe">阶段 01–02 · 仅转录原文字幕</option>
+                <option value="dubbing">阶段 06 · 仅生成配音成片</option>
+              </select>
+            </label>
+            <label class="field">
+              <span data-i18n="autorun_label">启动策略</span>
+              <select id="task-autorun">
+                <option value="true" selected>立即启动并进入流水线</option>
+                <option value="false">仅初始化任务工作区</option>
+              </select>
+            </label>
+            <button id="create-task-btn" class="primary" type="button" style="padding:0.46rem 0.9rem;">
+              <svg class="icon" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              <span data-i18n="btn_enqueue">创建任务并进入流水线</span>
+            </button>
           </div>
         </section>
 
-        <!-- 工作区标签页：成品预览 / 术语审校 / 译文与配音台词审校 / 阶段重跑 -->
+        <!-- 2. 任务工作区列表网格 -->
         <section class="card">
-          <div class="tabs" role="tablist">
-            <button class="tab-btn active" data-tab="tab-preview" type="button">🎥 预览与下载</button>
-            <button class="tab-btn" data-tab="tab-terms" type="button">📘 术语表审校 (terms.json)</button>
-            <button class="tab-btn" data-tab="tab-utterances" type="button">📝 译文与配音审校 (utterances.json)</button>
-            <button class="tab-btn" data-tab="tab-Invalidate" type="button">🔄 按阶段重跑 (DAG)</button>
+          <div class="card-header">
+            <div>
+              <span class="section-kicker">WORKSPACE QUEUE</span>
+              <h2 data-i18n="queue_title" style="font-size:0.98rem; font-weight:600; margin-block-start:0.1rem;">全部任务工作区</h2>
+            </div>
+            <span style="font-size:0.78rem; color:var(--text-secondary);">点击任意任务卡片进入 6 步线性瀑布流详情</span>
           </div>
 
-          <!-- Tab 1: 预览与下载 -->
-          <div id="tab-preview" class="tab-panel">
-            <div class="video-grid">
-              <div>
-                <h4 style="margin-block-end:0.4rem; font-size:0.88rem;">原始媒体 / 烧录字幕视频 (output_sub.mp4)</h4>
-                <video id="video-sub-preview" controls preload="metadata"></video>
+          <div id="empty-state" class="card-subtle hidden" style="padding:1.25rem; text-align:center;">
+            <strong style="font-size:0.88rem;">暂无任务工作区</strong>
+            <span style="font-size:0.78rem; color:var(--text-secondary);">在上方选择本地视频/音频或输入 YouTube 链接，创建后将自动进入该任务的线性流水线详情页。</span>
+          </div>
+
+          <div id="task-list" class="task-grid"></div>
+        </section>
+      </div>
+
+      <!-- =========================================================
+           VIEW 2: 任务详情页 — 顶部固定监视栏 + 6 步线性瀑布流
+           ========================================================= -->
+      <div id="view-task-detail" class="hidden" style="display:flex; flex-direction:column; gap:1rem;">
+        <!-- 顶部固定紧凑型视频预览与任务控制栏 -->
+        <section class="sticky-monitor">
+          <div class="row" style="justify-content:space-between;">
+            <div class="row" style="gap:0.6rem;">
+              <button id="btn-back-to-tasks" type="button" class="sm">
+                <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+                <span>返回任务管理</span>
+              </button>
+              <div class="brand-divider"></div>
+              <h2 id="active-task-title" style="font-size:0.98rem; font-weight:600;">-</h2>
+              <span id="active-task-state-badge" class="badge">idle</span>
+            </div>
+
+            <div class="row" style="gap:0.4rem;">
+              <button id="btn-run-subtitles" class="primary sm" type="button">
+                <svg class="icon icon-sm" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/></svg>
+                <span data-i18n="btn_start_sub">运行字幕流水线</span>
+              </button>
+              <button id="btn-run-transcribe" class="sm" type="button" title="仅生成原文字幕 src.srt" data-i18n="btn_transcribe_only">仅转录原文</button>
+              <button id="btn-run-dubbing" class="sm" type="button">
+                <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
+                <span data-i18n="btn_start_dub">运行配音流水线</span>
+              </button>
+              <button id="btn-pause" class="sm hidden" type="button">暂停</button>
+              <button id="btn-resume" class="success sm hidden" type="button">继续运行</button>
+              <button id="btn-stop" class="danger sm hidden" type="button">停止</button>
+              <button id="btn-delete-task" class="danger sm" type="button" title="删除此任务工作区">删除任务</button>
+            </div>
+          </div>
+
+          <div class="monitor-body">
+            <!-- 左侧紧凑视频播放器（支持点击字幕时间戳直接跳转对照） -->
+            <div class="monitor-video-wrap">
+              <div id="monitor-placeholder" class="monitor-placeholder">
+                <svg class="icon" viewBox="0 0 24 24" style="inline-size:20px; block-size:20px; opacity:0.85;"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                <span id="monitor-placeholder-text" class="mono">1920×1080 · PREVIEW MONITOR</span>
               </div>
-              <div>
-                <h4 style="margin-block-end:0.4rem; font-size:0.88rem;">配音合成视频 (output_dub.mp4)</h4>
-                <video id="video-dub-preview" controls preload="metadata"></video>
+              <video id="video-main-preview" controls preload="metadata"></video>
+            </div>
+
+            <!-- 右侧：视频源切换 + 实时进度条 + 检查点横幅 -->
+            <div style="display:flex; flex-direction:column; gap:0.5rem; min-inline-size:0;">
+              <div class="row" style="justify-content:space-between;">
+                <small id="active-task-meta" class="mono" style="color:var(--text-muted); font-size:0.73rem;"></small>
+                <div class="segmented" role="group" aria-label="Monitor Source">
+                  <button type="button" class="seg-btn active" id="mon-src-sub" data-src-mode="sub">源视频 / 字幕成片</button>
+                  <button type="button" class="seg-btn" id="mon-src-dub" data-src-mode="dub">配音合成成片</button>
+                </div>
               </div>
-            </div>
-            <div class="row" style="margin-block-start:0.85rem;" id="download-links-row"></div>
-          </div>
 
-          <!-- Tab 2: 术语表内嵌编辑器 -->
-          <div id="tab-terms" class="tab-panel hidden">
-            <div class="row" style="justify-content:space-between; margin-block-end:0.6rem;">
-              <span style="font-size:0.85rem; color:var(--text-secondary);">支持多对一 ASR 谐音映射（<code>aliases</code> 用 <code>|</code> 分隔）；勾选「修正原文」将自动替换原文字幕中的 ASR 错词。</span>
-              <div class="row">
-                <button id="add-term-row-btn" type="button">+ 新增术语</button>
-                <button id="save-terms-btn" class="primary" type="button">💾 保存术语表</button>
+              <div class="row" style="justify-content:space-between;">
+                <span id="active-step-label" style="font-size:0.8rem; font-weight:500; color:var(--text-secondary);">就绪</span>
+                <div class="row" style="gap:0.35rem;">
+                  <span id="sub-video-badge" class="badge">等待媒体</span>
+                  <span id="dub-video-badge" class="badge">待配音</span>
+                  <span id="active-progress-pct" class="badge">0%</span>
+                </div>
               </div>
-            </div>
-            <div tabindex="0" role="region" aria-labelledby="terms-table-caption" class="table-wrapper">
-              <table class="data-table" style="--label-2:'译名 tgt'; --label-3:'ASR 别名 aliases'; --label-4:'备注 note'; --label-5:'选项';">
-                <caption id="terms-table-caption">当前视频术语表（terms.json）</caption>
-                <thead>
-                  <tr>
-                    <th>标准原词 (src)</th>
-                    <th>目标译名 (tgt)</th>
-                    <th>ASR 变体/别名 (aliases)</th>
-                    <th>备注说明 (note)</th>
-                    <th>操作与全局同步</th>
-                  </tr>
-                </thead>
-                <tbody id="terms-tbody"></tbody>
-              </table>
-            </div>
-          </div>
 
-          <!-- Tab 3: 译文与配音台词内嵌编辑器 -->
-          <div id="tab-utterances" class="tab-panel hidden">
-            <div class="row" style="justify-content:space-between; margin-block-end:0.6rem;">
-              <span style="font-size:0.85rem; color:var(--text-secondary);">修改「显示译文 (tgt)」会重新切分字幕；修改「配音台词 (tts_text，保留标点)」会重新合成该句 TTS。</span>
-              <button id="save-utterances-btn" class="primary" type="button">💾 保存译文与配音台词</button>
-            </div>
-            <div tabindex="0" role="region" aria-labelledby="utt-table-caption" class="table-wrapper">
-              <table class="data-table" style="--label-2:'原文 src'; --label-3:'显示译文 tgt'; --label-4:'配音台词 tts_text';">
-                <caption id="utt-table-caption">逐句时间轴、显示译文与配音台词（utterances.json）</caption>
-                <thead>
-                  <tr>
-                    <th># / 时间轴</th>
-                    <th>原文 (src)</th>
-                    <th>显示译文 (tgt)</th>
-                    <th>配音台词 (tts_text)</th>
-                  </tr>
-                </thead>
-                <tbody id="utterances-tbody"></tbody>
-              </table>
-            </div>
-          </div>
+              <div class="progress-track">
+                <div id="active-progress-bar" class="progress-fill" style="width:0%;"></div>
+              </div>
 
-          <!-- Tab 4: 按阶段级联失效重跑 -->
-          <div id="tab-Invalidate" class="tab-panel hidden">
-            <p style="font-size:0.86rem; color:var(--text-secondary); margin-block-end:0.75rem;">
-              当修改了单句字幕长度（<code>max_length</code>）、字幕字体样式或切换了 TTS 音色后，可精确从对应阶段清理缓存并重跑，保留上游已完成的识别和翻译结果：
-            </p>
-            <div class="row">
-              <button class="rerun-stage-btn" data-stage="sub_split" type="button">✂️ 重新切分字幕 (Step 5~7)</button>
-              <button class="rerun-stage-btn" data-stage="sub_video" type="button">🎬 仅重压字幕视频 (Step 7)</button>
-              <button class="rerun-stage-btn" data-stage="dub_tts" type="button">🎙️ 清空 TTS 缓存并重配音 (Step 8~12)</button>
-              <button class="rerun-stage-btn" data-stage="translate" type="button">🌐 重新翻译 (Step 4.2~7)</button>
+              <!-- 暂停人工审校横幅 -->
+              <div id="pause-banner" class="alert-banner hidden">
+                <span id="pause-banner-text">任务已暂停在人工审校检查点，请在下方展开阶段核对后点击「保存并继续流水线」。</span>
+                <button id="btn-save-and-resume" class="success sm" type="button">保存修改并继续流水线</button>
+              </div>
+
+              <!-- 错误横幅 -->
+              <div id="error-banner" class="alert-banner error hidden">
+                <span id="error-banner-text"></span>
+              </div>
             </div>
           </div>
         </section>
+
+        <!-- =========================================================
+             6 步渐进式单页瀑布流 (Progressive Single-Page Waterfall)
+             ========================================================= -->
+        <div id="linear-waterfall" class="waterfall">
+
+          <!-- STAGE 01: 媒体挂载与音轨分离 -->
+          <article class="wf-stage" id="wf-stage-1" data-wf="1">
+            <header class="wf-header" data-toggle-wf="1">
+              <div class="wf-header-left">
+                <span class="wf-num">01</span>
+                <span class="wf-title">媒体挂载与音轨分离</span>
+                <span class="wf-summary" id="wf-sum-1">挂载本地/在线媒体并提取音频与伴奏</span>
+              </div>
+              <div class="row" onclick="event.stopPropagation();">
+                <span class="badge" id="wf-badge-1">就绪</span>
+                <button type="button" class="sm" data-toggle-wf="1">展开 / 收起</button>
+              </div>
+            </header>
+            <div class="wf-body" id="wf-body-1">
+              <div class="row" style="justify-content:space-between;">
+                <span style="font-size:0.79rem; color:var(--text-secondary);">
+                  源媒体零拷贝挂载于当前工作区，提取 <code class="mono">audio/raw.mp3</code> 并在开启人声分离时生成纯净人声与伴奏轨。
+                </span>
+              </div>
+              <div id="audio-stems-box" class="audio-stems-grid"></div>
+            </div>
+          </article>
+
+          <!-- STAGE 02: 词级识别与语义断句 -->
+          <article class="wf-stage" id="wf-stage-2" data-wf="2">
+            <header class="wf-header" data-toggle-wf="2">
+              <div class="wf-header-left">
+                <span class="wf-num">02</span>
+                <span class="wf-title">词级语音识别与语义断句</span>
+                <span class="wf-summary" id="wf-sum-2">生成 words.json 词级时间轴并按声学停顿与语义切分句子</span>
+              </div>
+              <div class="row" onclick="event.stopPropagation();">
+                <span class="badge" id="wf-badge-2">等待上游</span>
+                <button type="button" class="sm rerun-stage-btn" data-stage="asr" title="从语音识别重新执行">重跑识别</button>
+                <button type="button" class="sm rerun-stage-btn" data-stage="split" title="保留识别词表，重新执行 NLP + LLM 断句">重跑断句</button>
+                <button type="button" class="sm" data-toggle-wf="2">展开 / 收起</button>
+              </div>
+            </header>
+            <div class="wf-body hidden" id="wf-body-2">
+              <div class="grid-3">
+                <div class="card-subtle">
+                  <span class="section-kicker">WORDS ARTIFACT</span>
+                  <strong class="mono" style="font-size:0.86rem;">log/words.json</strong>
+                  <span style="font-size:0.75rem; color:var(--text-secondary);">词级时间戳与声学停顿间隔 (<code class="mono">&gt;=0.4s</code> 自动注入停顿提示符 <code class="mono">‖</code>)。</span>
+                </div>
+                <div class="card-subtle">
+                  <span class="section-kicker">UTTERANCES ARTIFACT</span>
+                  <strong class="mono" style="font-size:0.86rem;" id="stage2-utt-count">0 个语义句段</strong>
+                  <span style="font-size:0.75rem; color:var(--text-secondary);">NLP 标点恢复与 LLM 语义切分结果，作为下游翻译与时间轴对齐基准。</span>
+                </div>
+                <div class="card-subtle">
+                  <span class="section-kicker">STAGE ACTIONS</span>
+                  <div class="row" style="margin-block-start:0.2rem;">
+                    <button type="button" class="sm rerun-stage-btn" data-stage="asr">从 Step 2 重新识别 (asr)</button>
+                    <button type="button" class="sm rerun-stage-btn" data-stage="split">从 Step 3 重新断句 (split)</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- STAGE 03: 专业术语提取与审校 (terms.json) -->
+          <article class="wf-stage" id="wf-stage-3" data-wf="3">
+            <header class="wf-header" data-toggle-wf="3">
+              <div class="wf-header-left">
+                <span class="wf-num">03</span>
+                <span class="wf-title">专业术语提取与审校 (terms.json)</span>
+                <span class="wf-summary" id="wf-sum-3">提取领域专有名词、ASR 谐音别名与固定译名</span>
+              </div>
+              <div class="row" onclick="event.stopPropagation();">
+                <span class="badge" id="wf-badge-3">等待上游</span>
+                <button type="button" class="sm" id="btn-edit-stage-3" data-toggle-wf="3">编辑术语 / 重跑</button>
+              </div>
+            </header>
+            <div class="wf-body hidden" id="wf-body-3">
+              <div class="row" style="justify-content:space-between;">
+                <span style="font-size:0.79rem; color:var(--text-secondary);">
+                  支持多对一 ASR 谐音纠错（<code class="mono">aliases</code> 用 <code class="mono">|</code> 分隔，如 <code class="mono">pie torch</code> → <code class="mono">PyTorch</code>）；勾选「修正原文」自动替换原文字幕错词。
+                </span>
+                <div class="row">
+                  <button id="add-term-row-btn" class="sm" type="button">+ 新增术语</button>
+                  <button id="save-terms-btn" class="sm" type="button">仅保存术语表</button>
+                  <button id="save-terms-rerun-btn" class="primary sm" type="button">保存术语并重跑下游翻译</button>
+                </div>
+              </div>
+              <div tabindex="0" role="region" aria-labelledby="terms-table-caption" class="table-wrapper">
+                <table class="data-table" style="--label-2:'译名 tgt'; --label-3:'ASR 别名 aliases'; --label-4:'备注 note'; --label-5:'选项';">
+                  <caption id="terms-table-caption">当前视频专业术语表（terms.json）</caption>
+                  <thead>
+                    <tr>
+                      <th style="width:18%;">标准原词 (src)</th>
+                      <th style="width:20%;">目标译名 (tgt)</th>
+                      <th style="width:22%;">ASR 谐音 / 变体 (aliases)</th>
+                      <th style="width:22%;">上下文备注 (note)</th>
+                      <th style="width:18%; white-space:nowrap;">修正与全局入库</th>
+                    </tr>
+                  </thead>
+                  <tbody id="terms-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </article>
+
+          <!-- STAGE 04: 译文与配音台词审校 (utterances.json) -->
+          <article class="wf-stage" id="wf-stage-4" data-wf="4">
+            <header class="wf-header" data-toggle-wf="4">
+              <div class="wf-header-left">
+                <span class="wf-num">04</span>
+                <span class="wf-title">译文与配音台词审校 (utterances.json)</span>
+                <span class="wf-summary" id="wf-sum-4">三步直译-反思-意译，独立校对画面字幕 (tgt) 与配音口播词 (tts_text)</span>
+              </div>
+              <div class="row" onclick="event.stopPropagation();">
+                <span class="badge" id="wf-badge-4">等待上游</span>
+                <button type="button" class="sm rerun-stage-btn" data-stage="translate" title="使用最新术语表重新调用 LLM 翻译">重跑 LLM 翻译</button>
+                <button type="button" class="sm" id="btn-edit-stage-4" data-toggle-wf="4">编辑译文 / 重跑</button>
+              </div>
+            </header>
+            <div class="wf-body hidden" id="wf-body-4">
+              <div class="row" style="justify-content:space-between;">
+                <span style="font-size:0.79rem; color:var(--text-secondary);">
+                  点击左侧时间戳可直接跳转顶部视频画面对照；修改「显示译文 (tgt)」控制画面字幕，修改「配音台词 (tts_text)」控制 TTS 口播语音。
+                </span>
+                <div class="row">
+                  <input id="utt-search-input" type="text" placeholder="搜索原文或译文..." style="width:170px; padding:0.26rem 0.55rem; font-size:0.76rem;">
+                  <button id="sync-tgt-to-tts-btn" class="sm" type="button" title="将所有显示译文复制到配音台词">译文同步至配音词</button>
+                  <button id="save-utterances-btn" class="sm" type="button">仅保存修改</button>
+                  <button id="save-utt-rerun-btn" class="primary sm" type="button">保存并重跑后续压制</button>
+                </div>
+              </div>
+              <div tabindex="0" role="region" aria-labelledby="utt-table-caption" class="table-wrapper">
+                <table class="data-table" style="--label-2:'原文 src'; --label-3:'显示译文 tgt'; --label-4:'配音台词 tts_text';">
+                  <caption id="utt-table-caption">逐句时间轴、原文、显示译文与配音台词（utterances.json）</caption>
+                  <thead>
+                    <tr>
+                      <th style="width:120px;"># / 时间轴定位</th>
+                      <th>原文 (src)</th>
+                      <th>显示译文 (tgt)</th>
+                      <th>配音台词 (tts_text)</th>
+                    </tr>
+                  </thead>
+                  <tbody id="utterances-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </article>
+
+          <!-- STAGE 05: 双语切轴与字幕视频压制 (output_sub.mp4) -->
+          <article class="wf-stage" id="wf-stage-5" data-wf="5">
+            <header class="wf-header" data-toggle-wf="5">
+              <div class="wf-header-left">
+                <span class="wf-num">05</span>
+                <span class="wf-title">双语字幕切轴与成片烧录 (output_sub.mp4)</span>
+                <span class="wf-summary" id="wf-sum-5">自适应切分长句时间轴并执行单通 ASS 字幕压制</span>
+              </div>
+              <div class="row" onclick="event.stopPropagation();">
+                <span class="badge" id="wf-badge-5">等待上游</span>
+                <a id="btn-dl-sub-zip" href="#" download class="hidden" style="text-decoration:none;">
+                  <button type="button" class="primary sm">下载全部字幕 (.zip)</button>
+                </a>
+                <button type="button" class="sm" data-toggle-wf="5">展开 / 收起</button>
+              </div>
+            </header>
+            <div class="wf-body hidden" id="wf-body-5">
+              <div class="row" style="justify-content:space-between;">
+                <span style="font-size:0.79rem; color:var(--text-secondary);">
+                  调整左侧栏「每行最大字符 (<code class="mono">max_length</code>)」或「译文/原文字幕样式」后，可在此直接重跑切分或仅重压视频：
+                </span>
+                <div class="row">
+                  <button class="rerun-stage-btn sm" data-stage="sub_split" type="button">重新切分字幕轴 (sub_split)</button>
+                  <button class="rerun-stage-btn primary sm" data-stage="sub_video" type="button">重新烧录字幕成片 (sub_video)</button>
+                </div>
+              </div>
+              <div class="row" id="download-links-row"></div>
+            </div>
+          </article>
+
+          <!-- STAGE 06: TTS 音色克隆与配音合成成片 (output_dub.mp4) -->
+          <article class="wf-stage" id="wf-stage-6" data-wf="6">
+            <header class="wf-header" data-toggle-wf="6">
+              <div class="wf-header-left">
+                <span class="wf-num">06</span>
+                <span class="wf-title">TTS 音色克隆与配音混流成片 (output_dub.mp4)</span>
+                <span class="wf-summary" id="wf-sum-6">参考音轨提取、逐句 TTS 合成、静音修剪与无损混流</span>
+              </div>
+              <div class="row" onclick="event.stopPropagation();">
+                <span class="badge" id="wf-badge-6">可选阶段</span>
+                <button type="button" class="sm" data-toggle-wf="6">展开 / 收起</button>
+              </div>
+            </header>
+            <div class="wf-body hidden" id="wf-body-6">
+              <!-- 配音超长截断警告横幅 -->
+              <div id="truncated-banner" class="alert-banner hidden">
+                <span id="truncated-banner-text"></span>
+                <button id="btn-jump-utterances" class="sm" type="button">展开 Stage 04 精简配音词</button>
+              </div>
+
+              <div class="row" style="justify-content:space-between;">
+                <span style="font-size:0.79rem; color:var(--text-secondary);">
+                  切换左侧栏「配音服务商与音色克隆 (TTS)」或修改 Stage 04 配音词后，可一键清空旧配音片段并重新合成配音视频：
+                </span>
+                <div class="row">
+                  <button id="btn-stage6-start-dub" class="primary sm" type="button">运行配音流水线</button>
+                  <button class="rerun-stage-btn sm" data-stage="dub_tts" type="button">清空 TTS 并重新配音 (dub_tts)</button>
+                  <button id="btn-clean-dub" type="button" class="danger sm" title="清空配音缓存">清空配音缓存</button>
+                </div>
+              </div>
+            </div>
+          </article>
+
+        </div>
       </div>
     </main>
   </div>
@@ -668,23 +2144,23 @@
   <dialog id="glossary-dialog" closedby="any" aria-labelledby="glossary-dialog-title">
     <form method="dialog" id="glossary-form" style="display:flex; flex-direction:column; gap:0.85rem;">
       <div class="card-header">
-        <h2 id="glossary-dialog-title" style="font-size:1.05rem;">📚 全局术语库 (glossary/custom_terms.csv)</h2>
-        <button type="submit" value="cancel">✕</button>
+        <h2 id="glossary-dialog-title" style="font-size:0.98rem;">全局术语库 (glossary/custom_terms.csv)</h2>
+        <button type="submit" value="cancel" class="sm">关闭</button>
       </div>
       <div class="row" style="justify-content:space-between;">
-        <span style="font-size:0.82rem; color:var(--text-secondary);">全局术语会自动注入所有新视频任务的术语识别与翻译流程中。</span>
-        <button id="add-global-term-btn" type="button">+ 新增全局术语</button>
+        <span style="font-size:0.79rem; color:var(--text-secondary);">全局术语会自动注入所有新视频任务的术语提取、ASR 谐音纠错与翻译提示词中。</span>
+        <button id="add-global-term-btn" class="sm" type="button">+ 新增全局术语</button>
       </div>
       <div tabindex="0" role="region" aria-labelledby="global-terms-caption" class="table-wrapper">
         <table class="data-table" style="--label-2:'译名 tgt'; --label-3:'别名 aliases'; --label-4:'备注 note'; --label-5:'选项';">
           <caption id="global-terms-caption">跨任务复用的全局术语表</caption>
           <thead>
             <tr>
-              <th>标准原词 (src)</th>
-              <th>目标译名 (tgt)</th>
-              <th>ASR 变体/别名 (aliases)</th>
-              <th>备注说明 (note)</th>
-              <th>操作</th>
+              <th style="width:19%;">标准原词 (src)</th>
+              <th style="width:22%;">目标译名 (tgt)</th>
+              <th style="width:22%;">ASR 变体 / 别名 (aliases)</th>
+              <th style="width:23%;">备注说明 (note)</th>
+              <th style="width:14%; white-space:nowrap;">操作</th>
             </tr>
           </thead>
           <tbody id="global-terms-tbody"></tbody>
@@ -692,18 +2168,34 @@
       </div>
       <div class="row" style="justify-content:flex-end;">
         <button type="submit" value="cancel">取消</button>
-        <button id="save-global-glossary-btn" class="primary" type="button">💾 保存全局术语库</button>
+        <button id="save-global-glossary-btn" class="primary" type="button">保存全局术语库</button>
       </div>
     </form>
   </dialog>
 
-  <!-- 全局配置模态框 (modern-web-guidance: light-dismiss-a-dialog) -->
+  <!-- 全局配置与外观模态框 (modern-web-guidance: light-dismiss-a-dialog & dark-mode-toggle) -->
   <dialog id="settings-dialog" closedby="any" aria-labelledby="settings-dialog-title">
     <form method="dialog" id="settings-form" style="display:flex; flex-direction:column; gap:0.85rem;">
       <div class="card-header">
-        <h2 id="settings-dialog-title" style="font-size:1.05rem;">⚙️ 全局配置 (config.yaml 热更新)</h2>
-        <button type="submit" value="cancel">✕</button>
+        <h2 id="settings-dialog-title" style="font-size:0.98rem;">全局配置与外观偏好 (config.yaml)</h2>
+        <button type="submit" value="cancel" class="sm">关闭</button>
       </div>
+
+      <!-- 主题配色三态切换器 -->
+      <div class="card-subtle">
+        <div class="row" style="justify-content:space-between;">
+          <div>
+            <strong style="font-size:0.82rem;">界面外观主题 (Color Scheme)</strong>
+            <div style="font-size:0.74rem; color:var(--text-secondary);">默认启用浅色模式；可切换为深色剪辑室或跟随系统。</div>
+          </div>
+          <div class="row" role="group" aria-label="Color scheme">
+            <button type="button" class="theme-choice-btn sm" data-scheme="light">浅色模式</button>
+            <button type="button" class="theme-choice-btn sm" data-scheme="dark">深色模式</button>
+            <button type="button" class="theme-choice-btn sm" data-scheme="light dark">跟随系统</button>
+          </div>
+        </div>
+      </div>
+
       <div class="grid-2">
         <label class="field">
           <span>LLM API Base URL</span>
@@ -727,8 +2219,11 @@
             <option value="local">local (本地 Qwen3-ASR / WhisperX)</option>
             <option value="elevenlabs">elevenlabs</option>
             <option value="deepgram">deepgram</option>
-            <option value="mai">mai</option>
+            <option value="mai">mai (MAI-Transcribe-2)</option>
             <option value="assembly">assembly</option>
+            <option value="zero">zero (Gladia Zero)</option>
+            <option value="replicate_parakeet">replicate_parakeet</option>
+            <option value="replicate_whisper">replicate_whisper</option>
           </select>
         </label>
         <label class="field">
@@ -745,8 +2240,8 @@
         <label class="field">
           <span>烧录硬字幕 (burn_subtitles)</span>
           <select id="cfg-burn-subtitles">
-            <option value="true">开启 (极速单通 ASS 烧录)</option>
-            <option value="false">关闭 (仅导出 SRT / 软字幕)</option>
+            <option value="true">开启 (单通 ASS 烧录)</option>
+            <option value="false">关闭 (仅导出 SRT)</option>
           </select>
         </label>
         <label class="field">
@@ -766,6 +2261,7 @@
             <option value="sf_cosyvoice2">sf_cosyvoice2</option>
             <option value="gpt_sovits">gpt_sovits</option>
             <option value="f5tts">f5tts</option>
+            <option value="custom_tts">custom_tts</option>
           </select>
         </label>
         <label class="field">
@@ -785,14 +2281,53 @@
       </div>
       <div class="row" style="justify-content:flex-end;">
         <button type="submit" value="cancel">取消</button>
-        <button id="save-config-btn" class="primary" type="button">保存配置 (原子写回 config.yaml)</button>
+        <button id="save-config-btn" class="primary" type="button">保存配置 (写回 config.yaml)</button>
       </div>
     </form>
   </dialog>
-
   <script>
-    // Mandatory Safari light-dismiss fallback for <dialog closedby="any">
+    // 1. Top-layer exit fallback & Safari <dialog closedby="any"> fallback
+    let supportsDisplayTransition;
+    function canTransitionDisplay() {
+      if (supportsDisplayTransition !== undefined) return supportsDisplayTransition;
+      if (!window.CSS?.supports?.('transition-behavior', 'allow-discrete') || !document.body) {
+        return false;
+      }
+      const probe = document.createElement('div');
+      probe.style.cssText = 'transition: display 1s allow-discrete !important; display: block;';
+      document.body.appendChild(probe);
+      getComputedStyle(probe).display;
+      probe.style.display = 'none';
+      supportsDisplayTransition = getComputedStyle(probe).display === 'block';
+      probe.remove();
+      return supportsDisplayTransition;
+    }
+
+    function supportsTopLayerExit() {
+      return window.CSS?.supports?.('overlay', 'auto') && canTransitionDisplay();
+    }
+
+    async function closeTopLayer(dialog) {
+      if (!supportsTopLayerExit()) {
+        dialog.setAttribute('data-closing', '');
+        const animations = dialog.getAnimations({ subtree: true });
+        if (animations.length > 0) {
+          await Promise.race([
+            Promise.allSettled(animations.map((a) => a.finished)),
+            new Promise((r) => setTimeout(r, 400)),
+          ]);
+        }
+        if (!dialog.hasAttribute('data-closing')) return;
+        dialog.removeAttribute('data-closing');
+      }
+      dialog.close();
+    }
+
     document.querySelectorAll('dialog').forEach((dialog) => {
+      dialog.addEventListener('cancel', (event) => {
+        event.preventDefault();
+        closeTopLayer(dialog);
+      });
       if (!('closedBy' in HTMLDialogElement.prototype)) {
         dialog.addEventListener('click', (event) => {
           if (event.target !== dialog) return;
@@ -804,16 +2339,114 @@
             event.clientX <= rect.left + rect.width
           );
           if (isDialogContent) return;
-          dialog.close();
+          closeTopLayer(dialog);
         });
       }
     });
 
+    // 2. Color Scheme Override Sync (Defaulting to crisp light mode)
+    function applyColorSchemeOverride(scheme) {
+      const meta = document.querySelector('meta[name="color-scheme"]');
+      const resolved = scheme || 'light';
+      if (meta) meta.content = resolved;
+      try {
+        localStorage.setItem('color-scheme', resolved);
+      } catch (_) {}
+      document.querySelectorAll('.theme-choice-btn').forEach((btn) => {
+        btn.classList.toggle('primary', btn.dataset.scheme === resolved);
+      });
+    }
+
+    document.querySelectorAll('.theme-choice-btn').forEach((btn) => {
+      btn.addEventListener('click', () => applyColorSchemeOverride(btn.dataset.scheme));
+    });
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'color-scheme') {
+        applyColorSchemeOverride(e.newValue ?? 'light');
+      }
+    });
+    applyColorSchemeOverride(localStorage.getItem('color-scheme') ?? 'light');
+
+    // 3. Lightweight Display Language i18n Dictionary
+    const I18N = {
+      'zh-CN': {
+        nav_task_manager: '任务管理',
+        btn_global_glossary: '全局术语库',
+        btn_global_settings: '全局配置与外观',
+        new_task_title: '新建音视频 / 字幕任务',
+        source_path_label: '本地媒体路径 或 YouTube 链接',
+        btn_browse: '浏览',
+        dropzone_hint: '拖拽本地音视频 / SRT 到此处，或点击上传',
+        recog_lang_label: '识别语言 (Recog Lang)',
+        target_lang_label: '目标语言 (Target Lang)',
+        exec_stage_label: '流水线范围',
+        autorun_label: '启动策略',
+        btn_enqueue: '创建任务并进入流水线',
+        queue_title: '全部任务工作区',
+        sidebar_cfg_kicker: '管线参数配置 (实时同步 config.yaml)',
+        btn_start_sub: '运行字幕流水线',
+        btn_transcribe_only: '仅转录原文',
+        btn_start_dub: '运行配音流水线',
+      },
+      'en': {
+        nav_task_manager: 'Tasks',
+        btn_global_glossary: 'Global Glossary',
+        btn_global_settings: 'Settings & Theme',
+        new_task_title: 'New Media / Subtitle Task',
+        source_path_label: 'Local Media Path or YouTube URL',
+        btn_browse: 'Browse',
+        dropzone_hint: 'Drag & drop local video/audio/SRT here, or click to upload',
+        recog_lang_label: 'Recog Lang',
+        target_lang_label: 'Target Lang',
+        exec_stage_label: 'Pipeline Scope',
+        autorun_label: 'Start Policy',
+        btn_enqueue: 'Create & Enter Pipeline',
+        queue_title: 'All Workspace Tasks',
+        sidebar_cfg_kicker: 'Pipeline Settings (Live Sync)',
+        btn_start_sub: 'Run Subtitles',
+        btn_transcribe_only: 'Transcribe Only',
+        btn_start_dub: 'Run Dubbing',
+      }
+    };
+
+    function applyUiLanguage(lang) {
+      const dict = I18N[lang] || I18N['zh-CN'];
+      document.querySelectorAll('[data-i18n]').forEach((el) => {
+        const k = el.getAttribute('data-i18n');
+        if (dict[k]) el.textContent = dict[k];
+      });
+    }
+
+    // 4. Core Application State & API Helper
     const state = {
+      viewMode: 'manager', // 'manager' | 'detail'
       tasks: [],
       activeTaskId: null,
+      activeTaskData: null,
+      monitorSourceMode: 'sub', // 'sub' | 'dub'
       terms: [],
       utterances: [],
+      config: {},
+      uttFilter: '',
+      expandedStages: new Set([1]),
+      autoExpandedKey: '',
+    };
+
+    const TTS_PROVIDER_METHODS = {
+      'Microsoft Edge': ['edge_tts'],
+      'OpenLux': ['openai_tts'],
+      'Fish Audio': ['fish_audio'],
+      'SiliconFlow': ['sf_fish_tts', 'sf_cosyvoice2'],
+      '302.ai': ['f5tts'],
+      'Local service': ['gpt_sovits'],
+      'Custom provider': ['custom_tts'],
+    };
+
+    const TTS_PROVIDER_KEYS = {
+      'OpenLux': ['openai_tts.api_key'],
+      'Fish Audio': ['fish_audio.api_key'],
+      'SiliconFlow': ['sf_fish_tts.api_key', 'sf_cosyvoice2.api_key'],
+      '302.ai': ['f5tts.302_api'],
     };
 
     async function apiFetch(url, options = {}) {
@@ -832,131 +2465,910 @@
       return res.json();
     }
 
-    // Tabs switching
-    document.querySelectorAll('.tab-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
-        document.querySelectorAll('.tab-panel').forEach((p) => p.classList.add('hidden'));
-        btn.classList.add('active');
-        document.getElementById(btn.dataset.tab).classList.remove('hidden');
+    function flashSavedToast(msg = '已保存') {
+      const el = document.getElementById('sidebar-save-toast');
+      if (!el) return;
+      el.textContent = msg;
+      clearTimeout(el._timer);
+      el._timer = setTimeout(() => { el.textContent = ''; }, 2000);
+    }
+
+    async function patchConfig(updates) {
+      await apiFetch('/api/config', {
+        method: 'PUT',
+        body: JSON.stringify({ updates }),
+      });
+      flashSavedToast();
+    }
+
+    // View Routing: Task Manager <-> Task Detail Waterfall
+    function showTaskManagerView() {
+      state.viewMode = 'manager';
+      document.getElementById('view-task-manager').classList.remove('hidden');
+      document.getElementById('view-task-detail').classList.add('hidden');
+      document.getElementById('nav-tasks-btn').classList.add('primary');
+      renderTaskList();
+    }
+
+    async function openTaskDetailView(taskId) {
+      state.activeTaskId = taskId;
+      state.viewMode = 'detail';
+      state.autoExpandedKey = '';
+      document.getElementById('view-task-manager').classList.add('hidden');
+      document.getElementById('view-task-detail').classList.remove('hidden');
+      document.getElementById('nav-tasks-btn').classList.remove('primary');
+      await refreshActiveTask();
+    }
+
+    document.getElementById('nav-tasks-btn').addEventListener('click', showTaskManagerView);
+    document.getElementById('btn-back-to-tasks').addEventListener('click', showTaskManagerView);
+
+    // Waterfall Stage Expand / Collapse
+    function applyExpandedStagesDom() {
+      for (let i = 1; i <= 6; i++) {
+        const isOpen = state.expandedStages.has(i);
+        const body = document.getElementById(`wf-body-${i}`);
+        if (body) {
+          body.classList.toggle('hidden', !isOpen);
+        }
+        const card = document.getElementById(`wf-stage-${i}`);
+        if (card) {
+          const btn = card.querySelector('header button[data-toggle-wf]');
+          if (btn) {
+            if (i === 3) btn.textContent = isOpen ? '收起术语表' : '编辑术语 / 重跑';
+            else if (i === 4) btn.textContent = isOpen ? '收起译文表' : '编辑译文 / 重跑';
+            else btn.textContent = isOpen ? '收起详情' : '展开详情';
+          }
+        }
+      }
+    }
+
+    function toggleWaterfallStage(stageNum, forceOpen = null) {
+      const n = Number(stageNum);
+      const shouldOpen = forceOpen !== null ? forceOpen : !state.expandedStages.has(n);
+      if (shouldOpen) {
+        state.expandedStages.add(n);
+      } else {
+        state.expandedStages.delete(n);
+      }
+      applyExpandedStagesDom();
+    }
+
+    document.querySelectorAll('[data-toggle-wf]').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleWaterfallStage(el.getAttribute('data-toggle-wf'));
       });
     });
 
-    function switchTab(tabId) {
-      const btn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
-      if (btn) btn.click();
+    // Monitor Video Source Switcher
+    function syncMonitorVideoPlayer() {
+      const task = state.activeTaskData;
+      if (!task) return;
+      const files = task.files || [];
+      const media = task.media || {};
+      const vid = document.getElementById('video-main-preview');
+      const btnSub = document.getElementById('mon-src-sub');
+      const btnDub = document.getElementById('mon-src-dub');
+      btnSub.classList.toggle('active', state.monitorSourceMode === 'sub');
+      btnDub.classList.toggle('active', state.monitorSourceMode === 'dub');
+
+      let targetSrc = '';
+      if (state.monitorSourceMode === 'dub' && files.includes('output_dub.mp4')) {
+        targetSrc = `/api/tasks/${encodeURIComponent(task.task_id)}/files/output_dub.mp4`;
+      } else if (files.includes('output_sub.mp4')) {
+        targetSrc = `/api/tasks/${encodeURIComponent(task.task_id)}/files/output_sub.mp4`;
+      } else if (media.filename && files.includes(media.filename)) {
+        targetSrc = `/api/tasks/${encodeURIComponent(task.task_id)}/files/${encodeURIComponent(media.filename)}`;
+      }
+
+      if (targetSrc) {
+        if (!vid.src.endsWith(targetSrc)) {
+          const prevTime = vid.currentTime || 0;
+          vid.src = targetSrc;
+          if (prevTime > 0) {
+            vid.addEventListener('loadedmetadata', () => { vid.currentTime = prevTime; }, { once: true });
+          }
+        }
+      } else {
+        vid.removeAttribute('src');
+      }
+    }
+
+    document.getElementById('mon-src-sub').addEventListener('click', () => {
+      state.monitorSourceMode = 'sub';
+      syncMonitorVideoPlayer();
+    });
+    document.getElementById('mon-src-dub').addEventListener('click', () => {
+      state.monitorSourceMode = 'dub';
+      syncMonitorVideoPlayer();
+    });
+
+    // ASS Color <-> Hex Color helpers
+    function assToHex(assColor, fallback = '#ffffff') {
+      const m = String(assColor || '').trim().match(/^&[Hh](?:[0-9A-Fa-f]{2})?([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})$/);
+      if (!m) return fallback;
+      return `#${m[3]}${m[2]}${m[1]}`.toLowerCase();
+    }
+
+    function hexToAss(hexColor) {
+      const m = String(hexColor || '').trim().match(/^#([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})$/);
+      if (!m) return '&HFFFFFF';
+      return `&H${m[3]}${m[2]}${m[1]}`.toUpperCase();
+    }
+
+    function updateSubtitlePreviewBox() {
+      const burnOn = document.getElementById('sb-burn-subtitles').checked;
+      document.getElementById('burn-style-section').classList.toggle('hidden', !burnOn);
+      const mode = document.getElementById('sb-burn-mode-sub').value;
+      const trFont = document.getElementById('sb-tr-font').value.trim() || 'sans-serif';
+      const trSize = Number(document.getElementById('sb-tr-size').value || 17);
+      const trColor = document.getElementById('sb-tr-color').value || '#ffff00';
+      const srcFont = document.getElementById('sb-src-font').value.trim() || 'sans-serif';
+      const srcSize = Number(document.getElementById('sb-src-size').value || 15);
+      const srcColor = document.getElementById('sb-src-color').value || '#ffffff';
+
+      const trEl = document.getElementById('sub-preview-trans');
+      const srcEl = document.getElementById('sub-preview-src');
+
+      trEl.style.fontFamily = trFont;
+      trEl.style.fontSize = `${Math.min(22, Math.max(11, trSize))}px`;
+      trEl.style.color = trColor;
+      trEl.style.background = 'rgba(0,0,0,0.45)';
+      trEl.style.textShadow = '0 1px 2px #000';
+      trEl.classList.toggle('hidden', mode === 'source');
+
+      srcEl.style.fontFamily = srcFont;
+      srcEl.style.fontSize = `${Math.min(18, Math.max(10, srcSize * 0.85))}px`;
+      srcEl.style.color = srcColor;
+      srcEl.style.textShadow = '0 1px 2px #000, 0 0 3px #000';
+      srcEl.classList.toggle('hidden', mode === 'translation');
+    }
+
+    function syncAsrSubPanels() {
+      const rt = document.getElementById('sb-whisper-runtime').value;
+      document.getElementById('wrap-local-backend').classList.toggle('hidden', rt !== 'local');
+      document.getElementById('asr-sub-local').classList.toggle('hidden', rt !== 'local');
+      document.getElementById('asr-sub-cloud').classList.toggle('hidden', rt === 'local');
+
+      document.getElementById('asr-field-elevenlabs').classList.toggle('hidden', rt !== 'elevenlabs');
+      document.getElementById('asr-field-deepgram').classList.toggle('hidden', rt !== 'deepgram');
+      document.getElementById('asr-field-assembly').classList.toggle('hidden', rt !== 'assembly');
+      document.getElementById('asr-field-zero').classList.toggle('hidden', rt !== 'zero');
+      document.getElementById('asr-field-replicate').classList.toggle('hidden', !rt.startsWith('replicate_'));
+      document.getElementById('asr-field-mai').classList.toggle('hidden', rt !== 'mai');
+
+      const maiProv = document.getElementById('sb-mai-provider').value;
+      document.getElementById('mai-azure-box').classList.toggle('hidden', maiProv !== 'azure');
+      document.getElementById('mai-openrouter-box').classList.toggle('hidden', maiProv !== 'openrouter');
+    }
+
+    function providerForTtsMethod(method) {
+      for (const [prov, methods] of Object.entries(TTS_PROVIDER_METHODS)) {
+        if (methods.includes(method)) return prov;
+      }
+      return 'Microsoft Edge';
+    }
+
+    function syncTtsSubPanels() {
+      const method = document.getElementById('sb-tts-method').value;
+      const prov = providerForTtsMethod(method);
+      document.getElementById('sb-tts-provider').value = prov;
+
+      const keyPaths = TTS_PROVIDER_KEYS[prov];
+      const keyWrap = document.getElementById('tts-provider-key-wrap');
+      if (keyPaths) {
+        keyWrap.classList.remove('hidden');
+        document.getElementById('tts-provider-key-label').textContent = `${prov} API 密钥`;
+        const section = keyPaths[0].split('.')[0];
+        const keyName = keyPaths[0].split('.')[1];
+        const val = (state.config[section] || {})[keyName] || '';
+        document.getElementById('sb-tts-provider-key').value = val;
+      } else {
+        keyWrap.classList.add('hidden');
+      }
+
+      document.getElementById('tts-sub-edge').classList.toggle('hidden', method !== 'edge_tts');
+      document.getElementById('tts-sub-openai').classList.toggle('hidden', method !== 'openai_tts');
+      document.getElementById('tts-sub-fish').classList.toggle('hidden', method !== 'fish_audio');
+      document.getElementById('tts-sub-sf-fish').classList.toggle('hidden', method !== 'sf_fish_tts');
+      document.getElementById('tts-sub-sovits').classList.toggle('hidden', method !== 'gpt_sovits');
+    }
+
+    async function loadSidebarConfig() {
+      const cfg = await apiFetch('/api/config');
+      state.config = cfg;
+
+      const dispLang = cfg.display_language || 'zh-CN';
+      document.getElementById('ui-lang-select').value = dispLang;
+      applyUiLanguage(dispLang);
+
+      // LLM
+      document.getElementById('sb-api-key').value = cfg.api?.key || '';
+      document.getElementById('sb-api-base-url').value = cfg.api?.base_url || '';
+      document.getElementById('sb-api-model').value = cfg.api?.model || '';
+      document.getElementById('sb-llm-json').checked = Boolean(cfg.api?.llm_support_json);
+      document.getElementById('sb-max-workers').value = cfg.max_workers ?? 4;
+
+      // Task defaults
+      document.getElementById('task-src-lang').value = cfg.whisper?.language || 'en';
+      document.getElementById('task-tgt-lang').value = cfg.target_language || '简体中文';
+      document.getElementById('quick-ytb-res').value = String(cfg.ytb_resolution || '1080');
+      document.getElementById('quick-ytb-cookies').value = cfg.youtube?.cookies_path || '';
+
+      // ASR & Subtitles
+      const rt = cfg.whisper?.runtime === 'Zero' ? 'zero' : (cfg.whisper?.runtime || 'local');
+      document.getElementById('sb-whisper-runtime').value = rt;
+      document.getElementById('sb-whisper-backend').value = cfg.whisper?.backend || 'qwen';
+      document.getElementById('sb-qwen-model').value = cfg.whisper?.qwen_model || '1.7b';
+      document.getElementById('sb-qwen-engine').value = cfg.whisper?.qwen_engine || 'auto';
+      document.getElementById('sb-elevenlabs-key').value = cfg.whisper?.elevenlabs_api_key || '';
+      document.getElementById('sb-deepgram-key').value = cfg.whisper?.deepgram_api_key || '';
+      document.getElementById('sb-deepgram-model').value = cfg.whisper?.deepgram_model || 'nova-3';
+      document.getElementById('sb-assembly-key').value = cfg.whisper?.assembly_api_key || '';
+      document.getElementById('sb-assembly-lang').value = cfg.whisper?.assemblyai_lang || 'en';
+      document.getElementById('sb-assembly-model').value = cfg.whisper?.assemblyai_model || 'universal';
+      document.getElementById('sb-zero-key').value = cfg.whisper?.whisperzero_api_key || '';
+      document.getElementById('sb-replicate-key').value = cfg.whisper?.replicate_api_key || '';
+      document.getElementById('sb-mai-provider').value = cfg.whisper?.mai_provider || 'azure';
+      document.getElementById('sb-mai-key').value = cfg.whisper?.mai_api_key || '';
+      document.getElementById('sb-mai-region').value = cfg.whisper?.mai_region || '';
+      document.getElementById('sb-mai-or-key').value = cfg.whisper?.mai_openrouter_api_key || '';
+
+      document.getElementById('sb-trans-style').value = cfg.translation_style || '';
+      document.getElementById('sb-sep-model').value = cfg.vocal_separation_model || 'htdemucs';
+      document.getElementById('sb-sub-maxlen').value = cfg.subtitle?.max_length ?? 75;
+      document.getElementById('sb-demucs').checked = Boolean(cfg.demucs);
+      document.getElementById('sb-burn-subtitles').checked = cfg.burn_subtitles !== false;
+      document.getElementById('sb-ffmpeg-gpu').checked = Boolean(cfg.ffmpeg_gpu);
+      document.getElementById('sb-pause-before').checked = Boolean(cfg.pause_before_translate);
+      document.getElementById('sb-pause-after').checked = Boolean(cfg.pause_after_translate);
+
+      document.getElementById('sb-burn-mode-sub').value = cfg.subtitle?.sub_video_subtitles || 'bilingual';
+      document.getElementById('sb-burn-mode-dub').value = cfg.subtitle?.dub_video_subtitles || 'translation';
+
+      const srcStyle = cfg.subtitle?.style?.source || {};
+      const trStyle = cfg.subtitle?.style?.translation || {};
+      document.getElementById('sb-src-font').value = srcStyle.font_name || '';
+      document.getElementById('sb-src-size').value = srcStyle.font_size ?? 15;
+      document.getElementById('sb-src-color').value = assToHex(srcStyle.font_color, '#ffffff');
+      document.getElementById('sb-tr-font').value = trStyle.font_name || '';
+      document.getElementById('sb-tr-size').value = trStyle.font_size ?? 17;
+      document.getElementById('sb-tr-color').value = assToHex(trStyle.font_color, '#ffff00');
+
+      // TTS
+      const ttsMethod = cfg.tts_method || 'edge_tts';
+      document.getElementById('sb-tts-method').value = ttsMethod;
+      document.getElementById('sb-edge-voice').value = cfg.edge_tts?.voice || 'zh-CN-XiaoxiaoNeural';
+      document.getElementById('sb-openai-voice').value = cfg.openai_tts?.voice || 'alloy';
+      document.getElementById('sb-fish-mode').value = cfg.fish_audio?.mode || 'clone';
+      document.getElementById('sb-fish-voice-id').value = cfg.fish_audio?.voice_id || '';
+      document.getElementById('sb-sffish-mode').value = cfg.sf_fish_tts?.mode || 'preset';
+      document.getElementById('sb-sffish-voice').value = cfg.sf_fish_tts?.voice || 'anna';
+      document.getElementById('sb-sovits-char').value = cfg.gpt_sovits?.character || '';
+      document.getElementById('sb-sovits-mode').value = String(cfg.gpt_sovits?.refer_mode ?? 3);
+
+      syncAsrSubPanels();
+      syncTtsSubPanels();
+      updateSubtitlePreviewBox();
+    }
+
+    function bindConfigChange(id, keyPath, transform = (v) => v, afterFn = null) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('change', async () => {
+        const raw = el.type === 'checkbox' ? el.checked : el.value;
+        const val = transform(raw);
+        if (afterFn) afterFn(val);
+        await patchConfig({ [keyPath]: val });
+      });
+    }
+
+    document.getElementById('ui-lang-select').addEventListener('change', async (e) => {
+      const lang = e.target.value;
+      applyUiLanguage(lang);
+      await patchConfig({ 'display_language': lang });
+    });
+
+    bindConfigChange('sb-api-key', 'api.key', (v) => v.trim());
+    bindConfigChange('sb-api-base-url', 'api.base_url', (v) => v.trim());
+    bindConfigChange('sb-api-model', 'api.model', (v) => v.trim());
+    bindConfigChange('sb-llm-json', 'api.llm_support_json', Boolean);
+    bindConfigChange('sb-max-workers', 'max_workers', (v) => Number(v || 4));
+    bindConfigChange('quick-ytb-res', 'ytb_resolution', String);
+    bindConfigChange('quick-ytb-cookies', 'youtube.cookies_path', (v) => v.trim());
+
+    bindConfigChange('sb-whisper-runtime', 'whisper.runtime', String, syncAsrSubPanels);
+    bindConfigChange('sb-whisper-backend', 'whisper.backend', String);
+    bindConfigChange('sb-qwen-model', 'whisper.qwen_model', String);
+    bindConfigChange('sb-qwen-engine', 'whisper.qwen_engine', String);
+    bindConfigChange('sb-elevenlabs-key', 'whisper.elevenlabs_api_key', (v) => v.trim());
+    bindConfigChange('sb-deepgram-key', 'whisper.deepgram_api_key', (v) => v.trim());
+    bindConfigChange('sb-deepgram-model', 'whisper.deepgram_model', (v) => v.trim());
+    bindConfigChange('sb-assembly-key', 'whisper.assembly_api_key', (v) => v.trim());
+    bindConfigChange('sb-assembly-lang', 'whisper.assemblyai_lang', (v) => v.trim());
+    bindConfigChange('sb-assembly-model', 'whisper.assemblyai_model', (v) => v.trim());
+    bindConfigChange('sb-zero-key', 'whisper.whisperzero_api_key', (v) => v.trim());
+    bindConfigChange('sb-replicate-key', 'whisper.replicate_api_key', (v) => v.trim());
+    bindConfigChange('sb-mai-provider', 'whisper.mai_provider', String, syncAsrSubPanels);
+    bindConfigChange('sb-mai-key', 'whisper.mai_api_key', (v) => v.trim());
+    bindConfigChange('sb-mai-region', 'whisper.mai_region', (v) => v.trim());
+    bindConfigChange('sb-mai-or-key', 'whisper.mai_openrouter_api_key', (v) => v.trim());
+
+    bindConfigChange('sb-trans-style', 'translation_style', (v) => v.trim());
+    bindConfigChange('sb-sep-model', 'vocal_separation_model', String);
+    bindConfigChange('sb-sub-maxlen', 'subtitle.max_length', (v) => Number(v || 75));
+    bindConfigChange('sb-demucs', 'demucs', Boolean);
+    bindConfigChange('sb-burn-subtitles', 'burn_subtitles', Boolean, updateSubtitlePreviewBox);
+    bindConfigChange('sb-ffmpeg-gpu', 'ffmpeg_gpu', Boolean);
+    bindConfigChange('sb-pause-before', 'pause_before_translate', Boolean);
+    bindConfigChange('sb-pause-after', 'pause_after_translate', Boolean);
+
+    bindConfigChange('sb-burn-mode-sub', 'subtitle.sub_video_subtitles', String, updateSubtitlePreviewBox);
+    bindConfigChange('sb-burn-mode-dub', 'subtitle.dub_video_subtitles', String);
+    bindConfigChange('sb-src-font', 'subtitle.style.source.font_name', (v) => v.trim(), updateSubtitlePreviewBox);
+    bindConfigChange('sb-src-size', 'subtitle.style.source.font_size', (v) => Number(v || 15), updateSubtitlePreviewBox);
+    bindConfigChange('sb-src-color', 'subtitle.style.source.font_color', hexToAss, updateSubtitlePreviewBox);
+    bindConfigChange('sb-tr-font', 'subtitle.style.translation.font_name', (v) => v.trim(), updateSubtitlePreviewBox);
+    bindConfigChange('sb-tr-size', 'subtitle.style.translation.font_size', (v) => Number(v || 17), updateSubtitlePreviewBox);
+    bindConfigChange('sb-tr-color', 'subtitle.style.translation.font_color', hexToAss, updateSubtitlePreviewBox);
+
+    document.getElementById('btn-reset-maxlen').addEventListener('click', async () => {
+      document.getElementById('sb-sub-maxlen').value = 75;
+      await patchConfig({ 'subtitle.max_length': 75 });
+    });
+
+    document.getElementById('sb-tts-provider').addEventListener('change', async (e) => {
+      const prov = e.target.value;
+      const methods = TTS_PROVIDER_METHODS[prov] || ['edge_tts'];
+      document.getElementById('sb-tts-method').value = methods[0];
+      syncTtsSubPanels();
+      await patchConfig({ 'tts_method': methods[0] });
+    });
+
+    bindConfigChange('sb-tts-method', 'tts_method', String, syncTtsSubPanels);
+    document.getElementById('sb-tts-provider-key').addEventListener('change', async (e) => {
+      const prov = document.getElementById('sb-tts-provider').value;
+      const paths = TTS_PROVIDER_KEYS[prov] || [];
+      const val = e.target.value.trim();
+      const updates = {};
+      for (const p of paths) updates[p] = val;
+      await patchConfig(updates);
+      await loadSidebarConfig();
+    });
+
+    bindConfigChange('sb-edge-voice', 'edge_tts.voice', (v) => v.trim());
+    bindConfigChange('sb-openai-voice', 'openai_tts.voice', (v) => v.trim());
+    bindConfigChange('sb-fish-mode', 'fish_audio.mode', String);
+    bindConfigChange('sb-fish-voice-id', 'fish_audio.voice_id', (v) => v.trim());
+    bindConfigChange('sb-sffish-mode', 'sf_fish_tts.mode', String);
+    bindConfigChange('sb-sffish-voice', 'sf_fish_tts.voice', (v) => v.trim());
+    bindConfigChange('sb-sovits-char', 'gpt_sovits.character', (v) => v.trim());
+    bindConfigChange('sb-sovits-mode', 'gpt_sovits.refer_mode', (v) => Number(v || 3));
+
+    document.getElementById('btn-fetch-models').addEventListener('click', async () => {
+      const btn = document.getElementById('btn-fetch-models');
+      btn.disabled = true;
+      btn.textContent = '拉取中...';
+      try {
+        const res = await apiFetch('/api/llm/models', {
+          method: 'POST',
+          body: JSON.stringify({
+            base_url: document.getElementById('sb-api-base-url').value.trim(),
+            api_key: document.getElementById('sb-api-key').value.trim(),
+          }),
+        });
+        const dl = document.getElementById('llm-models-datalist');
+        dl.innerHTML = '';
+        (res.models || []).forEach((m) => {
+          const opt = document.createElement('option');
+          opt.value = m;
+          dl.appendChild(opt);
+        });
+        const box = document.getElementById('api-check-result');
+        box.classList.remove('hidden');
+        if (res.models && res.models.length > 0) {
+          box.style.color = 'var(--success)';
+          box.textContent = `已获取 ${res.models.length} 个可用模型`;
+        } else {
+          box.style.color = 'var(--danger)';
+          box.textContent = `获取失败: ${res.error || '未返回模型列表'}`;
+        }
+      } catch (e) {
+        alert(`获取模型失败: ${e.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '获取列表';
+      }
+    });
+
+    document.getElementById('btn-check-api').addEventListener('click', async () => {
+      const btn = document.getElementById('btn-check-api');
+      const box = document.getElementById('api-check-result');
+      btn.disabled = true;
+      btn.textContent = '正在验证 API...';
+      box.classList.remove('hidden');
+      box.style.color = 'var(--text-secondary)';
+      box.textContent = '正在发送连通性探测请求...';
+      try {
+        const res = await apiFetch('/api/llm/check', {
+          method: 'POST',
+          body: JSON.stringify({
+            base_url: document.getElementById('sb-api-base-url').value.trim(),
+            api_key: document.getElementById('sb-api-key').value.trim(),
+            model: document.getElementById('sb-api-model').value.trim(),
+          }),
+        });
+        if (res.valid) {
+          box.style.color = 'var(--success)';
+          box.textContent = 'API 密钥与模型连通正常 (Valid)';
+        } else {
+          box.style.color = 'var(--danger)';
+          box.textContent = `API 检查失败: ${res.error}`;
+        }
+      } catch (e) {
+        box.style.color = 'var(--danger)';
+        box.textContent = `请求异常: ${e.message}`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '验证 API 连通性 (Check API)';
+      }
+    });
+
+    document.getElementById('btn-detect-mai-region').addEventListener('click', async () => {
+      const key = document.getElementById('sb-mai-key').value.trim();
+      if (!key) return alert('请先填写 Azure Speech 密钥');
+      const res = await apiFetch('/api/mai/detect-region', {
+        method: 'POST',
+        body: JSON.stringify({ api_key: key }),
+      });
+      if (res.region) {
+        document.getElementById('sb-mai-region').value = res.region;
+        flashSavedToast(`区域: ${res.region}`);
+      } else {
+        alert('未能自动检测到可用区域，请手动输入（如 eastus）');
+      }
+    });
+
+    // 5. Drag & Drop Upload Zone
+    const dropzone = document.getElementById('upload-dropzone');
+    const fileInput = document.getElementById('input-file-upload');
+    dropzone.addEventListener('click', () => fileInput.click());
+    dropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropzone.classList.add('dragover');
+    });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        fileInput.files = e.dataTransfer.files;
+        document.getElementById('dropzone-label').textContent = `已选择文件: ${e.dataTransfer.files[0].name}`;
+      }
+    });
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files && fileInput.files.length > 0) {
+        document.getElementById('dropzone-label').textContent = `已选择文件: ${fileInput.files[0].name}`;
+      }
+    });
+
+    // 6. Tasks Management & 6-Stage Waterfall Rendering
+    const STATE_LABELS_ZH = {
+      idle: '就绪',
+      running: '运行中',
+      paused: '待审校',
+      completed: '已完成',
+      error: '异常',
+      cancelled: '已取消',
+    };
+
+    const STEP_LABELS_ZH = {
+      'word-level transcription and alignment': '词级语音识别与时间轴对齐',
+      'sentence segmentation using nlp and llm': 'NLP 标点恢复与 LLM 语义断句',
+      'summarization and multi-step translation (awaiting terminology review)': '专业术语提取完成 · 等待术语表审校',
+      'summarization and multi-step translation (awaiting translation review)': '三步精翻完成 · 等待译文与配音词审校',
+      'summarization and multi-step translation': '术语提取与三步反思翻译',
+      'cutting and aligning long subtitles': '自适应长句切分与时间轴对齐',
+      'merging subtitles into the video': '单通 ASS 双语字幕视频压制',
+      'generate subtitle files': '导出原文字幕文件 (src.srt)',
+      'generate audio tasks and chunks': '构建 TTS 配音任务与语义分块',
+      'extract reference audio': '提取原片参考干声样本',
+      'generate and merge audio files': '逐句 TTS 克隆合成与边缘静音修剪',
+      'merge full audio': '无损拼接全片配音总轨 (dub.wav)',
+      'merge final audio into video': '混流合成最终配音视频 (output_dub.mp4)',
+    };
+
+    function formatHumanState(st) {
+      return STATE_LABELS_ZH[st] || st || '就绪';
+    }
+
+    function formatHumanStep(exec) {
+      const st = exec?.state || 'idle';
+      const stLabel = formatHumanState(st);
+      const rawStep = String(exec?.current_step || '').trim();
+      if (!rawStep) return `当前状态：${stLabel}`;
+      const lower = rawStep.toLowerCase();
+      let translated = STEP_LABELS_ZH[lower];
+      if (!translated) {
+        for (const [k, v] of Object.entries(STEP_LABELS_ZH)) {
+          if (lower.includes(k)) {
+            translated = v;
+            break;
+          }
+        }
+      }
+      const stepText = translated || rawStep;
+      const stepIdx = (exec?.step_index ?? 0) + 1;
+      const totalSteps = exec?.total_steps || '';
+      const ratio = totalSteps ? `步骤 ${stepIdx}/${totalSteps} · ` : '';
+      return `${ratio}${stepText}`;
+    }
+
+    function formatDuration(sec) {
+      const s = Math.round(Number(sec || 0));
+      if (!s || s <= 0) return '';
+      if (s < 60) return `${s}s`;
+      const m = Math.floor(s / 60);
+      const rem = s % 60;
+      return `${m}m ${String(rem).padStart(2, '0')}s`;
+    }
+
+    function computeSixStagesStatus(task) {
+      const sd = task.stages_done || {};
+      const files = task.files || [];
+      const exec = task.execution || {};
+      const st = exec.state || 'idle';
+      const lbl = String(exec.current_step || '').toLowerCase();
+      const pauseReason = String(exec.pause_reason || '').toLowerCase();
+
+      const done1 = Boolean(task.media?.filename && files.includes(task.media.filename)) || files.includes('audio/raw.mp3') || Boolean(sd.asr);
+      const done2 = Boolean(sd.asr && sd.split);
+      const done3 = Boolean(sd.terms);
+      const done4 = Boolean(sd.translate);
+      const done5 = Boolean(sd.subtitles && (sd.sub_video || !state.config.burn_subtitles));
+      const done6 = Boolean(sd.dub_video || sd.dub_audio);
+
+      let activeStage = 0;
+      if (st === 'paused') {
+        if (pauseReason.includes('terminology')) activeStage = 3;
+        else if (pauseReason.includes('translation')) activeStage = 4;
+      } else if (st === 'running') {
+        if (lbl.includes('transcription') || lbl.includes('segmentation')) activeStage = 2;
+        else if (lbl.includes('summarization')) activeStage = 3;
+        else if (lbl.includes('translation')) activeStage = 4;
+        else if (lbl.includes('aligning') || lbl.includes('merging subtitles')) activeStage = 5;
+        else if (lbl.includes('audio') || lbl.includes('dub')) activeStage = 6;
+        else activeStage = 1;
+      }
+
+      return {
+        done: { 1: done1, 2: done2, 3: done3, 4: done4, 5: done5, 6: done6 },
+        activeStage,
+        isPausedCheckpoint: st === 'paused',
+      };
     }
 
     async function loadTasks() {
       const data = await apiFetch('/api/tasks');
       state.tasks = data.tasks || [];
-      document.getElementById('queue-count').textContent = `${state.tasks.length} 个任务`;
-      if (!state.activeTaskId && state.tasks.length > 0) {
-        state.activeTaskId = state.tasks[0].task_id;
-      }
+      document.getElementById('queue-count').textContent = `${state.tasks.length}`;
       renderTaskList();
-      if (state.activeTaskId) {
+      if (state.viewMode === 'detail' && state.activeTaskId) {
         await refreshActiveTask();
       }
     }
 
     function renderTaskList() {
       const container = document.getElementById('task-list');
+      const emptyEl = document.getElementById('empty-state');
       container.innerHTML = '';
+      if (state.tasks.length === 0) {
+        emptyEl.classList.remove('hidden');
+        return;
+      }
+      emptyEl.classList.add('hidden');
+
       for (const t of state.tasks) {
         const exec = t.execution || {};
         const st = exec.state || 'idle';
-        const div = document.createElement('div');
-        div.className = `task-item ${t.task_id === state.activeTaskId ? 'active' : ''}`;
-        const mountMode = (t.origin || {}).mount_mode || (t.origin || {}).kind || '';
-        div.innerHTML = `
-          <div class="task-item-top">
-            <span class="task-item-title">${escapeHtml(t.title || t.task_id)}</span>
-            <span class="badge ${st}">${escapeHtml(st)}</span>
+        const info = computeSixStagesStatus(t);
+        const card = document.createElement('div');
+        card.className = 'task-card';
+        const mountMode = (t.origin || {}).mount_mode || (t.origin || {}).kind || 'local';
+        const res = t.media?.display_width ? `${t.media.display_width}×${t.media.display_height}` : (t.media?.type || 'media');
+        const dur = formatDuration(t.media?.duration_sec);
+        const pct = Math.round((exec.progress || 0) * 100);
+        const stepSummary = formatHumanStep(exec);
+
+        let dotsHtml = '';
+        for (let i = 1; i <= 6; i++) {
+          const cls = info.activeStage === i ? 'active' : (info.done[i] ? 'done' : '');
+          dotsHtml += `<span class="mini-dot ${cls}" title="Stage 0${i}"></span>`;
+        }
+
+        card.innerHTML = `
+          <div class="task-card-top">
+            <span class="task-card-title" title="${escapeAttr(t.title || t.task_id)}">${escapeHtml(t.title || t.task_id)}</span>
+            <span class="badge ${st}">${escapeHtml(formatHumanState(st))}</span>
           </div>
-          <div class="row" style="justify-content:space-between; font-size:0.76rem; color:var(--text-secondary);">
-            <span>${escapeHtml((t.media || {}).type || 'video')} · ${escapeHtml(mountMode)}</span>
-            <span>${Math.round((exec.progress || 0) * 100)}%</span>
+          <div style="font-size:0.75rem; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+            ${escapeHtml(stepSummary)}
+          </div>
+          <div class="row mono" style="justify-content:space-between; font-size:0.71rem; color:var(--text-muted);">
+            <span>${escapeHtml(res)} · ${escapeHtml(mountMode)}${dur ? ' · ' + dur : ''}</span>
+            <span>${pct}%</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" style="width:${pct}%;"></div>
+          </div>
+          <div class="row" style="justify-content:space-between; margin-block-start:0.15rem;">
+            <div class="mini-dots">${dotsHtml}</div>
+            <span style="font-size:0.74rem; color:var(--brand); font-weight:500;">进入工作台 →</span>
           </div>
         `;
-        div.addEventListener('click', async () => {
-          state.activeTaskId = t.task_id;
-          renderTaskList();
-          await refreshActiveTask();
+        card.addEventListener('click', () => {
+          openTaskDetailView(t.task_id);
         });
-        container.appendChild(div);
+        container.appendChild(card);
       }
+    }
+
+    function updateWaterfallCards(task, termsCount, uttCount) {
+      const info = computeSixStagesStatus(task);
+      const files = task.files || [];
+      const media = task.media || {};
+      const truncCount = (task.truncated || []).length;
+
+      // Auto-expand currently active or paused checkpoint stage once per state transition
+      const autoKey = `${task.task_id}:${task.execution?.state}:${info.activeStage}:${info.done[5]}:${info.done[6]}`;
+      if (state.autoExpandedKey !== autoKey) {
+        state.autoExpandedKey = autoKey;
+        if (info.activeStage > 0) {
+          state.expandedStages = new Set([info.activeStage]);
+        } else if (info.done[6]) {
+          state.expandedStages = new Set([5, 6]);
+        } else if (info.done[5]) {
+          state.expandedStages = new Set([5]);
+        } else if (info.done[4]) {
+          state.expandedStages = new Set([4]);
+        } else if (info.done[3]) {
+          state.expandedStages = new Set([3]);
+        } else {
+          state.expandedStages = new Set([1]);
+        }
+      }
+
+      const summaries = {
+        1: media.filename
+          ? `已挂载 ${media.filename} (${media.display_width ? media.display_width + '×' + media.display_height : media.type || 'media'})${files.includes('audio/vocal.mp3') ? ' · 已分离人声与伴奏' : ''}`
+          : '等待挂载源媒体与提取音轨',
+        2: info.done[2]
+          ? `已完成词级时间轴对齐与语义断句（共 ${uttCount} 个语义句段）`
+          : '生成 words.json 词级时间轴并按声学停顿与语义切分句子',
+        3: info.done[3]
+          ? `已提取并审校 ${termsCount} 条专业术语（点击「编辑术语 / 重跑」可就地修改）`
+          : '提取领域专有名词、ASR 谐音别名与固定译名',
+        4: info.done[4]
+          ? `已完成 ${uttCount} 句双语精翻与配音词生成（点击「编辑译文 / 重跑」可就地修改）`
+          : '三步直译-反思-意译，独立校对画面字幕 (tgt) 与配音口播词 (tts_text)',
+        5: info.done[5]
+          ? `已生成双语 SRT/ASS 字幕${files.includes('output_sub.mp4') ? ' 与烧录成片 output_sub.mp4' : ''}`
+          : '自适应切分长句时间轴并执行单通 ASS 字幕压制',
+        6: info.done[6]
+          ? `已合成配音视频 output_dub.mp4${truncCount > 0 ? `（含 ${truncCount} 句超长截断告警）` : ''}`
+          : '参考音轨提取、逐句 TTS 合成、静音修剪与无损混流',
+      };
+
+      for (let i = 1; i <= 6; i++) {
+        const card = document.getElementById(`wf-stage-${i}`);
+        const badge = document.getElementById(`wf-badge-${i}`);
+        const sumEl = document.getElementById(`wf-sum-${i}`);
+        if (!card || !badge || !sumEl) continue;
+
+        sumEl.textContent = summaries[i];
+        card.classList.remove('done', 'active', 'paused-checkpoint', 'locked');
+
+        if (info.activeStage === i && info.isPausedCheckpoint) {
+          card.classList.add('paused-checkpoint');
+          badge.textContent = '人工审校暂停';
+          badge.className = 'badge paused';
+        } else if (info.activeStage === i) {
+          card.classList.add('active');
+          badge.textContent = '运行中';
+          badge.className = 'badge running';
+        } else if (info.done[i]) {
+          card.classList.add('done');
+          badge.textContent = '已完成';
+          badge.className = 'badge completed';
+        } else {
+          const prevDone = i === 1 || info.done[i - 1];
+          if (!prevDone) card.classList.add('locked');
+          badge.textContent = i === 6 && info.done[5] ? '可启动配音' : '待执行';
+          badge.className = 'badge';
+        }
+      }
+
+      const st2Utt = document.getElementById('stage2-utt-count');
+      if (st2Utt) st2Utt.textContent = `${uttCount} 个语义句段`;
+
+      applyExpandedStagesDom();
     }
 
     async function refreshActiveTask() {
       if (!state.activeTaskId) return;
       const task = await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}`);
-      document.getElementById('empty-state').classList.add('hidden');
-      document.getElementById('task-detail').classList.remove('hidden');
+      state.activeTaskData = task;
       document.getElementById('active-task-title').textContent = task.title || task.task_id;
-      const origin = task.origin || {};
-      const media = task.media || {};
-      document.getElementById('active-task-meta').textContent =
-        `目录: output/${task.task_id} · 挂载方式: ${origin.mount_mode || origin.kind || '-'} · 分辨率: ${media.display_width || 0}x${media.display_height || 0}`;
 
       const exec = task.execution || {};
-      document.getElementById('active-step-label').textContent =
-        exec.current_step ? `${exec.state}: ${exec.current_step}` : `状态: ${exec.state || 'idle'}`;
+      const stBadge = document.getElementById('active-task-state-badge');
+      stBadge.textContent = formatHumanState(exec.state || 'idle');
+      stBadge.className = `badge ${exec.state || 'idle'}`;
+
+      const origin = task.origin || {};
+      const media = task.media || {};
+      const resStr = media.display_width ? `${media.display_width}×${media.display_height}` : 'audio/srt';
+      const durFormatted = formatDuration(media.duration_sec);
+      const durStr = durFormatted ? ` · ${durFormatted}` : '';
+      document.getElementById('active-task-meta').textContent =
+        `output/${task.task_id}  ·  ${origin.mount_mode || origin.kind || '-'}  ·  ${resStr}${durStr}`;
+
+      document.getElementById('active-step-label').textContent = formatHumanStep(exec);
       const pct = Math.round((exec.progress || 0) * 100);
       document.getElementById('active-progress-pct').textContent = `${pct}%`;
-      document.getElementById('active-progress-bar').value = exec.progress || 0;
+      document.getElementById('active-progress-bar').style.width = `${pct}%`;
 
+      // Contextual Action Buttons & Pause Banner
+      const stNow = exec.state || 'idle';
       const pauseBanner = document.getElementById('pause-banner');
       const resumeBtn = document.getElementById('btn-resume');
-      if (exec.state === 'paused') {
-        pauseBanner.classList.remove('hidden');
-        resumeBtn.classList.remove('hidden');
-        if (exec.pause_reason && exec.pause_reason.includes('terminology')) {
-          switchTab('tab-terms');
-        } else if (exec.pause_reason && exec.pause_reason.includes('translation')) {
-          switchTab('tab-utterances');
-        }
-      } else {
-        pauseBanner.classList.add('hidden');
-        resumeBtn.classList.add('hidden');
+      const pauseBtn = document.getElementById('btn-pause');
+      const stopBtn = document.getElementById('btn-stop');
+      const runSubBtn = document.getElementById('btn-run-subtitles');
+      const runTransBtn = document.getElementById('btn-run-transcribe');
+      const runDubBtn = document.getElementById('btn-run-dubbing');
+
+      pauseBanner.classList.toggle('hidden', stNow !== 'paused');
+      resumeBtn.classList.toggle('hidden', stNow !== 'paused');
+      pauseBtn.classList.toggle('hidden', stNow !== 'running');
+      stopBtn.classList.toggle('hidden', stNow !== 'running' && stNow !== 'paused');
+      runSubBtn.classList.toggle('hidden', stNow === 'running' || stNow === 'paused');
+      runTransBtn.classList.toggle('hidden', stNow === 'running' || stNow === 'paused');
+      runDubBtn.classList.toggle('primary', Boolean(task.stages_done?.subtitles && !task.stages_done?.dub_video));
+
+      const phText = document.getElementById('monitor-placeholder-text');
+      if (phText) {
+        phText.textContent = `${media.filename || task.task_id} · ${resStr}`;
       }
 
+      // Truncated Dubbing Lines Warning Banner
+      const truncBanner = document.getElementById('truncated-banner');
+      const truncList = task.truncated || [];
+      if (truncList.length > 0) {
+        truncBanner.classList.remove('hidden');
+        const lineIds = truncList.map((t) => `#${t.line_index}`).join(', ');
+        document.getElementById('truncated-banner-text').textContent =
+          `有 ${truncList.length} 句配音（句段 ${lineIds}）超出可用时间槽并在末尾截断（记录于 log/dub_truncated.json）。已在 Stage 04 对应行高亮标出，精简后可重新合成。`;
+      } else {
+        truncBanner.classList.add('hidden');
+      }
+
+      // Error Banner
       const errBanner = document.getElementById('error-banner');
       if (exec.error) {
         errBanner.classList.remove('hidden');
-        document.getElementById('error-banner-text').textContent = `❌ ${exec.error}`;
+        document.getElementById('error-banner-text').textContent = exec.error;
       } else {
         errBanner.classList.add('hidden');
       }
 
-      // Render download links & video previews
+      // Subtitle ZIP button & Download files
       const files = task.files || [];
+      const hasSrt = files.some((f) => f.endsWith('.srt') || f.endsWith('.ass'));
+      const zipLink = document.getElementById('btn-dl-sub-zip');
+      if (hasSrt) {
+        zipLink.href = `/api/tasks/${encodeURIComponent(task.task_id)}/subtitles.zip`;
+        zipLink.classList.remove('hidden');
+      } else {
+        zipLink.classList.add('hidden');
+      }
+
+      const ARTIFACT_META = {
+        'output_sub.mp4': { tag: 'MP4 成片', label: '双语字幕成片 (output_sub.mp4)', primary: true },
+        'output_dub.mp4': { tag: 'MP4 配音', label: '配音混流成片 (output_dub.mp4)', primary: true },
+        'bi.ass': { tag: 'ASS 样式', label: '双语特效字幕 (bi.ass)', primary: false },
+        'trans.srt': { tag: 'SRT 译文', label: '译文字幕 (trans.srt)', primary: false },
+        'src.srt': { tag: 'SRT 原文', label: '原文字幕 (src.srt)', primary: false },
+        'dub.srt': { tag: 'SRT 配音', label: '配音时间轴字幕 (dub.srt)', primary: false },
+        'audio/dub.wav': { tag: 'WAV 母带', label: '无损配音总轨 (dub.wav)', primary: false },
+      };
+
       const dlRow = document.getElementById('download-links-row');
       dlRow.innerHTML = '';
-      for (const fname of files) {
+      const displayFiles = files.filter((f) =>
+        f === 'output_sub.mp4' ||
+        f === 'output_dub.mp4' ||
+        f.endsWith('.srt') ||
+        f.endsWith('.ass') ||
+        f === 'audio/dub.wav' ||
+        (media.filename && f === media.filename)
+      );
+      for (const fname of displayFiles) {
         const a = document.createElement('a');
         const safeRel = fname.split('/').map(encodeURIComponent).join('/');
         a.href = `/api/tasks/${encodeURIComponent(task.task_id)}/files/${safeRel}`;
         a.download = '';
-        a.innerHTML = `<button type="button">⬇️ ${escapeHtml(fname)}</button>`;
+        const meta = ARTIFACT_META[fname] || (fname === media.filename
+          ? { tag: 'SOURCE', label: `源媒体 (${fname})`, primary: false }
+          : { tag: fname.split('.').pop().toUpperCase(), label: fname, primary: false });
+        a.className = `artifact-chip${meta.primary ? ' primary-chip' : ''}`;
+        a.innerHTML = `<span class="chip-tag">${escapeHtml(meta.tag)}</span><span class="mono">${escapeHtml(meta.label)}</span>`;
         dlRow.appendChild(a);
       }
 
-      const subVid = document.getElementById('video-sub-preview');
+      // Monitor Video Badges & Player
+      const subBadge = document.getElementById('sub-video-badge');
       if (files.includes('output_sub.mp4')) {
-        subVid.src = `/api/tasks/${encodeURIComponent(task.task_id)}/files/output_sub.mp4`;
+        subBadge.textContent = '字幕片已就绪';
+        subBadge.className = 'badge completed';
       } else if (media.filename && files.includes(media.filename)) {
-        subVid.src = `/api/tasks/${encodeURIComponent(task.task_id)}/files/${encodeURIComponent(media.filename)}`;
+        subBadge.textContent = '源媒体已挂载';
+        subBadge.className = 'badge';
+      } else {
+        subBadge.textContent = '等待媒体';
+        subBadge.className = 'badge';
       }
-      const dubVid = document.getElementById('video-dub-preview');
+
+      const dubBadge = document.getElementById('dub-video-badge');
       if (files.includes('output_dub.mp4')) {
-        dubVid.src = `/api/tasks/${encodeURIComponent(task.task_id)}/files/output_dub.mp4`;
+        dubBadge.textContent = '配音片已就绪';
+        dubBadge.className = 'badge completed';
+      } else {
+        dubBadge.textContent = '待生成配音';
+        dubBadge.className = 'badge';
+      }
+      syncMonitorVideoPlayer();
+
+      // Audio Stems Inspector (inside Stage 01)
+      const audioStems = [
+        { file: 'audio/raw.mp3', label: '原始提取音轨 (raw.mp3)' },
+        { file: 'audio/vocal.mp3', label: '分离纯净人声 (vocal.mp3)' },
+        { file: 'audio/background.mp3', label: '分离背景伴奏 (background.mp3)' },
+        { file: 'audio/dub.wav', label: '合成配音总轨 (dub.wav)' },
+      ].filter((s) => files.includes(s.file));
+
+      const stemsBox = document.getElementById('audio-stems-box');
+      if (audioStems.length > 0) {
+        stemsBox.innerHTML = audioStems.map((s) => {
+          const safeRel = s.file.split('/').map(encodeURIComponent).join('/');
+          const url = `/api/tasks/${encodeURIComponent(task.task_id)}/files/${safeRel}`;
+          const ext = s.file.split('.').pop().toUpperCase();
+          return `
+            <div class="stem-card">
+              <div class="row" style="justify-content:space-between; flex-wrap:nowrap;">
+                <strong style="font-weight:600; color:var(--text-primary); font-size:0.77rem;">${escapeHtml(s.label)}</strong>
+                <a href="${url}" download class="badge" style="text-decoration:none;" title="下载 ${escapeAttr(s.file)}">${ext} ↓</a>
+              </div>
+              <audio controls preload="none" src="${url}"></audio>
+            </div>
+          `;
+        }).join('');
+      } else {
+        stemsBox.innerHTML = `<div class="card-subtle" style="font-size:0.76rem; color:var(--text-muted);">流水线启动后将在此显示提取的音轨与伴奏预览。</div>`;
       }
 
       await loadTaskTerms(task.task_id);
       await loadTaskUtterances(task.task_id);
+      updateWaterfallCards(task, state.terms.length, state.utterances.length);
     }
 
+    document.getElementById('btn-jump-utterances').addEventListener('click', () => {
+      toggleWaterfallStage(4, true);
+      document.getElementById('wf-stage-4').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+
+    // 7. Stage 03: Terms In-Place Editor & Cascade Rerun
     async function loadTaskTerms(taskId) {
       const data = await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/terms`);
       state.terms = data.terms || [];
@@ -975,10 +3387,10 @@
           <td><input type="text" data-idx="${idx}" data-field="aliases" value="${escapeAttr(aliasesStr)}" placeholder="pie torch | Pi Torch"></td>
           <td><input type="text" data-idx="${idx}" data-field="note" value="${escapeAttr(t.note || '')}"></td>
           <td>
-            <div class="row">
-              <label style="font-size:0.78rem;"><input type="checkbox" data-idx="${idx}" data-field="fix_source" ${t.fix_source ? 'checked' : ''}> 修正原文</label>
-              <label style="font-size:0.78rem;"><input type="checkbox" data-idx="${idx}" data-field="promote_to_global"> 存入全局库</label>
-              <button type="button" class="danger" data-del-idx="${idx}">删</button>
+            <div class="row" style="flex-wrap:nowrap; gap:0.55rem;">
+              <label style="font-size:0.74rem; color:var(--text-secondary); display:inline-flex; align-items:center; gap:0.3rem; white-space:nowrap;"><input type="checkbox" data-idx="${idx}" data-field="fix_source" ${t.fix_source ? 'checked' : ''}> 修正原文</label>
+              <label style="font-size:0.74rem; color:var(--text-secondary); display:inline-flex; align-items:center; gap:0.3rem; white-space:nowrap;"><input type="checkbox" data-idx="${idx}" data-field="promote_to_global"> 存入全局</label>
+              <button type="button" class="danger sm" data-del-idx="${idx}">删除</button>
             </div>
           </td>
         `;
@@ -1026,33 +3438,32 @@
 
     document.getElementById('save-terms-btn').addEventListener('click', async () => {
       await saveTerms();
-      alert('术语表已保存！');
+      flashSavedToast('术语表已保存');
     });
 
+    document.getElementById('save-terms-rerun-btn').addEventListener('click', async () => {
+      if (!state.activeTaskId) return;
+      await saveTerms();
+      if (state.activeTaskData?.execution?.state === 'paused') {
+        await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}/resume`, { method: 'POST' });
+      } else {
+        await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}/invalidate`, {
+          method: 'POST',
+          body: JSON.stringify({ stage: 'translate', autorun: true, run_stage: 'subtitles' }),
+        });
+      }
+      flashSavedToast('已保存术语并重跑下游翻译');
+      await loadTasks();
+    });
+
+    // 8. Stage 04: Utterances In-Place Editor with Sticky Video Seek Sync
     async function loadTaskUtterances(taskId) {
       const data = await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/utterances`);
       state.utterances = data.utterances || [];
       renderUtterancesTable();
     }
 
-    function renderUtterancesTable() {
-      const tbody = document.getElementById('utterances-tbody');
-      tbody.innerHTML = '';
-      state.utterances.forEach((u, idx) => {
-        const tr = document.createElement('tr');
-        const ts = `${Number(u.start || 0).toFixed(2)}s - ${Number(u.end || 0).toFixed(2)}s`;
-        tr.innerHTML = `
-          <th>#${u.id ?? idx}<br><small style="color:var(--text-secondary);">${ts}</small></th>
-          <td><textarea rows="2" data-uidx="${idx}" data-ufield="src">${escapeHtml(u.src || '')}</textarea></td>
-          <td><textarea rows="2" data-uidx="${idx}" data-ufield="tgt">${escapeHtml(u.tgt || '')}</textarea></td>
-          <td><textarea rows="2" data-uidx="${idx}" data-ufield="tts_text">${escapeHtml(u.tts_text || u.tgt || '')}</textarea></td>
-        `;
-        tbody.appendChild(tr);
-      });
-    }
-
-    async function saveUtterances() {
-      if (!state.activeTaskId) return;
+    function syncUtterancesFromDom() {
       const tbody = document.getElementById('utterances-tbody');
       tbody.querySelectorAll('textarea[data-uidx]').forEach((ta) => {
         const i = Number(ta.dataset.uidx);
@@ -1061,6 +3472,115 @@
           state.utterances[i][f] = ta.value;
         }
       });
+    }
+
+    function renderUtterancesTable() {
+      const tbody = document.getElementById('utterances-tbody');
+      tbody.innerHTML = '';
+      const q = (state.uttFilter || '').toLowerCase();
+      const truncIndices = new Set(
+        ((state.activeTaskData && state.activeTaskData.truncated) || []).map((t) => Number(t.line_index))
+      );
+      state.utterances.forEach((u, idx) => {
+        const hay = `${u.src || ''} ${u.tgt || ''} ${u.tts_text || ''}`.toLowerCase();
+        if (q && !hay.includes(q)) return;
+        const tr = document.createElement('tr');
+        const startSec = Number(u.start || 0);
+        const endSec = Number(u.end || 0);
+        const slotDur = Math.max(0.1, endSec - startSec);
+        const ts = `${startSec.toFixed(2)}s – ${endSec.toFixed(2)}s`;
+        const rowId = u.id ?? idx;
+        const isTruncated = truncIndices.has(Number(rowId)) || truncIndices.has(idx);
+        if (isTruncated) tr.classList.add('truncated-row');
+        tr.setAttribute('data-start', String(startSec));
+        tr.setAttribute('data-end', String(endSec));
+
+        const tgtVal = u.tgt || '';
+        const ttsVal = u.tts_text || u.tgt || '';
+        const cps = (ttsVal.length / slotDur).toFixed(1);
+
+        tr.innerHTML = `
+          <th>
+            <div style="display:flex; flex-direction:column; gap:0.25rem; align-items:flex-start;">
+              <div class="row" style="gap:0.3rem; flex-wrap:nowrap;">
+                <span class="mono" style="font-size:0.72rem; color:var(--text-muted);">#${rowId}</span>
+                <span class="mono" style="font-size:0.66rem; color:var(--text-muted);">(${slotDur.toFixed(1)}s)</span>
+              </div>
+              <button type="button" class="sm seek-btn mono" data-seek="${startSec}" title="定位顶部视频至 ${startSec.toFixed(2)} 秒">${ts}</button>
+              ${isTruncated ? '<span class="badge paused" style="font-size:0.63rem; padding:0.05rem 0.35rem;" title="该句配音超出时间槽被截断，建议精简配音台词">配音超长截断</span>' : ''}
+            </div>
+          </th>
+          <td>
+            <div class="utt-cell-wrap">
+              <textarea class="utt-cell" rows="2" data-uidx="${idx}" data-ufield="src">${escapeHtml(u.src || '')}</textarea>
+            </div>
+          </td>
+          <td>
+            <div class="utt-cell-wrap">
+              <textarea class="utt-cell" rows="2" data-uidx="${idx}" data-ufield="tgt">${escapeHtml(tgtVal)}</textarea>
+              <div class="utt-meta-bar">
+                <span>画面字幕</span>
+                <span data-char-tgt="${idx}">${tgtVal.length} 字</span>
+              </div>
+            </div>
+          </td>
+          <td>
+            <div class="utt-cell-wrap">
+              <textarea class="utt-cell" rows="2" data-uidx="${idx}" data-ufield="tts_text">${escapeHtml(ttsVal)}</textarea>
+              <div class="utt-meta-bar">
+                <span>${isTruncated ? '<strong style="color:var(--warn);">建议删减字数</strong>' : 'TTS 语速预算'}</span>
+                <span data-char-tts="${idx}" data-slot="${slotDur}">${ttsVal.length} 字 · ${cps} 字/s</span>
+              </div>
+            </div>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      tbody.querySelectorAll('textarea[data-uidx]').forEach((ta) => {
+        ta.addEventListener('input', () => {
+          const i = Number(ta.dataset.uidx);
+          const f = ta.dataset.ufield;
+          if (f === 'tgt') {
+            const el = tbody.querySelector(`[data-char-tgt="${i}"]`);
+            if (el) el.textContent = `${ta.value.length} 字`;
+          } else if (f === 'tts_text') {
+            const el = tbody.querySelector(`[data-char-tts="${i}"]`);
+            if (el) {
+              const slot = Number(el.getAttribute('data-slot') || 1);
+              el.textContent = `${ta.value.length} 字 · ${(ta.value.length / slot).toFixed(1)} 字/s`;
+            }
+          }
+        });
+      });
+
+      tbody.querySelectorAll('.seek-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const sec = Number(btn.dataset.seek || 0);
+          const vMain = document.getElementById('video-main-preview');
+          if (vMain && vMain.src) {
+            vMain.currentTime = sec;
+            vMain.play().catch(() => {});
+          }
+        });
+      });
+    }
+
+    document.getElementById('utt-search-input').addEventListener('input', (e) => {
+      syncUtterancesFromDom();
+      state.uttFilter = e.target.value.trim();
+      renderUtterancesTable();
+    });
+
+    document.getElementById('sync-tgt-to-tts-btn').addEventListener('click', () => {
+      syncUtterancesFromDom();
+      state.utterances.forEach((u) => { u.tts_text = u.tgt; });
+      renderUtterancesTable();
+    });
+
+    async function saveUtterances() {
+      if (!state.activeTaskId) return;
+      syncUtterancesFromDom();
       await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}/utterances`, {
         method: 'PUT',
         body: JSON.stringify({ utterances: state.utterances }),
@@ -1069,7 +3589,22 @@
 
     document.getElementById('save-utterances-btn').addEventListener('click', async () => {
       await saveUtterances();
-      alert('译文与配音台词已保存！');
+      flashSavedToast('译文与配音台词已保存');
+    });
+
+    document.getElementById('save-utt-rerun-btn').addEventListener('click', async () => {
+      if (!state.activeTaskId) return;
+      await saveUtterances();
+      if (state.activeTaskData?.execution?.state === 'paused') {
+        await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}/resume`, { method: 'POST' });
+      } else {
+        await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}/invalidate`, {
+          method: 'POST',
+          body: JSON.stringify({ stage: 'sub_split', autorun: true, run_stage: 'subtitles' }),
+        });
+      }
+      flashSavedToast('已保存译文并重跑下游字幕切分与压制');
+      await loadTasks();
     });
 
     document.getElementById('btn-save-and-resume').addEventListener('click', async () => {
@@ -1080,7 +3615,16 @@
       await loadTasks();
     });
 
-    // Native file picker
+    document.getElementById('video-main-preview').addEventListener('timeupdate', (e) => {
+      const t = e.target.currentTime;
+      document.querySelectorAll('#utterances-tbody tr').forEach((tr) => {
+        const s = Number(tr.getAttribute('data-start') || 0);
+        const end = Number(tr.getAttribute('data-end') || 0);
+        tr.classList.toggle('active-cue', end > s && t >= s && t <= end);
+      });
+    });
+
+    // 9. Native File Picker & Task Creation (Auto-Navigate into Waterfall Detail View)
     document.getElementById('pick-local-btn').addEventListener('click', async () => {
       try {
         const res = await apiFetch('/api/dialogs/pick-files', { method: 'POST' });
@@ -1092,7 +3636,6 @@
       }
     });
 
-    // Create task(s)
     document.getElementById('create-task-btn').addEventListener('click', async () => {
       const rawPaths = document.getElementById('input-source-path').value.trim();
       const subPath = document.getElementById('input-sub-path').value.trim() || null;
@@ -1103,6 +3646,7 @@
       const autorun = document.getElementById('task-autorun').value === 'true';
 
       try {
+        let createdId = null;
         if (fileInp.files && fileInp.files.length > 0) {
           const form = new FormData();
           form.append('file', fileInp.files[0]);
@@ -1113,8 +3657,9 @@
           const res = await fetch('/api/tasks/upload', { method: 'POST', body: form });
           if (!res.ok) throw new Error(await res.text());
           const created = await res.json();
-          state.activeTaskId = created.task_id;
+          createdId = created.task_id;
           fileInp.value = '';
+          document.getElementById('dropzone-label').textContent = '拖拽本地音视频 / SRT 到此处，或点击上传';
         } else if (rawPaths) {
           const sources = rawPaths.split(';').map((s) => s.trim()).filter(Boolean);
           for (const source of sources) {
@@ -1130,20 +3675,23 @@
                 autorun,
               }),
             });
-            state.activeTaskId = created.task_id;
+            createdId = created.task_id;
           }
           document.getElementById('input-source-path').value = '';
         } else {
-          alert('请输入本地视频路径、YouTube 链接，或选择上传文件');
+          alert('请输入本地视频路径、YouTube 链接，或拖拽上传媒体文件');
           return;
         }
         await loadTasks();
+        if (createdId) {
+          await openTaskDetailView(createdId);
+        }
       } catch (e) {
         alert(`创建任务失败: ${e.message}`);
       }
     });
 
-    // Task controls
+    // 10. Task Execution Controls
     document.getElementById('btn-run-subtitles').addEventListener('click', async () => {
       if (!state.activeTaskId) return;
       await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}/run`, {
@@ -1153,12 +3701,34 @@
       await loadTasks();
     });
 
-    document.getElementById('btn-run-dubbing').addEventListener('click', async () => {
+    document.getElementById('btn-run-transcribe').addEventListener('click', async () => {
+      if (!state.activeTaskId) return;
+      await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}/run`, {
+        method: 'POST',
+        body: JSON.stringify({ stage: 'transcribe', dubbing: false }),
+      });
+      await loadTasks();
+    });
+
+    async function triggerRunDubbing() {
       if (!state.activeTaskId) return;
       await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}/run`, {
         method: 'POST',
         body: JSON.stringify({ stage: 'dubbing', dubbing: true }),
       });
+      await loadTasks();
+    }
+
+    document.getElementById('btn-run-dubbing').addEventListener('click', triggerRunDubbing);
+    document.getElementById('btn-stage6-start-dub').addEventListener('click', triggerRunDubbing);
+
+    document.getElementById('btn-clean-dub').addEventListener('click', async () => {
+      if (!state.activeTaskId) return;
+      await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}/invalidate`, {
+        method: 'POST',
+        body: JSON.stringify({ stage: 'dub_tts', autorun: false, run_stage: 'dubbing' }),
+      });
+      flashSavedToast('已清空配音缓存');
       await loadTasks();
     });
 
@@ -1183,15 +3753,15 @@
       try {
         await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}`, { method: 'DELETE' });
         state.activeTaskId = null;
-        document.getElementById('task-detail').classList.add('hidden');
-        document.getElementById('empty-state').classList.remove('hidden');
+        state.activeTaskData = null;
+        showTaskManagerView();
         await loadTasks();
       } catch (e) {
         alert(`删除任务失败: ${e.message}`);
       }
     });
 
-    // Global glossary dialog
+    // 11. Global Glossary Dialog
     const glossaryDialog = document.getElementById('glossary-dialog');
     let globalGlossaryTerms = [];
     function renderGlobalGlossaryTable() {
@@ -1206,9 +3776,9 @@
           <td><input type="text" data-gidx="${idx}" data-gfield="aliases" value="${escapeAttr(aliasesStr)}"></td>
           <td><input type="text" data-gidx="${idx}" data-gfield="note" value="${escapeAttr(t.note || '')}"></td>
           <td>
-            <div class="row">
-              <label style="font-size:0.78rem;"><input type="checkbox" data-gidx="${idx}" data-gfield="fix_source" ${t.fix_source ? 'checked' : ''}> 修正原文</label>
-              <button type="button" class="danger" data-gdel="${idx}">删</button>
+            <div class="row" style="flex-wrap:nowrap; justify-content:space-between;">
+              <label style="font-size:0.75rem; color:var(--text-secondary); display:inline-flex; align-items:center; gap:0.35rem; white-space:nowrap;"><input type="checkbox" data-gidx="${idx}" data-gfield="fix_source" ${t.fix_source ? 'checked' : ''}> 修正原文</label>
+              <button type="button" class="danger sm" data-gdel="${idx}">删除</button>
             </div>
           </td>
         `;
@@ -1258,11 +3828,12 @@
         method: 'PUT',
         body: JSON.stringify({ terms: globalGlossaryTerms }),
       });
-      glossaryDialog.close();
+      closeTopLayer(glossaryDialog);
     });
 
     document.querySelectorAll('.rerun-stage-btn').forEach((btn) => {
-      btn.addEventListener('click', async () => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
         if (!state.activeTaskId) return;
         const invalidateStage = btn.dataset.stage;
         const runStage = invalidateStage.startsWith('dub') ? 'dubbing' : 'subtitles';
@@ -1270,11 +3841,12 @@
           method: 'POST',
           body: JSON.stringify({ stage: invalidateStage, autorun: true, run_stage: runStage }),
         });
+        flashSavedToast(`已从 ${invalidateStage} 触发重跑`);
         await loadTasks();
       });
     });
 
-    // Settings dialog
+    // 12. Global Settings Dialog
     const settingsDialog = document.getElementById('settings-dialog');
     document.getElementById('open-settings-btn').addEventListener('click', async () => {
       const cfg = await apiFetch('/api/config');
@@ -1309,15 +3881,17 @@
         'pause_after_translate': document.getElementById('cfg-pause-after').value === 'true',
       };
       await apiFetch('/api/config', { method: 'PUT', body: JSON.stringify({ updates }) });
-      settingsDialog.close();
+      await loadSidebarConfig();
+      closeTopLayer(settingsDialog);
     });
 
-    // SSE stream connection
+    // 13. SSE Real-Time Stream
     function connectSSE() {
       const pill = document.getElementById('sse-indicator');
+      const txt = document.getElementById('sse-text');
       const es = new EventSource('/api/events');
       es.onopen = () => {
-        pill.textContent = 'SSE 实时流已连接';
+        if (txt) txt.textContent = '实时流已连接';
         pill.classList.add('connected');
       };
       es.onmessage = async (ev) => {
@@ -1328,7 +3902,7 @@
         } catch (_) {}
       };
       es.onerror = () => {
-        pill.textContent = 'SSE 重连中...';
+        if (txt) txt.textContent = '离线模式';
         pill.classList.remove('connected');
       };
     }
@@ -1341,6 +3915,8 @@
       return escapeHtml(str).replace(/"/g, '&quot;');
     }
 
+    showTaskManagerView();
+    loadSidebarConfig();
     loadTasks();
     connectSSE();
   </script>

@@ -1,8 +1,10 @@
 """Local Web UI + SSE + REST API server for VideoLingo."""
+
 from __future__ import annotations
 
 import asyncio
 from functools import partial
+import io
 import json
 import os
 from pathlib import Path
@@ -12,11 +14,13 @@ import shutil
 import subprocess
 import sys
 from threading import Lock
+import time
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
+import zipfile
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.pipeline import get_steps
@@ -51,7 +55,10 @@ def _configure_utf8_console():
 
 _configure_utf8_console()
 
-app = FastAPI(title="VideoLingo", description="Serial multi-task workspace with SSE and zero-copy local media import.")
+app = FastAPI(
+    title="VideoLingo",
+    description="Serial multi-task workspace with SSE and zero-copy local media import.",
+)
 runner = TaskRunner()
 operation_lock = Lock()
 OUTPUT = Path("output")
@@ -93,10 +100,18 @@ runner.add_listener(_on_runner_event)
 
 # ─── Request Models ───
 
+
 class InputRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    source: str = Field(min_length=1, description="Local file path or HTTP(S) video URL; an SRT file to translate subtitles without a video")
-    subtitles: str | None = Field(default=None, min_length=1, description="Local SRT file that is used instead of the recognition")
+    source: str = Field(
+        min_length=1,
+        description="Local file path or HTTP(S) video URL; an SRT file to translate subtitles without a video",
+    )
+    subtitles: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Local SRT file that is used instead of the recognition",
+    )
     existing: Literal["reject", "archive", "replace"] = "reject"
 
 
@@ -145,24 +160,37 @@ class ConfigUpdateRequest(BaseModel):
 
 # ─── Shared Helpers ───
 
+
 def require_idle():
     if runner.is_active:
-        raise HTTPException(409, "An operation is active; wait for /status before continuing.")
+        raise HTTPException(
+            409, "An operation is active; wait for /status before continuing."
+        )
 
 
 def archive_output():
     from core.utils.onekeycleanup import cleanup
+
     cleanup()
     if OUTPUT.exists() and any(OUTPUT.iterdir()):
-        raise RuntimeError("Some output files could not be archived; inspect output/ before retrying.")
+        raise RuntimeError(
+            "Some output files could not be archived; inspect output/ before retrying."
+        )
 
 
 def subtitle_file(path):
     """The SRT file of a request, which has to be one with subtitles in it."""
     from core._2_import_subtitles import read_cues
+
     path = Path(path).resolve()
-    if not path.is_file() or path.suffix.lower() != ".srt" or path.is_relative_to(OUTPUT.resolve()):
-        raise HTTPException(422, "Subtitles must be an existing SRT file outside output/")
+    if (
+        not path.is_file()
+        or path.suffix.lower() != ".srt"
+        or path.is_relative_to(OUTPUT.resolve())
+    ):
+        raise HTTPException(
+            422, "Subtitles must be an existing SRT file outside output/"
+        )
     try:
         read_cues(path.read_bytes())
     except ValueError as exc:
@@ -193,9 +221,45 @@ def _resolve_workspace(task_id: str) -> TaskWorkspace:
 
 def _workspace_summary(ws: TaskWorkspace) -> dict[str, Any]:
     manifest = ws.load_manifest()
-    files = sorted(p.name for p in ws.root.glob("*") if p.is_file() and not p.name.startswith("."))
-    if (ws.root / "audio" / "dub.wav").is_file():
-        files.append("audio/dub.wav")
+    files = sorted(
+        p.name for p in ws.root.glob("*") if p.is_file() and not p.name.startswith(".")
+    )
+    for audio_sub in ("dub.wav", "raw.mp3", "vocal.mp3", "background.mp3"):
+        if (ws.audio_dir / audio_sub).is_file():
+            files.append(f"audio/{audio_sub}")
+    refers = (
+        sorted(p.name for p in ws.refers_dir.glob("*.wav") if p.is_file())
+        if ws.refers_dir.is_dir()
+        else []
+    )
+    segs = (
+        sorted(p.name for p in ws.segs_dir.glob("*.wav") if p.is_file())
+        if ws.segs_dir.is_dir()
+        else []
+    )
+    truncated = []
+    trunc_path = ws.log_dir / "dub_truncated.json"
+    if trunc_path.is_file():
+        data = json.loads(trunc_path.read_text(encoding="utf-8"))
+        if not isinstance(data, list):
+            raise ValueError(
+                f"Expected list in {trunc_path}, got {type(data).__name__}"
+            )
+        truncated = data
+    stages_done = {
+        "asr": ws.words_path.is_file()
+        or (ws.log_dir / "cleaned_chunks.xlsx").is_file(),
+        "split": ws.utterances_path.is_file()
+        or (ws.log_dir / "split_by_meaning.txt").is_file(),
+        "terms": ws.terms_path.is_file() or (ws.log_dir / "terminology.json").is_file(),
+        "translate": (ws.log_dir / "translation_results.xlsx").is_file(),
+        "subtitles": (ws.root / "trans.srt").is_file()
+        and (ws.root / "src.srt").is_file(),
+        "sub_video": (ws.root / "output_sub.mp4").is_file(),
+        "dub_audio": (ws.audio_dir / "dub.wav").is_file()
+        or (ws.root / "dub.mp3").is_file(),
+        "dub_video": (ws.root / "output_dub.mp4").is_file(),
+    }
     if runner.active_task_id == ws.task_id:
         manifest["execution"] = {
             **manifest.get("execution", {}),
@@ -208,10 +272,15 @@ def _workspace_summary(ws: TaskWorkspace) -> dict[str, Any]:
             "error": runner.error_msg or None,
         }
     manifest["files"] = files
+    manifest["refers"] = refers
+    manifest["segs"] = segs
+    manifest["truncated"] = truncated
+    manifest["stages_done"] = stages_done
     return manifest
 
 
 # ─── Web UI & SSE Endpoints ───
+
 
 @app.get("/", response_class=HTMLResponse)
 def webui_index():
@@ -260,15 +329,17 @@ def pick_local_files():
     if platform.system() == "Darwin":
         script = (
             'set chosenFiles to choose file with prompt "Select video/audio files for VideoLingo" '
-            'with multiple selections allowed\n'
-            'set posixPaths to {}\n'
-            'repeat with aFile in chosenFiles\n'
-            '  set end of posixPaths to POSIX path of aFile\n'
-            'end repeat\n'
+            "with multiple selections allowed\n"
+            "set posixPaths to {}\n"
+            "repeat with aFile in chosenFiles\n"
+            "  set end of posixPaths to POSIX path of aFile\n"
+            "end repeat\n"
             'set AppleScript\'s text item delimiters to "\\n"\n'
-            'return posixPaths as text'
+            "return posixPaths as text"
         )
-        proc = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+        proc = subprocess.run(
+            ["osascript", "-e", script], capture_output=True, text=True, check=False
+        )
         if proc.returncode != 0:
             return {"paths": []}
         paths = [p.strip() for p in (proc.stdout or "").splitlines() if p.strip()]
@@ -277,6 +348,7 @@ def pick_local_files():
 
 
 # ─── Multi-Task Workspace & Queue Endpoints ───
+
 
 @app.get("/api/tasks")
 def list_tasks():
@@ -321,13 +393,22 @@ def create_task(request: CreateTaskRequest):
 
         def _dl():
             from core._1_ytdlp import download_video_ytdlp
-            download_video_ytdlp(request.source, save_path=str(ws.root), resolution=load_key("ytb_resolution"))
+
+            download_video_ytdlp(
+                request.source,
+                save_path=str(ws.root),
+                resolution=load_key("ytb_resolution"),
+            )
 
         dl_steps = [("Download video", _dl)]
         if request.autorun:
-            needs_dub = request.stage == "dubbing" or (request.stage == "all" and request.dubbing)
+            needs_dub = request.stage == "dubbing" or (
+                request.stage == "all" and request.dubbing
+            )
             dl_steps.extend(get_steps(request.stage, needs_dub))
-        runner.enqueue(_wrap_workspace_steps(ws, dl_steps, overrides), task_id=ws.task_id)
+        runner.enqueue(
+            _wrap_workspace_steps(ws, dl_steps, overrides), task_id=ws.task_id
+        )
         return _workspace_summary(ws)
 
     src_path = Path(request.source).resolve()
@@ -347,8 +428,12 @@ def create_task(request: CreateTaskRequest):
         config_override=overrides,
     )
     if request.autorun:
-        needs_dub = request.stage == "dubbing" or (request.stage == "all" and request.dubbing)
-        steps = _wrap_workspace_steps(ws, get_steps(request.stage, needs_dub), overrides)
+        needs_dub = request.stage == "dubbing" or (
+            request.stage == "all" and request.dubbing
+        )
+        steps = _wrap_workspace_steps(
+            ws, get_steps(request.stage, needs_dub), overrides
+        )
         runner.enqueue(steps, task_id=ws.task_id)
     return _workspace_summary(ws)
 
@@ -364,13 +449,33 @@ def upload_task(
     raw_name = file.filename or "uploaded_video.mp4"
     ext = Path(raw_name).suffix.lower() or ".mp4"
     stem = Path(raw_name).stem or "video"
+    formats = load_key("allowed_video_formats") + load_key("allowed_audio_formats")
+    if ext != ".srt" and ext.lstrip(".") not in formats:
+        raise HTTPException(422, f"Unsupported media format: {ext}")
+
+    payload_bytes: bytes | None = None
+    if ext == ".srt":
+        from core._2_import_subtitles import read_cues
+
+        payload_bytes = file.file.read()
+        try:
+            read_cues(payload_bytes)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
     ws = create_task_workspace(stem, base_dir=OUTPUT)
     dst_name = "source.srt" if ext == ".srt" else f"source{ext}"
     dst_path = ws.root / dst_name
-    with open(dst_path, "wb") as out_f:
-        shutil.copyfileobj(file.file, out_f)
+    if payload_bytes is not None:
+        dst_path.write_bytes(payload_bytes)
+    else:
+        with open(dst_path, "wb") as out_f:
+            shutil.copyfileobj(file.file, out_f)
 
-    overrides = {"whisper.language": source_language, "target_language": target_language}
+    overrides = {
+        "whisper.language": source_language,
+        "target_language": target_language,
+    }
     if source_language != "auto":
         overrides["whisper.detected_language"] = source_language
     ws.init_from_local_file(dst_path, title=stem, config_override=overrides)
@@ -395,31 +500,39 @@ def run_task(task_id: str, request: RunRequest):
     manifest["config_override"] = overrides
     ws.save_manifest(manifest)
 
-    needs_dubbing = request.stage == "dubbing" or (request.stage == "all" and request.dubbing)
-    steps = _wrap_workspace_steps(ws, get_steps(request.stage, needs_dubbing), overrides)
+    needs_dubbing = request.stage == "dubbing" or (
+        request.stage == "all" and request.dubbing
+    )
+    steps = _wrap_workspace_steps(
+        ws, get_steps(request.stage, needs_dubbing), overrides
+    )
     started_now = runner.enqueue(steps, task_id=ws.task_id)
     return {"accepted": True, "started_immediately": started_now, "task_id": ws.task_id}
 
 
 @app.post("/api/tasks/{task_id}/pause")
 def pause_task(task_id: str):
-    _resolve_workspace(task_id)
+    ws = _resolve_workspace(task_id)
+    if runner.active_task_id != ws.task_id or not runner.is_active:
+        raise HTTPException(409, f"Task {ws.task_id} is not the active running task.")
     runner.pause("Paused by user")
     return {"state": runner.state}
 
 
 @app.post("/api/tasks/{task_id}/resume")
 def resume_task(task_id: str):
-    _resolve_workspace(task_id)
-    if runner.state != "paused":
-        raise HTTPException(409, "No task is paused.")
+    ws = _resolve_workspace(task_id)
+    if runner.active_task_id != ws.task_id or runner.state != "paused":
+        raise HTTPException(409, f"Task {ws.task_id} is not paused.")
     runner.resume()
     return {"state": runner.state}
 
 
 @app.post("/api/tasks/{task_id}/stop")
 def stop_task(task_id: str):
-    _resolve_workspace(task_id)
+    ws = _resolve_workspace(task_id)
+    if runner.active_task_id != ws.task_id or not runner.is_active:
+        raise HTTPException(409, f"Task {ws.task_id} is not active.")
     runner.stop()
     return {"state": runner.state}
 
@@ -427,6 +540,11 @@ def stop_task(task_id: str):
 @app.post("/api/tasks/{task_id}/invalidate")
 def invalidate_task_stage(task_id: str, request: InvalidateStageRequest):
     ws = _resolve_workspace(task_id)
+    if runner.active_task_id == ws.task_id and runner.is_active:
+        raise HTTPException(
+            409,
+            "Cannot invalidate stages while the task is actively running; stop it first.",
+        )
     try:
         invalidated = ws.invalidate_from_stage(request.stage)
     except ValueError as exc:
@@ -434,7 +552,9 @@ def invalidate_task_stage(task_id: str, request: InvalidateStageRequest):
     if request.autorun:
         overrides = dict(ws.load_manifest().get("config_override") or {})
         needs_dub = request.run_stage in ("dubbing", "all")
-        steps = _wrap_workspace_steps(ws, get_steps(request.run_stage, needs_dub), overrides)
+        steps = _wrap_workspace_steps(
+            ws, get_steps(request.run_stage, needs_dub), overrides
+        )
         runner.enqueue(steps, task_id=ws.task_id)
     return {"invalidated": invalidated}
 
@@ -446,11 +566,8 @@ def get_task_terms(task_id: str):
         return ws.load_terms()
     legacy_path = ws.log_dir / "terminology.json"
     if legacy_path.is_file():
-        try:
-            data = json.loads(legacy_path.read_text(encoding="utf-8"))
-            return {"summary": data.get("theme", ""), "terms": data.get("terms", [])}
-        except Exception:
-            pass
+        data = json.loads(legacy_path.read_text(encoding="utf-8"))
+        return {"summary": data.get("theme", ""), "terms": data.get("terms", [])}
     return {"summary": "", "terms": []}
 
 
@@ -458,7 +575,9 @@ def get_task_terms(task_id: str):
 def update_task_terms(task_id: str, request: TermsUpdateRequest):
     ws = _resolve_workspace(task_id)
     current = get_task_terms(task_id)
-    summary = request.summary if request.summary is not None else current.get("summary", "")
+    summary = (
+        request.summary if request.summary is not None else current.get("summary", "")
+    )
     ws.save_terms(summary, request.terms)
 
     # Also keep legacy terminology.json synchronized for pipeline compatibility
@@ -478,7 +597,9 @@ def update_task_terms(task_id: str, request: TermsUpdateRequest):
     }
     legacy_path = ws.log_dir / "terminology.json"
     legacy_path.parent.mkdir(parents=True, exist_ok=True)
-    legacy_path.write_text(json.dumps(legacy_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    legacy_path.write_text(
+        json.dumps(legacy_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     to_promote = [t for t in request.terms if t.get("promote_to_global")]
     promoted = promote_terms_to_global(to_promote) if to_promote else 0
@@ -494,14 +615,32 @@ def get_task_utterances(task_id: str):
     trans_xlsx = ws.log_dir / "translation_results.xlsx"
     if trans_xlsx.is_file():
         import pandas as pd
+
         df = pd.read_excel(trans_xlsx)
         rows = []
         for idx, row in df.iterrows():
             src_val = row.get("Source")
             tgt_val = row.get("Translation")
-            src = "" if src_val is None or bool(pd.isna(src_val)) else str(src_val).strip()
-            tgt = "" if tgt_val is None or bool(pd.isna(tgt_val)) else str(tgt_val).strip()
-            rows.append({"id": idx, "start": 0.0, "end": 0.0, "src": src, "tgt": tgt, "tts_text": tgt})
+            src = (
+                ""
+                if src_val is None or bool(pd.isna(src_val))
+                else str(src_val).strip()
+            )
+            tgt = (
+                ""
+                if tgt_val is None or bool(pd.isna(tgt_val))
+                else str(tgt_val).strip()
+            )
+            rows.append(
+                {
+                    "id": idx,
+                    "start": 0.0,
+                    "end": 0.0,
+                    "src": src,
+                    "tgt": tgt,
+                    "tts_text": tgt,
+                }
+            )
         return {"utterances": rows}
     return {"utterances": []}
 
@@ -518,10 +657,15 @@ def update_task_utterances(task_id: str, request: UtterancesUpdateRequest):
         trans_xlsx = ws.log_dir / "translation_results.xlsx"
         if trans_xlsx.is_file():
             import pandas as pd
+
             df = pd.read_excel(trans_xlsx)
             if len(df) == len(request.utterances):
-                df["Source"] = [str(u.get("src") or "").strip() for u in request.utterances]
-                df["Translation"] = [str(u.get("tgt") or "").strip() for u in request.utterances]
+                df["Source"] = [
+                    str(u.get("src") or "").strip() for u in request.utterances
+                ]
+                df["Translation"] = [
+                    str(u.get("tgt") or "").strip() for u in request.utterances
+                ]
                 df.to_excel(trans_xlsx, index=False)
     return {"saved": len(request.utterances)}
 
@@ -548,9 +692,127 @@ def get_task_file(task_id: str, name: str):
     ):
         raise HTTPException(404, "Task file not found")
     title = ws.load_manifest().get("title") or ws.task_id
-    safe_title = "".join(c for c in str(title) if c not in '<>:"/\\|?*').strip() or "video"
-    dl_name = f"{safe_title}_{path.name}" if path.name.startswith("output_") else path.name
+    safe_title = (
+        "".join(c for c in str(title) if c not in '<>:"/\\|?*').strip() or "video"
+    )
+    dl_name = (
+        f"{safe_title}_{path.name}" if path.name.startswith("output_") else path.name
+    )
     return FileResponse(path, filename=dl_name)
+
+
+class LLMProbeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+
+
+class DetectMaiRegionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_key: str = Field(min_length=1)
+
+
+@app.post("/api/mai/detect-region")
+def detect_mai_region(request: DetectMaiRegionRequest):
+    from core.asr_backend.mai_asr import detect_region
+
+    region = detect_region(request.api_key.strip())
+    if region:
+        update_key("whisper.mai_region", region, add_missing=True)
+    return {"region": region}
+
+
+@app.get("/api/tasks/{task_id}/subtitles.zip")
+def download_task_subtitles_zip(task_id: str):
+    ws = _resolve_workspace(task_id)
+    sub_files = [
+        p
+        for p in sorted(ws.root.glob("*"))
+        if p.is_file() and p.suffix.lower() in {".srt", ".ass", ".vtt"}
+    ]
+    if not sub_files:
+        raise HTTPException(404, "No subtitle files generated yet")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in sub_files:
+            zf.write(p, arcname=p.name)
+    title = ws.load_manifest().get("title") or ws.task_id
+    safe_title = (
+        "".join(c for c in str(title) if c not in '<>:"/\\|?*').strip() or "subtitles"
+    )
+    ascii_fallback = (
+        "".join(
+            c for c in safe_title if c.isascii() and (c.isalnum() or c in "-_.")
+        ).strip()
+        or ws.task_id
+    )
+    encoded_utf8 = quote(f"{safe_title}_subtitles.zip")
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_fallback}_subtitles.zip"; '
+                f"filename*=UTF-8''{encoded_utf8}"
+            )
+        },
+    )
+
+
+@app.post("/api/llm/models")
+def fetch_llm_models(request: LLMProbeRequest):
+    import requests
+    from core.utils.ask_gpt import is_local_endpoint, normalize_base_url
+
+    base_url = (request.base_url or str(load_key("api.base_url") or "")).strip()
+    api_key = (
+        request.api_key
+        if request.api_key is not None
+        else str(load_key("api.key") or "")
+    ).strip()
+    if not base_url or (not api_key and not is_local_endpoint(base_url)):
+        return {"models": [], "error": "Missing API Base URL or API Key"}
+    url = normalize_base_url(base_url) + "/models"
+    try:
+        resp = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        models = sorted(str(m["id"]) for m in data if isinstance(m, dict) and "id" in m)
+        return {"models": models}
+    except Exception as exc:
+        return {"models": [], "error": f"{type(exc).__name__}: {str(exc)[:300]}"}
+
+
+@app.post("/api/llm/check")
+def check_llm_api(request: LLMProbeRequest):
+    from core.utils.ask_gpt import ask_gpt
+
+    overrides: dict[str, Any] = {}
+    if request.base_url is not None and request.base_url.strip():
+        overrides["api.base_url"] = request.base_url.strip()
+    if request.api_key is not None and request.api_key.strip():
+        overrides["api.key"] = request.api_key.strip()
+    if request.model is not None and request.model.strip():
+        overrides["api.model"] = request.model.strip()
+
+    try:
+        fn = getattr(ask_gpt, "__wrapped__", ask_gpt)
+        with task_config_context(overrides):
+            resp = fn(
+                f"This is a connectivity test ({int(time.time())}), respond with {{'message':'success'}} in JSON format.",
+                resp_type="json",
+                log_title="None",
+            )
+        if isinstance(resp, dict) and resp.get("message") == "success":
+            return {"valid": True, "error": ""}
+        return {"valid": False, "error": f"Unexpected response: {str(resp)[:240]}"}
+    except Exception as exc:
+        return {"valid": False, "error": f"{type(exc).__name__}: {str(exc)[:400]}"}
 
 
 @app.get("/api/glossary")
@@ -580,10 +842,17 @@ def put_config(request: ConfigUpdateRequest):
 
 # ─── Legacy Single-Output Endpoints (Preserved for Existing API Callers & Tests) ───
 
+
 def prepare_input(source, existing, subtitles=None):
-    from core._1_ytdlp import (download_video_ytdlp, write_input_manifest,
-                              sanitize_filename, GENERATED_AUDIO_NAMES, GENERATED_VIDEO_NAMES)
+    from core._1_ytdlp import (
+        download_video_ytdlp,
+        write_input_manifest,
+        sanitize_filename,
+        GENERATED_AUDIO_NAMES,
+        GENERATED_VIDEO_NAMES,
+    )
     from core._2_import_subtitles import add_input_subtitles
+
     if OUTPUT.exists() and any(OUTPUT.iterdir()):
         if existing == "archive":
             archive_output()
@@ -601,7 +870,11 @@ def prepare_input(source, existing, subtitles=None):
             name = "input_" + name
         destination = OUTPUT / name
         shutil.copy2(source, destination)
-        kind = "video" if source.suffix.lower()[1:] in load_key("allowed_video_formats") else "audio"
+        kind = (
+            "video"
+            if source.suffix.lower()[1:] in load_key("allowed_video_formats")
+            else "audio"
+        )
         write_input_manifest(str(destination), kind)
     if subtitles:
         add_input_subtitles(subtitles.name, subtitles.read_bytes())
@@ -622,8 +895,13 @@ def set_input(request: InputRequest):
             if not source.is_file():
                 raise HTTPException(422, "Source file does not exist")
             if source.is_relative_to(OUTPUT.resolve()):
-                raise HTTPException(422, "Source must be outside output/; use /run for an existing input.")
-            formats = load_key("allowed_video_formats") + load_key("allowed_audio_formats")
+                raise HTTPException(
+                    422,
+                    "Source must be outside output/; use /run for an existing input.",
+                )
+            formats = load_key("allowed_video_formats") + load_key(
+                "allowed_audio_formats"
+            )
             if source.suffix.lower() == ".srt":
                 source = subtitle_file(source)
             elif source.suffix.lower()[1:] not in formats:
@@ -631,8 +909,17 @@ def set_input(request: InputRequest):
             source = str(source)
         subtitles = subtitle_file(request.subtitles) if request.subtitles else None
         if OUTPUT.exists() and any(OUTPUT.iterdir()) and request.existing == "reject":
-            raise HTTPException(409, "output/ is not empty; explicitly choose archive or replace.")
-        runner.start([("Prepare input", lambda: prepare_input(source, request.existing, subtitles))])
+            raise HTTPException(
+                409, "output/ is not empty; explicitly choose archive or replace."
+            )
+        runner.start(
+            [
+                (
+                    "Prepare input",
+                    lambda: prepare_input(source, request.existing, subtitles),
+                )
+            ]
+        )
         return {"accepted": True}
 
 
@@ -642,14 +929,21 @@ def run(request: RunRequest):
     with operation_lock:
         require_idle()
         from core._1_ytdlp import find_media_file
+
         try:
             _, kind = find_media_file()
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
-        needs_dubbing = request.stage == "dubbing" or (request.stage == "all" and request.dubbing)
+        needs_dubbing = request.stage == "dubbing" or (
+            request.stage == "all" and request.dubbing
+        )
         if needs_dubbing and kind in ("audio", "subtitle"):
-            raise HTTPException(422, "Input without a video supports subtitles only, as in the UI.")
-        if request.stage == "dubbing" and not all((OUTPUT / name).exists() for name in ("src.srt", "trans.srt")):
+            raise HTTPException(
+                422, "Input without a video supports subtitles only, as in the UI."
+            )
+        if request.stage == "dubbing" and not all(
+            (OUTPUT / name).exists() for name in ("src.srt", "trans.srt")
+        ):
             raise HTTPException(409, "Generate subtitles before starting dubbing.")
         if request.target_language is not None:
             update_key("target_language", request.target_language)
@@ -662,7 +956,9 @@ def run(request: RunRequest):
 @app.get("/status")
 def status():
     """In-memory execution state; output files survive server restarts."""
-    files = sorted(p.name for p in OUTPUT.glob("*") if p.is_file() and not p.name.startswith('.'))
+    files = sorted(
+        p.name for p in OUTPUT.glob("*") if p.is_file() and not p.name.startswith(".")
+    )
     return {
         "state": runner.state,
         "active": runner.is_active,
@@ -697,7 +993,7 @@ def stop():
 @app.get("/files/{name}")
 def file(name: str):
     path = (OUTPUT / name).resolve()
-    if path.parent != OUTPUT.resolve() or name.startswith('.') or not path.is_file():
+    if path.parent != OUTPUT.resolve() or name.startswith(".") or not path.is_file():
         raise HTTPException(404, "Output file not found")
     return FileResponse(path, filename=path.name)
 
@@ -715,5 +1011,6 @@ def archive():
 
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.environ.get("VIDEOLINGO_API_PORT", "8501"))
     uvicorn.run(app, host="127.0.0.1", port=port)
