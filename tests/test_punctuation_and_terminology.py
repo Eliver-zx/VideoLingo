@@ -1032,3 +1032,55 @@ def test_split_align_subs_resolves_punctuated_clauses_locally_and_batches_remain
     assert len(src_out) == len(tr_out) >= 5
     assert all(s5.calc_len(t) * 1.3 <= 75 for t in tr_out)
     assert remerged == tr_in
+
+
+def test_prompts_are_domain_and_language_agnostic_and_merge_tiny_clauses_preserves_parallel_clauses(
+    monkeypatch,
+):
+    """Prompts contain no hardcoded Chinese characters when target_language is non-Chinese,
+    and _merge_tiny_clauses merges sentence-initial lead-ins while preserving mid-sentence
+    parallel short clauses."""
+    import re
+
+    import core._5_split_sub as s5
+    import core.prompts as prompts
+
+    monkeypatch.setattr(
+        prompts, "load_key", lambda k: "Español" if k == "target_language" else False
+    )
+    monkeypatch.setattr(prompts, "load_key_or", lambda k, d="": "")
+    monkeypatch.setattr(prompts, "get_source_language", lambda: "English")
+
+    shared = prompts.generate_shared_prompt(["Prev"], ["Next"], "Summary", "Notes")
+    faith_prompt = prompts.get_prompt_faithfulness("Hello world.", shared)
+    consolidate_prompt = prompts.get_consolidate_terms_prompt(
+        [{"src": "API", "tgt": "API"}],
+        theme="Tech",
+        target_language="Español",
+    )
+
+    assert not re.search(r"[\u4e00-\u9fff]", faith_prompt)
+    assert not re.search(r"[\u4e00-\u9fff]", consolidate_prompt)
+
+    # Sentence-initial lead-in ('但遗憾的是，' = 5 CJK chars, weighted 10.75) merges into following clause
+    merged_lead = s5._merge_tiny_clauses(
+        ["但遗憾的是，", "数据汇编里的公式并不完全准确。"],
+        min_weighted_len=7.5,
+        lead_in_weighted_len=13.0,
+        max_merged_weighted_len=62.5,
+    )
+    assert merged_lead == ["但遗憾的是，数据汇编里的公式并不完全准确。"]
+
+    # Mid-sentence parallel 5-char clauses stay separate instead of collapsing into one
+    merged_parallel = s5._merge_tiny_clauses(
+        ["这套动作讲究快准狠，", "稳如泰山，", "一击必杀，", "绝不拖泥带水。"],
+        min_weighted_len=7.5,
+        lead_in_weighted_len=13.0,
+        max_merged_weighted_len=62.5,
+    )
+    assert merged_parallel == [
+        "这套动作讲究快准狠，",
+        "稳如泰山，",
+        "一击必杀，",
+        "绝不拖泥带水。",
+    ]

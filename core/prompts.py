@@ -199,13 +199,13 @@ Some entries may include:
 
 Consolidate, deduplicate, and refine this list into a unified, accurate glossary:
 1. **Authoritative Glossary Alignment (`kb_candidates`)**:
-   - When an extracted term or its ASR variant corresponds to an official entry in `kb_candidates`, **adopt the official canonical `src` and official `{tgt_lang}` translation `tgt` from `kb_candidates`** (e.g., `Multimach` / `Multimoc` -> `src: "Multimach CCX"`, `tgt: "多机系统CCX"`; `DFA` -> `src: "D.F.A."`, `tgt: "死从天降"`; `Indebted Kindness` / `Loaded Kindness` -> `src: "Indebted Kindness"`, `tgt: "蒙恩"`).
-   - **CRITICAL**: Whenever `src` is normalized to a full canonical name (like `"Multimach CCX"` or `"D.F.A."`), **keep the exact shorthand or ASR surface forms that appeared in the transcript (like `"Multimach"`, `"Multimoc"`, `"DFA"`) inside `aliases`** so text matching can still find them in the transcript.
+   - When an extracted term or its ASR variant corresponds to an authoritative entry in `kb_candidates`, **adopt the canonical `src` and official `{tgt_lang}` translation `tgt` from `kb_candidates`**.
+   - **CRITICAL**: Whenever `src` is normalized to a full canonical name, **keep the exact shorthand, abbreviation, or ASR surface forms that appeared in the transcript inside `aliases`** so text matching can still find them in the transcript.
 2. **Verify Direct Glossary Scan Candidates (`source_hint: "kb_scan_candidate"`)**:
-   - Entries marked with `source_hint: "kb_scan_candidate"` matched the transcript text against the official glossary and include a `context_snippet` showing the surrounding words in the transcript.
+   - Entries marked with `source_hint: "kb_scan_candidate"` matched the transcript text against the reference glossary and include a `context_snippet` showing the surrounding words in the transcript.
    - **Check `context_snippet` carefully**:
-     - **Keep** the entry ONLY if it is used as a genuine domain term, weapon, skill, perk, archetype, or proper noun in `context_snippet`.
-     - **Discard** the entry if `context_snippet` shows it is just an ordinary conversational phrase or number that coincidentally shares a name with a game item (e.g., `"it's cool"` in `"because it's cool"`, `"second chance"` in `"give this a second chance"`, `"plus one"` in `"14 plus one"`, `"single player"` in `"in single player"`).
+     - **Keep** the entry ONLY if it is used as a genuine domain term, proper noun, entity, technical mechanism, or specialized item in `context_snippet`.
+     - **Discard** the entry if `context_snippet` shows it is just an ordinary conversational phrase or number that coincidentally shares a name with a glossary entry (e.g., `"it's cool"` in `"because it's cool"`, `"second chance"` in `"give this a second chance"`, `"plus one"` in `"10 plus one"`, `"single player"` in `"in single player"`).
 3. **Cross-Chunk ASR Variant & Shorthand Unification**:
    - Merge duplicate entries that refer to the same entity under different ASR phonetic spellings, abbreviations, or inflections into a single entry, combining all transcript surface forms into `aliases` and using one consistent `{tgt_lang}` `tgt`.
    - Keep `tgt` as a **clean subtitle-ready term** with zero parenthetical explanations (put any explanations in `note`).
@@ -313,20 +313,20 @@ Translate the numbered {src_language} subtitle lines into faithful, idiomatic {T
 {style_prompt}<translation_principles>
 1. **100% Semantic Fidelity & Accurate Syntactic Attachment (Zero Alteration, Zero Omission)**:
    - Every factual detail, technical mechanism, number, comparison, condition, and speaker stance (`in theory`, `potentially`, `at least`, `technically`, `I know for sure`) MUST be preserved accurately. Never invent facts, alter meaning, or drop substantive information.
-   - **Resolve Modifier Attachment Carefully**: When an English sentence ends with a numerical or prepositional modifier after a comparison (e.g., `"takes X hits, which is faster than a standard Y at 1.6 seconds"`), attach the measurement (`1.6 seconds`) to the subject being measured (`takes X hits, taking only 1.6 seconds, which is much faster than a standard Y`), never to the baseline noun `Y`. Similarly, translate compound technical modifiers by their real mechanism (`"lower mag dump frames"` = frames with a shorter magazine-dump time, not smaller magazine capacity).
-   - Use `<previous_content>`, `<subsequent_content>`, and `Content Summary` to resolve pronouns, omitted subjects, and domain-specific terms (e.g., `primary` / `primaries` in weapon discussions = `主武器`, not `初级武器`).
+   - **Resolve Modifier Attachment Carefully**: When a sentence ends with a numerical measurement or prepositional phrase after a comparison (e.g., `"takes X hits, which is much faster than a standard Y at 1.6 seconds"`), attach the measurement (`1.6 seconds`) to the subject being measured (`takes X hits, taking only 1.6 seconds, which is much faster than a standard Y`), never to the baseline noun `Y`. Translate compound technical modifiers by their real mechanism (e.g., rate/time vs. capacity) rather than surface word-for-word guessing.
+   - Use `<previous_content>`, `<subsequent_content>`, and `Content Summary` to resolve polysemous domain terms, pronouns, and omitted subjects according to the video's subject matter.
 2. **ASR Homophone & Phonetic Error Recovery**:
-   - Source lines come from ASR and contain phonetic typos or speaker self-corrections (e.g., `"burning ambition, incandescent, I believe burning ambition, I know for sure doesn't count"`). Recover the speaker's intended word from context and `Points to Note`, and translate the coherent intended statement smoothly without mimicking broken ASR stutters.
+   - Source lines come from ASR and contain phonetic typos or speaker self-corrections (e.g., `"X, Y, I believe X, I know for sure doesn't count"`). Recover the speaker's intended word from context and `Points to Note`, and translate the coherent intended statement smoothly without mimicking broken ASR stutters.
 3. **Strict Terminology & Clean Proper Nouns**:
-   - **Mandatory Glossary Match**: Whenever a term or any of its `also transcribed as` aliases in `Points to Note` appears in a line, you **MUST** use the exact target translation specified in `Points to Note` (never translate a listed proper noun literally, e.g., use `无名之秋`, never `匿名之秋`).
+   - **Mandatory Glossary Match**: Whenever a term or any of its `also transcribed as` aliases in `Points to Note` appears in a line, you **MUST** use the exact target translation specified in `Points to Note` (never translate a listed proper noun literally).
    - **Clean Output**: Keep unlisted person names, model numbers, or version codes in their original form. **Never** insert parenthetical source text, explanations in brackets, or translator notes into the subtitles.
 4. **Idiomatic {TARGET_LANGUAGE} Spoken Flow (Zero Translationese)**:
-   - **Strip Spoken Disfluencies**: Completely omit vocal hesitation noises (`uh`, `um`, `er`, `ah`), meaningless discourse fillers (`you know`, `like`, `right?` used as verbal tics, `being like, Okay, uh`), and accidental word repetitions (`all five hits, all five hits` -> translate once cleanly).
-   - **Unpack English Post-Modifiers**: Restructure trailing relative/adverbial clauses (`a weapon that...`, `which is...`, `when it comes to...`, `in order to...`) into natural {TARGET_LANGUAGE} clause order instead of stacking awkward `的` chains or stiff literal calques (`当涉及到...时`, `最大的推荐者`, `覆盖时间`).
-   - **Natural Register**: Match the speaker's natural analytical/conversational tone — fluent, clear, and idiomatic, neither stiffly literal nor overly slangy.
+   - **Strip Spoken Disfluencies**: Completely omit vocal hesitation noises (`uh`, `um`, `er`, `ah`), meaningless discourse fillers (`you know`, `like`, `right?` used as verbal tics, `being like, Okay, uh`), and accidental ASR word repetitions (translate repeated phrases once cleanly unless deliberate emphasis).
+   - **Unpack Post-Modifiers**: Restructure trailing relative/adverbial clauses (`that...`, `which is...`, `when it comes to...`, `in order to...`) into natural {TARGET_LANGUAGE} clause order instead of stacking awkward modifier chains or stiff literal calques.
+   - **Natural Register**: Match the speaker's natural analytical or conversational tone — fluent, clear, and idiomatic in {TARGET_LANGUAGE}, neither stiffly literal nor overly slangy.
 5. **Line-Locked Alignment & Balanced Clause Punctuation**:
    - Maintain strict 1-to-1 line alignment with the numbered input lines; never shift semantic content across line numbers.
-   - Use natural {TARGET_LANGUAGE} commas (`，`) at genuine clause boundaries, and avoid isolating a short 2–3 character conjunction/adverb (`所以，`, `不幸的是，`, `现在，`) with a comma at the very start of a clause when it can flow naturally into the clause (`所以如果你...`, `遗憾的是现在...`).
+   - Use natural {TARGET_LANGUAGE} clause punctuation at genuine clause boundaries, and avoid isolating a short 1–2 word sentence-initial conjunction or discourse adverb with a comma when it can flow naturally into the clause.
 </translation_principles>
 
 ## INPUT

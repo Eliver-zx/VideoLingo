@@ -680,19 +680,25 @@ def _stitch_incomplete_clause_spans(
             for k in range(cur_s + 2, cur_e)
         )
 
+        combined_words = cur_e - prev_s + 1
         should_stitch = False
-        if prev_last_tok in _DANGLING_TAIL_WORDS:
+        if (
+            prev_last_tok in _DANGLING_TAIL_WORDS
+            and combined_words <= LONG_SENTENCE_MAX_WORDS
+        ):
             should_stitch = True
         elif (
             first_tok in _FILLER_TOKENS
             and effective_first_tok
             in {"you", "a", "the", "like", "for", "with", "on", "in", "to", "because"}
             and gap < 0.45
+            and combined_words <= 60
         ):
             should_stitch = True
         elif (
             effective_first_tok in _SUBORDINATE_CLAUSE_STARTERS
             and gap < 0.45
+            and combined_words <= 60
             and (
                 not cur_has_internal_comma
                 or effective_first_tok
@@ -712,6 +718,7 @@ def _stitch_incomplete_clause_spans(
             prev_has_fronted_sub
             and not prev_has_internal_comma
             and (prev_e - prev_s + 1) <= 25
+            and combined_words <= 60
             and gap < 0.45
         ):
             should_stitch = True

@@ -378,17 +378,32 @@ def _partition_clauses_dp(clauses: list[str], k: int) -> list[str]:
 
 
 def _merge_tiny_clauses(
-    clauses: list[str], min_weighted_len: float = 13.0
+    clauses: list[str],
+    min_weighted_len: float = 7.5,
+    lead_in_weighted_len: float = 13.0,
+    max_merged_weighted_len: float = 62.5,
 ) -> list[str]:
-    """Merge short conjunction/discourse clauses (e.g. '所以，', '但遗憾的是，', '然后我就想，') into the
-    adjacent clause so subtitle cues never become 2–6 character fragments."""
+    """Merge tiny conjunction/discourse clauses into the adjacent clause:
+    - Hard fragments (`calc_len < min_weighted_len`, ~1-3 CJK chars or 1 short word) always merge.
+    - Sentence-initial lead-in clauses (`calc_len < lead_in_weighted_len`, ~4-6 CJK chars) merge
+      into the second clause only when the combined clause still fits within `max_merged_weighted_len`,
+      preserving mid-sentence parallel short clauses in deliberate speech."""
     if len(clauses) <= 1:
         return clauses
     merged: list[str] = []
     carry = ""
-    for c in clauses:
+    for idx, c in enumerate(clauses):
         cur = (carry + c).strip() if carry else c.strip()
-        if calc_len(cur) < min_weighted_len:
+        cur_w = calc_len(cur)
+        if cur_w < min_weighted_len:
+            carry = cur
+        elif (
+            idx == 0
+            and not merged
+            and cur_w < lead_in_weighted_len
+            and idx + 1 < len(clauses)
+            and (cur_w + calc_len(clauses[idx + 1])) <= max_merged_weighted_len
+        ):
             carry = cur
         else:
             merged.append(cur)
@@ -412,7 +427,13 @@ def _try_local_clause_split(
     existing clause boundaries already satisfy subtitle length constraints without an LLM call."""
     tr_clean = _LEADING_PUNCT_RE.sub("", str(tr_line)).strip() or str(tr_line).strip()
     raw_clauses = [c.strip() for c in _CLAUSE_SPLIT_RE.split(tr_clean) if c.strip()]
-    clauses = _merge_tiny_clauses(raw_clauses, min_weighted_len=13.0)
+    max_clause_w = max_sub_length / max(0.1, target_sub_multiplier)
+    clauses = _merge_tiny_clauses(
+        raw_clauses,
+        min_weighted_len=7.5,
+        lead_in_weighted_len=13.0,
+        max_merged_weighted_len=max_clause_w,
+    )
     if len(clauses) < 2:
         return None
     if any(calc_len(c) * target_sub_multiplier > max_sub_length for c in clauses):
@@ -432,7 +453,7 @@ def _try_local_clause_split(
 
     for k_try in range(needed_k, len(clauses) + 1):
         cand_groups = _partition_clauses_dp(clauses, k_try)
-        if len(cand_groups) < 2 or any(calc_len(g) < 13.0 for g in cand_groups):
+        if len(cand_groups) < 2 or any(calc_len(g) < 7.5 for g in cand_groups):
             continue
         if any(
             calc_len(g) * target_sub_multiplier > max_sub_length for g in cand_groups
