@@ -1154,3 +1154,144 @@ def test_prompt_validators_and_json_escaping_contracts(monkeypatch):
     valid_fn = captured_valid["fn"]
     assert valid_fn({"restored": "one."})["status"] == "error"
     assert valid_fn({"restored": "one, two, three, four, five."})["status"] == "success"
+
+
+def test_review_edge_cases_word_gaps_partial_batch_and_standalone_punct(
+    monkeypatch, tmp_path
+):
+    """Verify the 4 code-review edge cases:
+    1. restore_and_split_words updates caller_dicts in-place when standalone punctuation tokens merge,
+       and _build_utterances_from_sentences handles CJK fallback by char length rather than .split().
+    2. _batch_split_sentences_llm preserves valid batch entries when one entry misses [br] and only
+       falls back for the missing entry.
+    3. split_for_sub_main constructs line_word_gaps from utterances.json + words.json and passes them
+       to split_align_subs."""
+    import pandas as pd
+
+    import core._3_1_split_nlp as s31
+    import core._5_split_sub as s5
+
+    # 1. Standalone punctuation token merge updates caller_dicts in-place
+    caller_dicts = [
+        {"idx": 0, "text": "你好", "start": 0.0, "end": 0.5, "punct_after": ""},
+        {"idx": 1, "text": "。", "start": 0.5, "end": 0.6, "punct_after": ""},
+        {"idx": 2, "text": "世界", "start": 0.8, "end": 1.3, "punct_after": ""},
+        {"idx": 3, "text": "！", "start": 1.3, "end": 1.4, "punct_after": ""},
+    ]
+    monkeypatch.setattr(
+        s31,
+        "ask_gpt",
+        lambda prompt, **kw: {"restored": "你好。世界！"},
+    )
+    sents = s31.restore_and_split_words(
+        [d["text"] for d in caller_dicts], language="zh", word_dicts=caller_dicts
+    )
+    assert sents == ["你好。", "世界！"]
+    assert len(caller_dicts) == 2
+    assert caller_dicts[0]["end"] == 0.6
+    assert caller_dicts[0]["punct_after"] == "。"
+    assert caller_dicts[1]["end"] == 1.4
+    assert caller_dicts[1]["punct_after"] == "！"
+
+    # CJK fallback when sentence text is normalized differently from raw word_dicts
+    cjk_words = [
+        {"idx": 0, "text": "甲", "start": 0.0, "end": 0.2},
+        {"idx": 1, "text": "乙", "start": 0.2, "end": 0.4},
+        {"idx": 2, "text": "丙", "start": 0.4, "end": 0.6},
+    ]
+    utts = s31._build_utterances_from_sentences(["丁戊己。"], cjk_words, joiner="")
+    assert utts[0]["word_span"] == [0, 3]
+
+    # 2. _batch_split_sentences_llm keeps valid batch lines when another line in the batch lacks [br]
+    monkeypatch.setattr(s5, "load_key_or", lambda k, d=None: 1)
+    monkeypatch.setattr("core.prompts.get_source_language", lambda: "zh")
+    single_calls = []
+
+    def fake_batch_gpt(prompt, **kw):
+        return {
+            "0": "第一句前半部分[br]第一句后半部分",
+            "1": "第二句漏掉了切分标记",
+        }
+
+    def fake_single_split(text, num_parts=2, language=None):
+        single_calls.append(text)
+        return "第二句前半部分\n第二句后半部分"
+
+    monkeypatch.setattr(s5, "ask_gpt", fake_batch_gpt)
+    monkeypatch.setattr(s5, "split_sentence", fake_single_split)
+    batch_res = s5._batch_split_sentences_llm(
+        [
+            (0, "第一句前半部分第一句后半部分", 2),
+            (1, "第二句漏掉了切分标记", 2),
+        ],
+        language="zh",
+    )
+    assert batch_res[0] == "第一句前半部分\n第一句后半部分"
+    assert batch_res[1] == "第二句前半部分\n第二句后半部分"
+    assert single_calls == ["第二句漏掉了切分标记"]
+
+    # 3. split_for_sub_main passes line_word_gaps constructed from utterances.json + words.json
+    ws_dir = tmp_path / "ws"
+    log_dir = ws_dir / "log"
+    log_dir.mkdir(parents=True)
+    trans_xlsx = log_dir / "translation_results.xlsx"
+    pd.DataFrame(
+        {
+            "Source": [
+                "One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen"
+            ],
+            "Translation": [
+                "这是一段包含自然逗号的中文长句，后半部分用来验证主流程声学停顿传递。"
+            ],
+        }
+    ).to_excel(trans_xlsx, index=False)
+    (log_dir / "words.json").write_text(
+        json.dumps(
+            [
+                {"idx": i, "text": f"w{i}", "start": float(i), "end": float(i) + 0.4}
+                for i in range(16)
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (log_dir / "utterances.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": 0,
+                    "word_span": [0, 16],
+                    "start": 0.0,
+                    "end": 15.4,
+                    "src": "One two",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    captured_gaps = []
+    orig_split_align = s5.split_align_subs
+
+    def spy_split_align(src_lines, tr_lines, line_word_gaps=None):
+        captured_gaps.append(line_word_gaps)
+        return orig_split_align(src_lines, tr_lines, line_word_gaps=line_word_gaps)
+
+    monkeypatch.setattr(s5, "_4_2_TRANSLATION", str(trans_xlsx))
+    monkeypatch.setattr(
+        s5, "_5_SPLIT_SUB", str(log_dir / "translation_results_for_subtitles.xlsx")
+    )
+    monkeypatch.setattr(
+        s5, "_5_REMERGED", str(log_dir / "translation_results_remerged.xlsx")
+    )
+    monkeypatch.setattr(s5, "find_subtitle_file", lambda: None)
+    monkeypatch.setattr(
+        s5,
+        "load_key",
+        lambda k: (
+            {"max_length": 75, "target_multiplier": 1.2} if k == "subtitle" else 2
+        ),
+    )
+    monkeypatch.setattr(s5, "split_align_subs", spy_split_align)
+    s5.split_for_sub_main()
+    assert captured_gaps and captured_gaps[0] is not None
+    assert len(captured_gaps[0][0]) == 15

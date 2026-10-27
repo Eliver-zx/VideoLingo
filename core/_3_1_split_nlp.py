@@ -865,10 +865,16 @@ def restore_and_split_words(
 
     if active_dicts is not None:
         for i, wd in enumerate(active_dicts):
+            wd["idx"] = i
             wd["punct_after"] = global_punct_by_word.get(i, "")
-        if caller_dicts is not None and len(caller_dicts) == len(active_dicts):
-            for src_d, act_d in zip(caller_dicts, active_dicts):
-                src_d["punct_after"] = act_d.get("punct_after", "")
+        if caller_dicts is not None:
+            if len(caller_dicts) == len(active_dicts):
+                for src_d, act_d in zip(caller_dicts, active_dicts):
+                    src_d["text"] = act_d.get("text", src_d.get("text", ""))
+                    src_d["end"] = act_d.get("end", src_d.get("end", 0.0))
+                    src_d["punct_after"] = act_d.get("punct_after", "")
+            else:
+                caller_dicts[:] = active_dicts
 
     sentences: list[str] = []
     for s_idx, e_idx in final_spans:
@@ -941,7 +947,9 @@ def _build_utterances_from_sentences(
                 cursor = pos + len(sc)
             else:
                 w_start = char_to_word[min(cursor, len(char_to_word) - 1)]
-                w_end = min(n_words, w_start + max(1, len(sent.split())))
+                end_char = min(len(char_to_word) - 1, cursor + max(1, len(sc)) - 1)
+                w_end = max(w_start + 1, char_to_word[end_char] + 1)
+                cursor = min(len(char_to_word), end_char + 1)
         else:
             w_start = min(u_idx, n_words - 1)
             w_end = min(n_words, w_start + 1)

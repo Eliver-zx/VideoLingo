@@ -516,15 +516,18 @@ def _batch_split_sentences_llm(
         def _valid_batch(resp: Any) -> dict[str, str]:
             if not isinstance(resp, dict):
                 return {"status": "error", "message": "Response must be a JSON object"}
+            valid_count = 0
             for k in payload:
                 val = str(resp.get(k, ""))
                 norm = BR_TAG.sub("[br]", val)
                 parts = [p.strip() for p in norm.split("[br]") if p.strip()]
-                if len(parts) < 2:
-                    return {
-                        "status": "error",
-                        "message": f"Key {k} must contain at least 2 non-empty [br]-separated parts",
-                    }
+                if len(parts) >= 2:
+                    valid_count += 1
+            if valid_count == 0:
+                return {
+                    "status": "error",
+                    "message": "No keys in batch response contained valid [br]-separated parts",
+                }
             return {"status": "success", "message": "Batch split completed"}
 
         out: dict[int, str] = {}
@@ -550,8 +553,10 @@ def _batch_split_sentences_llm(
                 return out
         except StopTask:
             raise
-        except Exception:
-            pass
+        except Exception as exc:
+            console.print(
+                f"[yellow]⚠️ Batch split failed ({exc}), falling back to per-line split...[/yellow]"
+            )
 
         for line_idx, text, num_parts in batch:
             out[line_idx] = _call_split_sentence(
@@ -951,10 +956,42 @@ def split_for_sub_main():
     split_src, split_trans = src.copy(), trans.copy()
     origin_indices = list(range(len(orig_src)))
 
+    utterances: list[dict[str, Any]] = []
+    words: list[dict[str, Any]] = []
+    orig_word_gaps: dict[int, list[float] | None] = {}
+    if ws.utterances_path.is_file() and ws.words_path.is_file():
+        utterances = ws.load_utterances()
+        words = ws.load_words()
+        if len(utterances) == len(orig_src) and words:
+            n_total_w = len(words)
+            for u_idx, u in enumerate(utterances):
+                span = u.get("word_span") or [0, n_total_w]
+                w_a = max(0, min(int(span[0]) if len(span) >= 2 else 0, n_total_w - 1))
+                w_b = max(
+                    w_a + 1,
+                    min(int(span[1]) if len(span) >= 2 else n_total_w, n_total_w),
+                )
+                if w_b - w_a > 1:
+                    orig_word_gaps[u_idx] = [
+                        max(
+                            0.0,
+                            float(words[k + 1].get("start", 0.0))
+                            - float(words[k].get("end", 0.0)),
+                        )
+                        for k in range(w_a, w_b - 1)
+                    ]
+                else:
+                    orig_word_gaps[u_idx] = None
+
     for attempt in range(3):
         console.print(Panel(f"🔄 Split attempt {attempt + 1}", expand=False))
         prev_src = src.copy()
-        split_src, split_trans, remerged = split_align_subs(src.copy(), trans)
+        line_gaps: list[list[float] | None] | None = None
+        if attempt == 0 and orig_word_gaps:
+            line_gaps = [orig_word_gaps.get(i) for i in range(len(src))]
+        split_src, split_trans, remerged = split_align_subs(
+            src.copy(), trans, line_word_gaps=line_gaps
+        )
         if attempt == 0:
             orig_remerged = remerged
 
