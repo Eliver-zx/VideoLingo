@@ -377,6 +377,30 @@ def _partition_clauses_dp(clauses: list[str], k: int) -> list[str]:
     return [g for g in groups if g]
 
 
+def _merge_tiny_clauses(
+    clauses: list[str], min_weighted_len: float = 13.0
+) -> list[str]:
+    """Merge short conjunction/discourse clauses (e.g. '所以，', '但遗憾的是，', '然后我就想，') into the
+    adjacent clause so subtitle cues never become 2–6 character fragments."""
+    if len(clauses) <= 1:
+        return clauses
+    merged: list[str] = []
+    carry = ""
+    for c in clauses:
+        cur = (carry + c).strip() if carry else c.strip()
+        if calc_len(cur) < min_weighted_len:
+            carry = cur
+        else:
+            merged.append(cur)
+            carry = ""
+    if carry:
+        if merged:
+            merged[-1] = (merged[-1] + carry).strip()
+        else:
+            merged.append(carry)
+    return merged
+
+
 def _try_local_clause_split(
     src_line: str,
     tr_line: str,
@@ -387,40 +411,28 @@ def _try_local_clause_split(
     """Split ``tr_line`` and ``src_line`` locally in O(1) using internal clause punctuation when
     existing clause boundaries already satisfy subtitle length constraints without an LLM call."""
     tr_clean = _LEADING_PUNCT_RE.sub("", str(tr_line)).strip() or str(tr_line).strip()
-    clauses = [c.strip() for c in _CLAUSE_SPLIT_RE.split(tr_clean) if c.strip()]
+    raw_clauses = [c.strip() for c in _CLAUSE_SPLIT_RE.split(tr_clean) if c.strip()]
+    clauses = _merge_tiny_clauses(raw_clauses, min_weighted_len=13.0)
     if len(clauses) < 2:
         return None
     if any(calc_len(c) * target_sub_multiplier > max_sub_length for c in clauses):
         return None
 
-    src_w = calc_len(src_line)
     tr_w = calc_len(tr_clean) * target_sub_multiplier
+    src_w = calc_len(str(src_line))
+    # Target-language-driven k with comfortable reading cadence (~22 CJK chars per cue
+    # when splitting long sentences, while never exceeding max_sub_length).
+    comfortable_target_w = min(max_sub_length, max(48.0, max_sub_length * 0.72))
     needed_k = max(
-        math.ceil(src_w / max(1.0, max_sub_length)),
         math.ceil(tr_w / max(1.0, max_sub_length)),
+        math.ceil(tr_w / comfortable_target_w) if src_w > max_sub_length else 1,
         2,
     )
-    if needed_k > len(clauses):
-        cand_groups = clauses
-        if any(len(g) < 2 for g in cand_groups):
-            return None
-        s_parts, t_parts, remerged = align_source_by_ratio(
-            str(src_line), str(tr_line), "\n".join(cand_groups), word_gaps=word_gaps
-        )
-        if (
-            len(s_parts) >= 2
-            and len(s_parts) == len(t_parts)
-            and all(
-                calc_len(tp) * target_sub_multiplier <= max_sub_length for tp in t_parts
-            )
-            and all(calc_len(sp) <= max_sub_length for sp in s_parts)
-        ):
-            return s_parts, t_parts, remerged
-        return None
+    needed_k = min(needed_k, len(clauses))
 
     for k_try in range(needed_k, len(clauses) + 1):
         cand_groups = _partition_clauses_dp(clauses, k_try)
-        if len(cand_groups) < 2 or any(len(g) < 2 for g in cand_groups):
+        if len(cand_groups) < 2 or any(calc_len(g) < 13.0 for g in cand_groups):
             continue
         if any(
             calc_len(g) * target_sub_multiplier > max_sub_length for g in cand_groups
@@ -430,7 +442,7 @@ def _try_local_clause_split(
             str(src_line), str(tr_line), "\n".join(cand_groups), word_gaps=word_gaps
         )
         if len(s_parts) == len(cand_groups) and all(
-            calc_len(sp) <= max_sub_length for sp in s_parts
+            calc_len(tp) * target_sub_multiplier <= max_sub_length for tp in t_parts
         ):
             return s_parts, t_parts, remerged
     return None
@@ -602,14 +614,21 @@ def split_align_subs(
                     _LEADING_PUNCT_RE.sub("", str(tr_lines[i])).strip()
                     or str(tr_lines[i]).strip()
                 )
+                tr_w = calc_len(tr_clean) * float(TARGET_SUB_MULTIPLIER)
+                # When the translation already fits comfortably on a single subtitle line
+                # (<= MAX_SUB_LENGTH) and no single internal clause exceeds MAX_SUB_LENGTH,
+                # keep it intact rather than chopping a single clause in half just because
+                # the English source line had conversational filler words.
+                raw_clauses_i = [
+                    c.strip() for c in _CLAUSE_SPLIT_RE.split(tr_clean) if c.strip()
+                ]
+                if tr_w <= float(MAX_SUB_LENGTH) and all(
+                    calc_len(c) * float(TARGET_SUB_MULTIPLIER) <= float(MAX_SUB_LENGTH)
+                    for c in raw_clauses_i
+                ):
+                    continue
                 needed_k = max(
-                    math.ceil(
-                        calc_len(str(src_lines[i])) / max(1.0, float(MAX_SUB_LENGTH))
-                    ),
-                    math.ceil(
-                        (calc_len(tr_clean) * float(TARGET_SUB_MULTIPLIER))
-                        / max(1.0, float(MAX_SUB_LENGTH))
-                    ),
+                    math.ceil(tr_w / max(1.0, float(MAX_SUB_LENGTH))),
                     2,
                 )
                 llm_pending.append((i, tr_clean, needed_k))
@@ -935,8 +954,11 @@ def split_for_sub_main():
             if len(new_indices) == len(split_src):
                 origin_indices = new_indices
 
-        if all(calc_len(s) <= MAX_SUB_LENGTH for s in split_src) and all(
+        if all(
             calc_len(tr) * TARGET_SUB_MULTIPLIER <= MAX_SUB_LENGTH for tr in split_trans
+        ) and (
+            len(split_src) == len(prev_src)
+            or all(calc_len(s) <= MAX_SUB_LENGTH for s in split_src)
         ):
             break
 

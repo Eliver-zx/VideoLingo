@@ -1006,24 +1006,29 @@ def test_split_align_subs_resolves_punctuated_clauses_locally_and_batches_remain
 
     def fake_ask_gpt(prompt, **kwargs):
         batch_calls.append(kwargs.get("log_title"))
-        return {"1": "重型榴弹发射器不遵循武器羸弱能量球[br]通常预期的弹匣百分比公式。"}
+        return {
+            "2": "这些重型榴弹发射器完全不遵循所有常规武器羸弱能量球[br]通常预期的标准弹匣命中百分比计算公式。"
+        }
 
     monkeypatch.setattr(s5, "ask_gpt", fake_ask_gpt)
 
     src_in = [
         "Hey everyone, so while I was doing the primary tier list, we went through all the attrition orbs classics, like AOKT and Multimach.",
-        "So, heavy GLs do not obey the mag percentage formula that is typically expected of weapons for attrition orbs.",
+        "Now, special weapons are a little bit underwhelming when it comes to your attrition orbs.",
+        "So, heavy GLs do not obey the standard mag percentage formula that is typically expected of all regular weapons for attrition orbs.",
     ]
     tr_in = [
         "大家好，在做主武器分级榜的时候，我们回顾了所有经典的羸弱能量球武器，比如AOKT和多机系统CCX。",
-        "重型榴弹发射器不遵循武器羸弱能量球通常预期的弹匣百分比公式。",
+        "特殊武器在羸弱能量球方面有点差强人意。",
+        "这些重型榴弹发射器完全不遵循所有常规武器羸弱能量球通常预期的标准弹匣命中百分比计算公式。",
     ]
 
     src_out, tr_out, remerged = s5.split_align_subs(src_in, tr_in)
-    # Line 0 has 3 clauses (all <=32 chars) and is split locally without calling LLM;
-    # Only Line 1 (no internal commas, src_w=110 > 75) triggers 1 batch LLM call.
+    # Line 0 has internal clause commas and is split locally without calling LLM;
+    # Line 1 has 19 Chinese chars (<=32) with no internal commas and stays intact;
+    # Line 2 has 43 Chinese chars (>32) with no internal commas and triggers 1 batch LLM call.
     assert batch_calls == ["split_by_meaning_batch"]
-    assert len(src_out) == len(tr_out) >= 4
-    assert all(s5.calc_len(s) <= 75 for s in src_out)
+    assert "特殊武器在羸弱能量球方面有点差强人意。" in tr_out
+    assert len(src_out) == len(tr_out) >= 5
     assert all(s5.calc_len(t) * 1.3 <= 75 for t in tr_out)
     assert remerged == tr_in
