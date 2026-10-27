@@ -17,9 +17,9 @@ Restore sentence-ending punctuation (`.`, `?`, `!` or `。`, `？`, `！`) and i
 1. **Strict Word Preservation**: NEVER change, add, delete, or reorder any word, character, or number from the input text. Only insert or fix punctuation marks.
 2. **Syntactic Completeness Above All (Never Split Dependent Clauses)**:
    - Every sentence MUST express a complete thought with its main clause intact. Sentence length does NOT matter — a 50–70 word complex sentence is completely fine; NEVER chop a complex sentence in half just because it is long.
-   - **Fronted Adverbial Clauses**: When a clause starts with `While...`, `Although...`, `If...`, `When...`, `Because...`, `Since...`, or `Additionally, while...`, put a **comma (`,`)** after the dependent clause and keep the following main clause in the **same sentence**. NEVER put a period between a fronted dependent clause and its main clause.
-   - **Trailing Subordinate & Relative Clauses**: Keep trailing clauses starting with `because`, `cuz`, `whereas`, `which`, `where`, `especially`, `unless`, `until`, `so that`, or `for example` attached to their main clause with a comma (`,`), NOT a period.
-   - **Mid-Sentence Spoken Hesitations (`uh`, `um`, `you know`, `like`)**: When a speaker pauses or says `uh` / `you know` mid-sentence before continuing a list or phrase, use commas (`,`); NEVER start a new sentence with a dangling phrase after a filler word.
+   - **Fronted Dependent / Conditional / Temporal Clauses**: When a sentence opens with a subordinate clause (e.g., conditional, temporal, concessive, or causal clauses in {lang}, such as `While...`, `Although...`, `If...`, `When...`), place a **comma** after the dependent clause and keep the following main clause in the **same sentence**. NEVER put a sentence-ending period between a fronted dependent clause and its main clause.
+   - **Trailing Subordinate & Relative Clauses**: Keep trailing relative, causal, concessive, or exemplifying clauses attached to their main clause with a comma, NOT a period.
+   - **Mid-Sentence Spoken Hesitations**: When a speaker pauses or utters a vocal filler mid-sentence before continuing a list, predicate, or phrase, use commas; NEVER start a new sentence with a dangling phrase after a hesitation filler.
 3. **Break True Independent Sentences**:
    - When one complete independent thought finishes and a new independent main clause begins, end the first with `.`, `?`, `!` (or `。`, `？`, `！`).
 4. **Acoustic Pause Markers (`‖`)**:
@@ -42,7 +42,7 @@ Note: Start your answer with ```json and end with ```, do not add any other text
 
 
 ## ================================================================
-# @ step4_splitbymeaning.py
+# @ _3_2_split_meaning.py & _5_split_sub.py
 def get_split_prompt(sentence, num_parts=2, word_limit=20, language=None):
     language = language or get_source_language()
     split_prompt = f"""
@@ -68,7 +68,7 @@ Insert `[br]` tag(s) to split the given subtitle text into **{num_parts}** rough
 }}
 ```
 
-Note: Start you answer with ```json and end with ```, do not add any other text.
+Note: Start your answer with ```json and end with ```, do not add any other text.
 """.strip()
     return split_prompt
 
@@ -106,7 +106,7 @@ Note: Start your answer with ```json and end with ```, do not add any other text
 
 
 ## ================================================================
-# @ step4_1_summarize.py
+# @ _4_1_summarize.py
 def get_summary_prompt(source_content, custom_terms_json=None):
     src_lang = get_source_language()
     tgt_lang = load_key("target_language")
@@ -146,7 +146,7 @@ For the provided {src_lang} video transcript:
 
 ## Extraction Rules (Precision & Recall Balance)
 1. **What to Extract (Must meet at least one)**:
-   - **Proper Nouns & Entities**: Names of people, brands, studios, products, games, locations, specific weapons/skills/mechanisms.
+   - **Proper Nouns & Entities**: Names of people, organizations, brands, products, works, locations, or specialized domain items.
    - **Domain Jargon & Polysemous Terms**: Words that have an everyday meaning but carry a specialized meaning in this video's context (where literal translation would be wrong).
    - **ASR Misrecognitions / Spelling Variants**: Terms in `<text>` that are phonetically misrecognized or misspelled by ASR. Put the **canonical standard spelling** in `src` (when identifiable, otherwise the surface form), list the **exact ASR surface variant(s) appearing in `<text>`** in `aliases`, and provide the accurate `{tgt_lang}` translation in `tgt`.
    - **Technical Acronyms & Code Names**.
@@ -194,8 +194,8 @@ You are a terminology consolidation and official localization specialist for **{
 ## Task
 Below is a raw terminology list extracted from chunks of a video transcript (Theme: {theme or "General"}).
 Some entries may include:
-- `kb_candidates`: fuzzy-matched candidates from an authoritative official glossary (`term-map.json`).
-- `source_hint: "kb_scan_candidate"`: official glossary entries detected directly in the transcript via N-gram scan that chunk extraction may have overlooked.
+- `kb_candidates`: fuzzy-matched candidates from an authoritative reference glossary (`term-map.json`).
+- `source_hint: "kb_scan_candidate"`: reference glossary entries detected directly in the transcript via N-gram scan that chunk extraction may have overlooked.
 
 Consolidate, deduplicate, and refine this list into a unified, accurate glossary:
 1. **Authoritative Glossary Alignment (`kb_candidates`)**:
@@ -205,13 +205,13 @@ Consolidate, deduplicate, and refine this list into a unified, accurate glossary
    - Entries marked with `source_hint: "kb_scan_candidate"` matched the transcript text against the reference glossary and include a `context_snippet` showing the surrounding words in the transcript.
    - **Check `context_snippet` carefully**:
      - **Keep** the entry ONLY if it is used as a genuine domain term, proper noun, entity, technical mechanism, or specialized item in `context_snippet`.
-     - **Discard** the entry if `context_snippet` shows it is just an ordinary conversational phrase or number that coincidentally shares a name with a glossary entry (e.g., `"it's cool"` in `"because it's cool"`, `"second chance"` in `"give this a second chance"`, `"plus one"` in `"10 plus one"`, `"single player"` in `"in single player"`).
+     - **Discard** the entry if `context_snippet` shows it is just an ordinary conversational phrase or number that coincidentally shares a name with a glossary entry (e.g., `"it's cool"` in `"because it's cool"`, `"second chance"` in `"give this a second chance"`, `"plus one"` in `"10 plus one"`).
 3. **Cross-Chunk ASR Variant & Shorthand Unification**:
    - Merge duplicate entries that refer to the same entity under different ASR phonetic spellings, abbreviations, or inflections into a single entry, combining all transcript surface forms into `aliases` and using one consistent `{tgt_lang}` `tgt`.
    - Keep `tgt` as a **clean subtitle-ready term** with zero parenthetical explanations (put any explanations in `note`).
-   - If an entry accidentally glues two distinct terms together (e.g., a perk + a weapon name), separate them into their respective canonical entries.
+   - If an entry accidentally glues two distinct terms together (e.g., a modifier + an entity name), separate them into their respective canonical entries.
 4. **Preserve Domain Coverage & Prune Generic Noise**:
-   - Keep all genuine domain terms, proper nouns, perks, items, acronyms, and technical jargon across all chunks.
+   - Keep all genuine domain terms, proper nouns, specialized items, acronyms, and technical jargon across all chunks.
    - Remove purely generic everyday words where literal translation is already unambiguous.
 
 ## Raw Extracted Terms
@@ -238,7 +238,7 @@ Note: Start your answer with ```json and end with ```, do not add any other text
 
 
 ## ================================================================
-# @ step5_translate.py & translate_lines.py
+# @ _4_2_translate.py & translate_lines.py
 def generate_shared_prompt(
     previous_content_prompt, after_content_prompt, summary_prompt, things_to_note_prompt
 ):
@@ -339,7 +339,7 @@ Translate the numbered {src_language} subtitle lines into faithful, idiomatic {T
 {json_format}
 ```
 
-Note: Start you answer with ```json and end with ```, do not add any other text.
+Note: Start your answer with ```json and end with ```, do not add any other text.
 """
     return prompt_faithfulness.strip()
 
@@ -350,8 +350,8 @@ def get_prompt_expressiveness(faithfulness_result, lines, shared_prompt):
         key: {
             "origin": value.get("origin", ""),
             "direct": value["direct"],
-            "reflect": "your reflection on direct translation",
-            "free": "your free translation",
+            "reflect": "your reflection on direct translation (or 'OK' if already accurate and natural)",
+            "free": "your refined translation (or exact copy of direct when reflect is 'OK')",
         }
         for key, value in faithfulness_result.items()
     }
@@ -366,13 +366,12 @@ Your expertise lies not only in accurately understanding the original {src_langu
 
 ## Task
 We already have a direct translation version of the original {src_language} subtitles.
-Your task is to reflect on and improve these direct translations to create more natural and fluent {TARGET_LANGUAGE} subtitles.
+Evaluate and refine each line ONLY where needed to produce accurate, natural {TARGET_LANGUAGE} subtitles:
 
-1. Analyze the direct translation results line by line, pointing out existing issues
-2. Provide detailed modification suggestions
-3. Perform free translation based on your analysis
-4. Do not add comments, parenthetical source terms, or explanations in the translation, as the subtitles are for the audience to read
-5. Do not leave empty lines in the free translation, as the subtitles are for the audience to read
+1. Check each `direct` translation against its `origin` using the 4-Point SubMQM Diagnostic below.
+2. If `direct` is already accurate, faithful to `Points to Note`, and natural in {TARGET_LANGUAGE}, write `"OK"` in `reflect` and copy the **exact full text of `direct`** into `free`.
+3. Only when a concrete issue is found, briefly note the fix in `reflect` and provide the refined {TARGET_LANGUAGE} subtitle in `free`.
+4. Do not add comments, parenthetical source terms, or explanations in the translation, and never leave `free` empty.
 
 {shared_prompt}
 
@@ -383,7 +382,7 @@ Please use a two-step thinking process to handle the text line by line:
    - **Accuracy & ASR Recovery**: Check against `origin` for mistranslations, unrecovered ASR homophone/phonetic errors, or shifted meaning across line boundaries.
    - **Terminology & Cleanliness**: Verify exact adherence to `Points to Note` and ensure no parenthetical source terms or translator notes were inserted.
    - **Anti-Translationese**: Identify awkward literal calques, stacked modifiers, unnatural passive constructions, or rigid source-language word order that sounds robotic in {TARGET_LANGUAGE}.
-   - **Spoken Cadence, Filler Removal & Conciseness**: Omit meaningless spoken fillers (`uh`, `um`, `er`, `ah`, redundant `you know` / `like` -> `呃`, `嗯`, `你知道`) and check whether the line reads like natural spoken {TARGET_LANGUAGE} within a concise subtitle length while preserving natural internal clause commas.
+   - **Spoken Cadence, Filler Removal & Conciseness**: Omit meaningless spoken hesitation fillers (`uh`, `um`, `er`, `ah`, redundant discourse fillers) and check whether the line reads like natural spoken {TARGET_LANGUAGE} within a concise subtitle length while preserving natural internal clause punctuation.
 
 2. {TARGET_LANGUAGE} Free Translation (`free` — Targeted Refinement & Keep-if-Flawless):
    - **Principle of Necessary Enhancement (Keep-if-Flawless)**: If `direct` already passes all four diagnostic checks and sounds like natural native {TARGET_LANGUAGE} speech, write `"OK"` in `reflect` and copy the **full text of `direct`** unchanged into `free` (never write `"OK"` inside `free`). Do not rewrite or substitute synonyms just for the sake of making changes.
@@ -391,7 +390,7 @@ Please use a two-step thinking process to handle the text line by line:
    - When issues are found in Step 1, rewrite the line into idiomatic, spoken {TARGET_LANGUAGE} that matches the video's register (e.g., conversational for tutorials/vlogs, precise for technical content, formal for documentaries).
    - Keep each line's meaning strictly within its own line number (do not merge or shift content across adjacent lines).
 </Translation Analysis Steps>
-   
+
 ## INPUT
 <subtitles>
 {lines}
@@ -402,29 +401,32 @@ Please use a two-step thinking process to handle the text line by line:
 {json_format}
 ```
 
-Note: Start you answer with ```json and end with ```, do not add any other text.
+Note: Start your answer with ```json and end with ```, do not add any other text.
 """
     return prompt_expressiveness.strip()
 
 
 ## ================================================================
-# @ step6_splitforsub.py
+# @ _5_split_sub.py
 def get_align_prompt(src_sub, tr_sub, src_part):
     targ_lang = load_key("target_language")
     src_lang = get_source_language()
     src_splits = src_part.split("\n")
     num_parts = len(src_splits)
     src_part = src_part.replace("\n", " [br] ")
-    align_parts_json = ",".join(
-        f'''
-        {{
-            "src_part_{i + 1}": "{src_splits[i]}",
-            "target_part_{i + 1}": "Corresponding aligned {targ_lang} subtitle part"
-        }}'''
-        for i in range(num_parts)
-    )
+    output_schema = {
+        "analysis": "Brief analysis of word order, structure, and semantic correspondence between two subtitles",
+        "align": [
+            {
+                f"src_part_{i + 1}": src_splits[i],
+                f"target_part_{i + 1}": f"Corresponding aligned {targ_lang} subtitle part",
+            }
+            for i in range(num_parts)
+        ],
+    }
+    output_json = json.dumps(output_schema, ensure_ascii=False, indent=4)
 
-    align_prompt = f'''
+    align_prompt = f"""
 ## Role
 You are a Netflix subtitle alignment expert fluent in both {src_lang} and {targ_lang}.
 
@@ -439,79 +441,32 @@ Your task is to create the best splitting scheme for the {targ_lang} subtitles b
 
 ## INPUT
 <subtitles>
-{src_lang} Original: "{src_sub}"
-{targ_lang} Original: "{tr_sub}"
-Pre-processed {src_lang} Subtitles ([br] indicates split points): {src_part}
+{src_lang} Original: {json.dumps(src_sub, ensure_ascii=False)}
+{targ_lang} Original: {json.dumps(tr_sub, ensure_ascii=False)}
+Pre-processed {src_lang} Subtitles ([br] indicates split points): {json.dumps(src_part, ensure_ascii=False)}
 </subtitles>
 
 ## Output in only JSON format and no other text
 ```json
-{{
-    "analysis": "Brief analysis of word order, structure, and semantic correspondence between two subtitles",
-    "align": [
-        {align_parts_json}
-    ]
-}}
+{output_json}
 ```
 
-Note: Start you answer with ```json and end with ```, do not add any other text.
-'''.strip()
+Note: Start your answer with ```json and end with ```, do not add any other text.
+""".strip()
     return align_prompt
 
 
 ## ================================================================
-# @ step8_gen_audio_task.py @ step10_gen_audio.py
-def get_subtitle_trim_prompt(text, duration):
-
-    rule = """Consider a. Reducing filler words without modifying meaningful content. b. Omitting unnecessary modifiers or pronouns, for example:
-    - "Please explain your thought process" can be shortened to "Please explain thought process"
-    - "We need to carefully analyze this complex problem" can be shortened to "We need to analyze this problem"
-    - "Let's discuss the various different perspectives on this topic" can be shortened to "Let's discuss different perspectives on this topic"
-    - "Can you describe in detail your experience from yesterday" can be shortened to "Can you describe yesterday's experience" """
-
-    trim_prompt = f'''
-## Role
-You are a professional subtitle editor, editing and optimizing lengthy subtitles that exceed voiceover time before handing them to voice actors. 
-Your expertise lies in cleverly shortening subtitles slightly while ensuring the original meaning and structure remain unchanged.
-
-## INPUT
-<subtitles>
-Subtitle: "{text}"
-Duration: {duration} seconds
-</subtitles>
-
-## Processing Rules
-{rule}
-
-## Processing Steps
-Please follow these steps and provide the results in the JSON output:
-1. Analysis: Briefly analyze the subtitle's structure, key information, and filler words that can be omitted.
-2. Trimming: Based on the rules and analysis, optimize the subtitle by making it more concise according to the processing rules.
-
-## Output in only JSON format and no other text
-```json
-{{
-    "analysis": "Brief analysis of the subtitle, including structure, key information, and potential processing locations",
-    "result": "Optimized and shortened subtitle in the original subtitle language"
-}}
-```
-
-Note: Start you answer with ```json and end with ```, do not add any other text.
-'''.strip()
-    return trim_prompt
-
-
-## ================================================================
-# @ tts_main
+# @ tts_main.py
 def get_correct_text_prompt(text):
     return f"""
 ## Role
-You are a text cleaning expert for TTS (Text-to-Speech) systems.
+You are a text cleaning expert for TTS (Text-to-Speech) synthesis.
 
 ## Task
-Clean the given text by:
-1. Keep only basic punctuation (.,?!)
-2. Preserve the original meaning
+Clean the given text for speech synthesis while keeping it in its **exact original language**:
+1. Keep standard sentence and clause punctuation (e.g., `.`, `,`, `?`, `!`, `。`, `，`, `？`, `！`, `、`) and remove unpronounceable symbols, formatting artifacts, or stray brackets.
+2. Preserve 100% of the original language, words, and meaning — never translate or paraphrase.
 
 ## INPUT
 {text}
@@ -519,9 +474,9 @@ Clean the given text by:
 ## Output in only JSON format and no other text
 ```json
 {{
-    "text": "cleaned text here"
+    "text": "cleaned text in the original language"
 }}
 ```
 
-Note: Start you answer with ```json and end with ```, do not add any other text.
+Note: Start your answer with ```json and end with ```, do not add any other text.
 """.strip()

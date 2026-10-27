@@ -1084,3 +1084,73 @@ def test_prompts_are_domain_and_language_agnostic_and_merge_tiny_clauses_preserv
         "一击必杀，",
         "绝不拖泥带水。",
     ]
+
+
+def test_prompt_validators_and_json_escaping_contracts(monkeypatch):
+    """Verify prompt contract hardening:
+    - get_align_prompt properly escapes double quotes in JSON schema and input
+    - get_prompt_expressiveness contains no Chinese characters when target_language is Español
+    - _valid_summary rejects empty src/tgt and _merge_terminology_results coerces note=None to ''
+    - _restore_window_punctuation valid_punct rejects truncated/unaligned LLM responses."""
+    import re
+
+    import core._3_1_split_nlp as s31
+    import core._4_1_summarize as s41
+    import core.prompts as prompts
+
+    monkeypatch.setattr(
+        prompts, "load_key", lambda k: "Español" if k == "target_language" else True
+    )
+    monkeypatch.setattr(prompts, "load_key_or", lambda k, d="": "")
+    monkeypatch.setattr(prompts, "get_source_language", lambda: "English")
+
+    # 1. get_prompt_expressiveness has zero hardcoded Chinese when target is Español
+    shared = prompts.generate_shared_prompt(["Prev"], ["Next"], "Summary", "Notes")
+    express_prompt = prompts.get_prompt_expressiveness(
+        {"1": {"origin": "Hello world.", "direct": "Hola mundo."}},
+        "Hello world.",
+        shared,
+    )
+    assert not re.search(r"[\u4e00-\u9fff]", express_prompt)
+
+    # 2. get_align_prompt properly escapes quotes inside JSON block
+    align_p = prompts.get_align_prompt(
+        'He said "hello" to me.',
+        'Él me dijo "hola".',
+        'He said "hello"\nto me.',
+    )
+    json_block = align_p.split("```json")[1].split("```")[0].strip()
+    parsed_schema = json.loads(json_block)
+    assert parsed_schema["align"][0]["src_part_1"] == 'He said "hello"'
+
+    # 3. _valid_summary rejects empty src/tgt, and _merge_terminology_results coerces note=None to ''
+    assert (
+        s41._valid_summary({"terms": [{"src": "", "tgt": "X", "note": "n"}]})["status"]
+        == "error"
+    )
+    assert (
+        s41._valid_summary({"terms": [{"src": "A", "tgt": "B", "note": None}]})[
+            "status"
+        ]
+        == "success"
+    )
+    merged = s41._merge_terminology_results(
+        [(0, {"theme": "T", "terms": [{"src": "Foo", "tgt": "Bar", "note": None}]})],
+        [],
+    )
+    assert merged["terms"][0]["note"] == ""
+
+    # 4. _restore_window_punctuation valid_punct rejects truncated responses (< 0.80 alignment)
+    captured_valid = {}
+
+    def fake_ask_gpt(prompt, **kwargs):
+        captured_valid["fn"] = kwargs["valid_def"]
+        return {"restored": "one two three four five."}
+
+    monkeypatch.setattr(s31, "ask_gpt", fake_ask_gpt)
+    s31._restore_window_punctuation(
+        0, ["one", "two", "three", "four", "five"], " ", "en"
+    )
+    valid_fn = captured_valid["fn"]
+    assert valid_fn({"restored": "one."})["status"] == "error"
+    assert valid_fn({"restored": "one, two, three, four, five."})["status"] == "success"

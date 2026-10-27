@@ -1362,6 +1362,16 @@ def _valid_summary(response_data):
     for term in response_data["terms"]:
         if not isinstance(term, dict) or not all(key in term for key in required_keys):
             return {"status": "error", "message": "Invalid response format"}
+        if (
+            not isinstance(term.get("src"), str)
+            or not term["src"].strip()
+            or not isinstance(term.get("tgt"), str)
+            or not term["tgt"].strip()
+        ):
+            return {
+                "status": "error",
+                "message": "Each term must have non-empty string 'src' and 'tgt'",
+            }
     return {"status": "success", "message": "Summary completed"}
 
 
@@ -1396,9 +1406,9 @@ def _merge_terminology_results(
     by_stem_key: dict[tuple[str, ...], str] = {}
 
     for term in custom_terms_list:
-        src = str(term["src"]).strip()
-        tgt = str(term["tgt"]).strip()
-        note = str(term.get("note", "")).strip()
+        src = str(term.get("src") or "").strip()
+        tgt = str(term.get("tgt") or "").strip()
+        note = str(term.get("note") or "").strip()
         if not src or not tgt:
             continue
         s_low = src.lower()
@@ -1421,9 +1431,9 @@ def _merge_terminology_results(
         for raw_term in res.get("terms", []):
             if not isinstance(raw_term, dict):
                 continue
-            src = str(raw_term.get("src", "")).strip()
-            tgt = str(raw_term.get("tgt", "")).strip()
-            note = str(raw_term.get("note", "")).strip()
+            src = str(raw_term.get("src") or "").strip()
+            tgt = str(raw_term.get("tgt") or "").strip()
+            note = str(raw_term.get("note") or "").strip()
             if not src or not tgt:
                 continue
             s_low = src.lower()

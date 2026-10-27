@@ -332,7 +332,6 @@ def _project_window_punctuation(
         return existing_ends, existing_punct
 
     text_str = str(restored_text).replace(PAUSE_MARKER, "")
-    _verify_word_alignment(win_words, text_str)
 
     restored_clean = ""
     sent_end_at_rpos: dict[int, str] = {}
@@ -543,8 +542,16 @@ def _restore_window_punctuation(
                 "status": "error",
                 "message": "Missing 'restored' string in response",
             }
-        if not resp["restored"].replace(PAUSE_MARKER, "").strip():
+        restored_val = resp["restored"].replace(PAUSE_MARKER, "").strip()
+        if not restored_val:
             return {"status": "error", "message": "Empty 'restored' string"}
+        if win_words:
+            ratio = _verify_word_alignment(win_words, restored_val)
+            if ratio < 0.80:
+                return {
+                    "status": "error",
+                    "message": f"Restored text alignment ratio too low ({ratio:.2f} < 0.80)",
+                }
         return {"status": "success", "message": "ok"}
 
     try:

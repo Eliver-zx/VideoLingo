@@ -519,8 +519,12 @@ def _batch_split_sentences_llm(
             for k in payload:
                 val = str(resp.get(k, ""))
                 norm = BR_TAG.sub("[br]", val)
-                if "[br]" not in norm:
-                    return {"status": "error", "message": f"Missing [br] in key {k}"}
+                parts = [p.strip() for p in norm.split("[br]") if p.strip()]
+                if len(parts) < 2:
+                    return {
+                        "status": "error",
+                        "message": f"Key {k} must contain at least 2 non-empty [br]-separated parts",
+                    }
             return {"status": "success", "message": "Batch split completed"}
 
         out: dict[int, str] = {}
