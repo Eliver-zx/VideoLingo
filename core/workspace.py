@@ -22,6 +22,9 @@ from core.utils.config_utils import load_key_or
 OUTPUT_ROOT = Path("output")
 GLOSSARY_DIR = Path("glossary")
 GLOBAL_GLOSSARY_CSV = GLOSSARY_DIR / "custom_terms.csv"
+DEFAULT_GLOSSARY_DOMAIN = "destiny2"
+DOMAIN_TERMS_FILENAME = "terms.csv"
+DOMAIN_DICT_FILENAME = "dict.json"
 TASK_MANIFEST_NAME = "task.json"
 
 STAGE_ORDER: tuple[str, ...] = (
@@ -122,7 +125,13 @@ def link_or_copy_media(src_path: str | Path, dst_path: str | Path) -> str:
         os.link(src, dst)
         return "hardlink"
     except OSError as exc:
-        if exc.errno not in (errno.EXDEV, errno.EPERM, errno.EACCES, errno.ENOTSUP, errno.EINVAL):
+        if exc.errno not in (
+            errno.EXDEV,
+            errno.EPERM,
+            errno.EACCES,
+            errno.ENOTSUP,
+            errno.EINVAL,
+        ):
             raise
         shutil.copy2(src, dst)
         return "copy"
@@ -155,7 +164,9 @@ def probe_media_metadata(media_path: str | Path) -> dict[str, Any]:
         str(p),
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=15)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, check=True, timeout=15
+        )
         data = json.loads(proc.stdout or "{}")
     except Exception:
         return info
@@ -296,7 +307,15 @@ class TaskWorkspace:
         return self.root / "output_dub.mp4"
 
     def ensure_dirs(self) -> None:
-        for d in (self.root, self.audio_dir, self.refers_dir, self.segs_dir, self.tmp_dir, self.log_dir, self.gpt_log_dir):
+        for d in (
+            self.root,
+            self.audio_dir,
+            self.refers_dir,
+            self.segs_dir,
+            self.tmp_dir,
+            self.log_dir,
+            self.gpt_log_dir,
+        ):
             d.mkdir(parents=True, exist_ok=True)
 
     # ─── Manifest (`task.json`) management ───
@@ -405,7 +424,13 @@ class TaskWorkspace:
             self._write_legacy_input_manifest(str(dst_srt), "subtitle", str(dst_srt))
             return self.save_manifest(manifest)
 
-        video_exts = {str(x).lower().lstrip(".") for x in load_key_or("allowed_video_formats", ["mp4", "mov", "mkv", "avi", "webm", "flv", "wmv"])}
+        video_exts = {
+            str(x).lower().lstrip(".")
+            for x in load_key_or(
+                "allowed_video_formats",
+                ["mp4", "mov", "mkv", "avi", "webm", "flv", "wmv"],
+            )
+        }
         media_type = "video" if ext.lstrip(".") in video_exts else "audio"
         canonical_name = f"source{ext}"
         dst_media = self.root / canonical_name
@@ -441,8 +466,13 @@ class TaskWorkspace:
         )
         return self.save_manifest(manifest)
 
-    def _write_legacy_input_manifest(self, media_path: str, media_type: str, subtitle_path: str | None = None) -> None:
-        legacy: dict[str, Any] = {"path": media_path.replace("\\", "/"), "type": media_type}
+    def _write_legacy_input_manifest(
+        self, media_path: str, media_type: str, subtitle_path: str | None = None
+    ) -> None:
+        legacy: dict[str, Any] = {
+            "path": media_path.replace("\\", "/"),
+            "type": media_type,
+        }
         if subtitle_path:
             legacy["subtitle"] = subtitle_path.replace("\\", "/")
         _atomic_write_json(self.root / "input_manifest.json", legacy)
@@ -465,10 +495,16 @@ class TaskWorkspace:
                 data = json.load(f)
             mpath = data.get("path")
             mtype = data.get("type")
-            if mpath and mtype in {"video", "audio", "subtitle"} and os.path.exists(mpath):
+            if (
+                mpath
+                and mtype in {"video", "audio", "subtitle"}
+                and os.path.exists(mpath)
+            ):
                 return str(mpath).replace("\\", "/"), mtype
 
-        raise ValueError("No media file found. Please download or upload a media file first.")
+        raise ValueError(
+            "No media file found. Please download or upload a media file first."
+        )
 
     def resolve_subtitle_file(self) -> str | None:
         """Return user-supplied SRT path if present."""
@@ -522,8 +558,18 @@ class TaskWorkspace:
                 continue
             raw_aliases = item.get("aliases") or []
             if isinstance(raw_aliases, str):
-                raw_aliases = [x.strip() for x in re.split(r"[,;|/，；｜]", raw_aliases) if x.strip()]
-            aliases = list(dict.fromkeys(str(a).strip() for a in raw_aliases if str(a).strip() and str(a).strip().lower() != src.lower()))
+                raw_aliases = [
+                    x.strip()
+                    for x in re.split(r"[,;|/，；｜]", raw_aliases)
+                    if x.strip()
+                ]
+            aliases = list(
+                dict.fromkeys(
+                    str(a).strip()
+                    for a in raw_aliases
+                    if str(a).strip() and str(a).strip().lower() != src.lower()
+                )
+            )
             cleaned_terms.append(
                 {
                     "src": src,
@@ -534,7 +580,11 @@ class TaskWorkspace:
                     "source": str(item.get("source") or "task"),
                 }
             )
-        payload = {"summary": summary or "", "theme": summary or "", "terms": cleaned_terms}
+        payload = {
+            "summary": summary or "",
+            "theme": summary or "",
+            "terms": cleaned_terms,
+        }
         _atomic_write_json(self.terms_path, payload)
         _atomic_write_json(self.log_dir / "terminology.json", payload)
 
@@ -555,7 +605,11 @@ class TaskWorkspace:
                     continue
                 aliases = t.get("aliases") or []
                 if isinstance(aliases, str):
-                    aliases = [x.strip() for x in re.split(r"[,;|/，；｜]", aliases) if x.strip()]
+                    aliases = [
+                        x.strip()
+                        for x in re.split(r"[,;|/，；｜]", aliases)
+                        if x.strip()
+                    ]
                 norm_terms.append(
                     {
                         "src": src,
@@ -566,7 +620,10 @@ class TaskWorkspace:
                         "source": str(t.get("source") or "task"),
                     }
                 )
-            return {"summary": str(data.get("summary") or data.get("theme") or ""), "terms": norm_terms}
+            return {
+                "summary": str(data.get("summary") or data.get("theme") or ""),
+                "terms": norm_terms,
+            }
         return {"summary": "", "terms": []}
 
     def save_utterances(self, utterances: list[dict[str, Any]]) -> None:
@@ -580,7 +637,9 @@ class TaskWorkspace:
 
     # ─── Stage Fingerprint DAG & Cascading Invalidation ───
 
-    def is_stage_fresh(self, stage: str, current_fingerprint: str, required_files: list[str | Path]) -> bool:
+    def is_stage_fresh(
+        self, stage: str, current_fingerprint: str, required_files: list[str | Path]
+    ) -> bool:
         manifest = self.load_manifest()
         recorded = (manifest.get("fingerprints") or {}).get(stage)
         if not recorded or recorded != current_fingerprint:
@@ -615,59 +674,75 @@ class TaskWorkspace:
         dirs_to_clear: list[Path] = []
 
         if stage == "asr":
-            paths_to_remove.extend([
-                self.words_path,
-                self.log_dir / "cleaned_chunks.xlsx",
-            ])
+            paths_to_remove.extend(
+                [
+                    self.words_path,
+                    self.log_dir / "cleaned_chunks.xlsx",
+                ]
+            )
         elif stage == "split":
-            paths_to_remove.extend([
-                self.utterances_path,
-                self.log_dir / "split_by_nlp.txt",
-                self.log_dir / "split_by_meaning.txt",
-            ])
+            paths_to_remove.extend(
+                [
+                    self.utterances_path,
+                    self.log_dir / "split_by_nlp.txt",
+                    self.log_dir / "split_by_meaning.txt",
+                ]
+            )
         elif stage == "summarize":
-            paths_to_remove.extend([
-                self.terms_path,
-                self.log_dir / "terminology.json",
-            ])
+            paths_to_remove.extend(
+                [
+                    self.terms_path,
+                    self.log_dir / "terminology.json",
+                ]
+            )
         elif stage == "translate":
-            paths_to_remove.extend([
-                self.log_dir / "translation_results.xlsx",
-                self.log_dir / "translation_raw.csv",
-            ])
+            paths_to_remove.extend(
+                [
+                    self.log_dir / "translation_results.xlsx",
+                    self.log_dir / "translation_raw.csv",
+                ]
+            )
         elif stage == "sub_split":
-            paths_to_remove.extend([
-                self.src_srt_path,
-                self.trans_srt_path,
-                self.bi_srt_path,
-                self.bi_ass_path,
-                self.log_dir / "translation_results_for_subtitles.xlsx",
-                self.log_dir / "translation_results_remerged.xlsx",
-                self.root / ".subtitle_done",
-            ])
+            paths_to_remove.extend(
+                [
+                    self.src_srt_path,
+                    self.trans_srt_path,
+                    self.bi_srt_path,
+                    self.bi_ass_path,
+                    self.log_dir / "translation_results_for_subtitles.xlsx",
+                    self.log_dir / "translation_results_remerged.xlsx",
+                    self.root / ".subtitle_done",
+                ]
+            )
         elif stage == "sub_video":
             paths_to_remove.append(self.sub_video_path)
         elif stage == "dub_tts":
-            paths_to_remove.extend([
-                self.audio_dir / "tts_tasks.xlsx",
-                self.log_dir / "dub_truncated.json",
-                self.dub_srt_path,
-                self.root / ".dubbing_done",
-            ])
+            paths_to_remove.extend(
+                [
+                    self.audio_dir / "tts_tasks.xlsx",
+                    self.log_dir / "dub_truncated.json",
+                    self.dub_srt_path,
+                    self.root / ".dubbing_done",
+                ]
+            )
             dirs_to_clear.extend([self.tmp_dir, self.segs_dir, self.refers_dir])
         elif stage == "dub_merge":
-            paths_to_remove.extend([
-                self.dub_wav_path,
-                self.root / "dub.mp3",
-                self.normalized_dub_path,
-                self.dub_srt_path,
-            ])
+            paths_to_remove.extend(
+                [
+                    self.dub_wav_path,
+                    self.root / "dub.mp3",
+                    self.normalized_dub_path,
+                    self.dub_srt_path,
+                ]
+            )
         elif stage == "dub_video":
-            paths_to_remove.extend([
-                self.dub_video_path,
-                self.normalized_dub_path,
-                self.root / ".dubbing_done",
-            ])
+            paths_to_remove.extend(
+                [
+                    self.dub_video_path,
+                    self.normalized_dub_path,
+                    self.root / ".dubbing_done",
+                ]
+            )
 
         for p in paths_to_remove:
             if p.is_file():
@@ -679,10 +754,197 @@ class TaskWorkspace:
                 d.mkdir(parents=True, exist_ok=True)
 
 
-# ─── Global Glossary (`glossary/custom_terms.csv`) helpers ───
+# ─── Domain Glossary (`glossary/<domain>/terms.csv` & `dict.json`) helpers ───
+
+_DOMAIN_NAME_RE = re.compile(r"^[\w\-\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]{1,64}$")
+
+
+def sanitize_domain_name(name: str) -> str:
+    cleaned = str(name or "").strip()
+    if (
+        not cleaned
+        or cleaned in {".", ".."}
+        or "/" in cleaned
+        or "\\" in cleaned
+        or not _DOMAIN_NAME_RE.match(cleaned)
+    ):
+        raise ValueError(f"Invalid glossary domain name: {name!r}")
+    return cleaned
+
+
+def domain_dir_path(domain: str, base_dir: str | Path | None = None) -> Path:
+    safe = sanitize_domain_name(domain)
+    root = Path(base_dir if base_dir is not None else GLOSSARY_DIR)
+    return root / safe
+
+
+def domain_terms_csv_path(domain: str, base_dir: str | Path | None = None) -> Path:
+    return domain_dir_path(domain, base_dir) / DOMAIN_TERMS_FILENAME
+
+
+def domain_dict_json_path(domain: str, base_dir: str | Path | None = None) -> Path:
+    return domain_dir_path(domain, base_dir) / DOMAIN_DICT_FILENAME
+
+
+def ensure_default_glossary_domain(base_dir: str | Path | None = None) -> Path:
+    root = Path(base_dir if base_dir is not None else GLOSSARY_DIR)
+    d_dir = root / DEFAULT_GLOSSARY_DOMAIN
+    if not root.exists():
+        d_dir.mkdir(parents=True, exist_ok=True)
+        csv_file = d_dir / DOMAIN_TERMS_FILENAME
+        save_global_glossary([], csv_path=csv_file)
+    return d_dir
+
+
+def list_glossary_domains(base_dir: str | Path | None = None) -> list[dict[str, Any]]:
+    root = Path(base_dir if base_dir is not None else GLOSSARY_DIR)
+    ensure_default_glossary_domain(root)
+    if not root.is_dir():
+        return []
+    domains: list[dict[str, Any]] = []
+    for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        try:
+            sanitize_domain_name(child.name)
+        except ValueError:
+            continue
+        domains.append(get_glossary_domain_meta(child.name, base_dir=root))
+    return domains
+
+
+def get_glossary_domain_meta(
+    domain: str, base_dir: str | Path | None = None
+) -> dict[str, Any]:
+    safe = sanitize_domain_name(domain)
+    d_dir = domain_dir_path(safe, base_dir)
+    csv_file = d_dir / DOMAIN_TERMS_FILENAME
+    dict_file = d_dir / DOMAIN_DICT_FILENAME
+    terms = load_domain_glossary(safe, base_dir=base_dir) if csv_file.is_file() else []
+    dict_count = 0
+    has_dict = dict_file.is_file()
+    if has_dict:
+        dict_count = count_domain_dict_entries(dict_file)
+    return {
+        "domain": safe,
+        "name": safe,
+        "terms_count": len(terms),
+        "has_dict": has_dict,
+        "dict_count": dict_count,
+    }
+
+
+def count_domain_dict_entries(dict_path: str | Path) -> int:
+    p = Path(dict_path)
+    if not p.is_file():
+        return 0
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return 0
+    if isinstance(data, dict):
+        if isinstance(data.get("entries"), dict):
+            return len(data["entries"])
+        if isinstance(data.get("terms"), list):
+            return len(data["terms"])
+        return len(data)
+    if isinstance(data, list):
+        return len(data)
+    return 0
+
+
+def create_glossary_domain(
+    domain: str, base_dir: str | Path | None = None
+) -> dict[str, Any]:
+    safe = sanitize_domain_name(domain)
+    d_dir = domain_dir_path(safe, base_dir)
+    d_dir.mkdir(parents=True, exist_ok=True)
+    csv_file = d_dir / DOMAIN_TERMS_FILENAME
+    if not csv_file.is_file():
+        save_global_glossary([], csv_path=csv_file)
+    return get_glossary_domain_meta(safe, base_dir=base_dir)
+
+
+def delete_glossary_domain(domain: str, base_dir: str | Path | None = None) -> bool:
+    safe = sanitize_domain_name(domain)
+    d_dir = domain_dir_path(safe, base_dir)
+    if not d_dir.is_dir():
+        return False
+    shutil.rmtree(d_dir)
+    return True
+
+
+def load_domain_glossary(
+    domain: str, base_dir: str | Path | None = None
+) -> list[dict[str, Any]]:
+    if not domain or not str(domain).strip():
+        return []
+    csv_file = domain_terms_csv_path(domain, base_dir=base_dir)
+    return load_global_glossary(csv_file)
+
+
+def save_domain_glossary(
+    domain: str,
+    entries: list[dict[str, Any]],
+    base_dir: str | Path | None = None,
+) -> None:
+    csv_file = domain_terms_csv_path(domain, base_dir=base_dir)
+    save_global_glossary(entries, csv_path=csv_file)
+
+
+def promote_terms_to_domain(
+    terms: list[dict[str, Any]],
+    domain: str | None = None,
+    base_dir: str | Path | None = None,
+    csv_path: str | Path | None = None,
+) -> int:
+    if csv_path is not None:
+        return promote_terms_to_global(terms, csv_path=csv_path)
+    target_domain = str(
+        domain
+        if domain is not None
+        else load_key_or("glossary_domain", DEFAULT_GLOSSARY_DOMAIN)
+    ).strip()
+    if not target_domain:
+        return 0
+    csv_file = domain_terms_csv_path(target_domain, base_dir=base_dir)
+    return promote_terms_to_global(terms, csv_path=csv_file)
+
+
+def _resolve_default_glossary_csv() -> Path:
+    if (
+        GLOBAL_GLOSSARY_CSV != Path("glossary") / "custom_terms.csv"
+        or GLOBAL_GLOSSARY_CSV.is_file()
+    ):
+        return GLOBAL_GLOSSARY_CSV
+    active_domain = str(
+        load_key_or("glossary_domain", DEFAULT_GLOSSARY_DOMAIN) or ""
+    ).strip()
+    if active_domain:
+        try:
+            return domain_terms_csv_path(active_domain)
+        except ValueError:
+            pass
+    return GLOBAL_GLOSSARY_CSV
+
 
 def load_global_glossary(csv_path: str | Path | None = None) -> list[dict[str, Any]]:
-    p = Path(csv_path if csv_path is not None else GLOBAL_GLOSSARY_CSV)
+    if csv_path is None:
+        if (
+            GLOBAL_GLOSSARY_CSV == Path("glossary") / "custom_terms.csv"
+            and not GLOBAL_GLOSSARY_CSV.is_file()
+        ):
+            active_domain = str(
+                load_key_or("glossary_domain", DEFAULT_GLOSSARY_DOMAIN) or ""
+            ).strip()
+            if not active_domain:
+                return []
+            p = _resolve_default_glossary_csv()
+        else:
+            p = GLOBAL_GLOSSARY_CSV
+    else:
+        p = Path(csv_path)
     if not p.is_file():
         return []
     entries: list[dict[str, Any]] = []
@@ -694,22 +956,27 @@ def load_global_glossary(csv_path: str | Path | None = None) -> list[dict[str, A
             if not src or not tgt:
                 continue
             raw_aliases = str(row.get("aliases") or "").strip()
-            aliases = [a.strip() for a in re.split(r"[,;|/，；｜]", raw_aliases) if a.strip()]
+            aliases = [
+                a.strip() for a in re.split(r"[,;|/，；｜]", raw_aliases) if a.strip()
+            ]
             entries.append(
                 {
                     "src": src,
                     "tgt": tgt,
                     "aliases": aliases,
                     "note": str(row.get("note") or row.get("Note") or "").strip(),
-                    "fix_source": str(row.get("fix_source") or "").strip().lower() in {"1", "true", "yes"},
+                    "fix_source": str(row.get("fix_source") or "").strip().lower()
+                    in {"1", "true", "yes"},
                     "source": "global_kb",
                 }
             )
     return entries
 
 
-def save_global_glossary(entries: list[dict[str, Any]], csv_path: str | Path | None = None) -> None:
-    p = Path(csv_path if csv_path is not None else GLOBAL_GLOSSARY_CSV)
+def save_global_glossary(
+    entries: list[dict[str, Any]], csv_path: str | Path | None = None
+) -> None:
+    p = Path(csv_path) if csv_path is not None else _resolve_default_glossary_csv()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = p.with_name(f".{p.name}.tmp.{os.getpid()}")
     fieldnames = ["src", "tgt", "aliases", "note", "fix_source"]
@@ -723,7 +990,9 @@ def save_global_glossary(entries: list[dict[str, Any]], csv_path: str | Path | N
                 continue
             aliases = item.get("aliases") or []
             if isinstance(aliases, list):
-                aliases_str = "|".join(str(a).strip() for a in aliases if str(a).strip())
+                aliases_str = "|".join(
+                    str(a).strip() for a in aliases if str(a).strip()
+                )
             else:
                 aliases_str = str(aliases).strip()
             writer.writerow(
@@ -740,7 +1009,19 @@ def save_global_glossary(entries: list[dict[str, Any]], csv_path: str | Path | N
     os.replace(tmp_path, p)
 
 
-def promote_terms_to_global(terms: list[dict[str, Any]], csv_path: str | Path | None = None) -> int:
+def promote_terms_to_global(
+    terms: list[dict[str, Any]], csv_path: str | Path | None = None
+) -> int:
+    if (
+        csv_path is None
+        and GLOBAL_GLOSSARY_CSV == Path("glossary") / "custom_terms.csv"
+        and not GLOBAL_GLOSSARY_CSV.is_file()
+    ):
+        active_domain = str(
+            load_key_or("glossary_domain", DEFAULT_GLOSSARY_DOMAIN) or ""
+        ).strip()
+        if not active_domain:
+            return 0
     existing = load_global_glossary(csv_path)
     by_key = {item["src"].lower(): item for item in existing}
     added_or_updated = 0
@@ -759,7 +1040,9 @@ def promote_terms_to_global(terms: list[dict[str, Any]], csv_path: str | Path | 
             "tgt": tgt,
             "aliases": merged_aliases,
             "note": str(t.get("note") or by_key.get(key, {}).get("note") or "").strip(),
-            "fix_source": bool(t.get("fix_source", by_key.get(key, {}).get("fix_source", False))),
+            "fix_source": bool(
+                t.get("fix_source", by_key.get(key, {}).get("fix_source", False))
+            ),
             "source": "global_kb",
         }
         added_or_updated += 1
@@ -768,6 +1051,7 @@ def promote_terms_to_global(terms: list[dict[str, Any]], csv_path: str | Path | 
 
 
 # ─── Active Workspace Context Management ───
+
 
 def get_active_workspace() -> TaskWorkspace:
     ctx_dir = _ACTIVE_TASK_DIR.get()
@@ -801,7 +1085,9 @@ def workspace_context(task_dir: str | Path | TaskWorkspace):
         _ACTIVE_TASK_DIR.reset(token)
 
 
-def create_task_workspace(title_hint: str = "video", base_dir: str | Path = OUTPUT_ROOT) -> TaskWorkspace:
+def create_task_workspace(
+    title_hint: str = "video", base_dir: str | Path = OUTPUT_ROOT
+) -> TaskWorkspace:
     base = Path(base_dir)
     base.mkdir(parents=True, exist_ok=True)
     slug = re.sub(r"[^\w\-]+", "_", title_hint).strip("_")[:32] or "video"
@@ -823,6 +1109,8 @@ def list_task_workspaces(base_dir: str | Path = OUTPUT_ROOT) -> list[TaskWorkspa
         if child.is_dir() and (child / TASK_MANIFEST_NAME).is_file():
             workspaces.append(TaskWorkspace(child))
     # Also include root `output/` if it directly has a task.json or legacy input_manifest.json
-    if (base / TASK_MANIFEST_NAME).is_file() or (base / "input_manifest.json").is_file():
+    if (base / TASK_MANIFEST_NAME).is_file() or (
+        base / "input_manifest.json"
+    ).is_file():
         workspaces.append(TaskWorkspace(base))
     return workspaces

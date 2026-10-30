@@ -22,8 +22,11 @@ from core.utils import (
 )
 from core.utils.models import _3_2_SPLIT_BY_MEANING, _4_1_TERMINOLOGY, resolve_task_path
 from core.workspace import (
+    DEFAULT_GLOSSARY_DOMAIN,
     GLOBAL_GLOSSARY_CSV,
     TaskWorkspace,
+    domain_dict_json_path,
+    domain_terms_csv_path,
     get_active_workspace,
     load_global_glossary,
 )
@@ -453,11 +456,30 @@ def _extract_generic_kb_pairs(
             _extract_generic_kb_pairs(item, out, source_tag=source_tag)
 
 
-def load_custom_terms() -> list[dict[str, Any]]:
-    """Load user-defined glossary terms from ``glossary/custom_terms.csv``, ``custom_terms.xlsx``,
-    and optional local term files.
+def _should_load_domain_glossary() -> bool:
+    import core.workspace as _ws
 
-    Precedence (highest first): ``glossary/custom_terms.csv`` / ``custom_terms.xlsx`` > ``Term.csv`` > ``term-map.json``.
+    return (
+        GLOBAL_GLOSSARY_PATH != str(GLOBAL_GLOSSARY_CSV)
+        or CUSTOM_TERMS_PATH == "custom_terms.xlsx"
+        or _ws.GLOSSARY_DIR != Path("glossary")
+    )
+
+
+def _active_domain_paths() -> tuple[str | None, str | None]:
+    raw_domain = load_key_or("glossary_domain", DEFAULT_GLOSSARY_DOMAIN)
+    domain = str(raw_domain if raw_domain is not None else "").strip()
+    if not domain:
+        return None, None
+    try:
+        return str(domain_terms_csv_path(domain)), str(domain_dict_json_path(domain))
+    except ValueError:
+        return None, None
+
+
+def load_custom_terms() -> list[dict[str, Any]]:
+    """Load user-defined glossary terms from the active domain glossary (`glossary/<domain>/terms.csv` & `dict.json`),
+    ``glossary/custom_terms.csv``, ``custom_terms.xlsx``, and optional local term files.
     """
     merged: dict[str, dict[str, Any]] = {}
 
@@ -493,10 +515,22 @@ def load_custom_terms() -> list[dict[str, Any]]:
             if not merged[key].get("note") and n:
                 merged[key]["note"] = n
 
-    use_global = (
-        GLOBAL_GLOSSARY_PATH != str(GLOBAL_GLOSSARY_CSV)
-        or CUSTOM_TERMS_PATH == "custom_terms.xlsx"
-    )
+    use_global = _should_load_domain_glossary()
+    domain_csv, domain_dict = _active_domain_paths() if use_global else (None, None)
+    if domain_csv and os.path.exists(domain_csv):
+        try:
+            for item in load_global_glossary(domain_csv):
+                _add_term(
+                    item.get("src", ""),
+                    item.get("tgt", ""),
+                    item.get("note", ""),
+                    aliases=item.get("aliases"),
+                    fix_source=bool(item.get("fix_source", False)),
+                    source="domain_kb",
+                )
+        except Exception as exc:
+            rprint(f"[yellow]⚠️ Could not read {domain_csv}: {exc}[/yellow]")
+
     if use_global and os.path.exists(GLOBAL_GLOSSARY_PATH):
         try:
             for item in load_global_glossary(GLOBAL_GLOSSARY_PATH):
@@ -536,7 +570,9 @@ def load_custom_terms() -> list[dict[str, Any]]:
                 f"[yellow]⚠️ Could not read {OPTIONAL_CSV_TERMS_PATH}: {exc}[/yellow]"
             )
 
-    if os.path.exists(OPTIONAL_JSON_TERMS_PATH):
+    if os.path.exists(OPTIONAL_JSON_TERMS_PATH) or (
+        domain_dict and os.path.exists(domain_dict)
+    ):
         try:
             kb_entries = _get_kb_index([]).get("entries") or {}
             # Directly merge small-to-medium custom JSON maps (<= 500 entries);
@@ -551,6 +587,17 @@ def load_custom_terms() -> list[dict[str, Any]]:
                         fix_source=bool(item.get("fix_source", False)),
                         source="term_map",
                     )
+            elif len(kb_entries) > 500:
+                for item in kb_entries.values():
+                    if item.get("fix_source"):
+                        _add_term(
+                            item["src"],
+                            item["tgt"],
+                            item.get("note", ""),
+                            aliases=item.get("aliases"),
+                            fix_source=True,
+                            source="term_map",
+                        )
         except Exception as exc:
             rprint(
                 f"[yellow]⚠️ Could not read {OPTIONAL_JSON_TERMS_PATH}: {exc}[/yellow]"
@@ -824,15 +871,27 @@ _KB_CONVERSATIONAL_STOPWORDS = {
 def _get_kb_index(
     custom_terms_list: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Build or return a cached inverted index over authoritative glossary sources (including large ``term-map.json``)."""
+    """Build or return a cached inverted index over authoritative glossary sources (including domain ``dict.json`` and large ``term-map.json``)."""
     global _CACHED_KB_KEY, _CACHED_KB_DATA
 
+    use_domain = (
+        _should_load_domain_glossary() or OPTIONAL_JSON_TERMS_PATH == "term-map.json"
+    )
+    _, domain_dict = _active_domain_paths() if use_domain else (None, None)
+    abs_domain_dict = os.path.abspath(domain_dict) if domain_dict else ""
+    domain_dict_mtime = _file_mtime(abs_domain_dict) if abs_domain_dict else None
     abs_map = os.path.abspath(OPTIONAL_JSON_TERMS_PATH)
     map_mtime = _file_mtime(abs_map)
     custom_sig = tuple(
-        (t.get("src", ""), t.get("tgt", "")) for t in (custom_terms_list or [])
+        (
+            t.get("src", ""),
+            t.get("tgt", ""),
+            bool(t.get("fix_source", False)),
+            tuple(t.get("aliases") or ()),
+        )
+        for t in (custom_terms_list or [])
     )
-    kb_key = (abs_map, map_mtime, custom_sig)
+    kb_key = (abs_domain_dict, domain_dict_mtime, abs_map, map_mtime, custom_sig)
 
     with _INDEX_LOCK:
         if _CACHED_KB_KEY == kb_key and _CACHED_KB_DATA is not None:
@@ -848,17 +907,19 @@ def _get_kb_index(
                     "tgt": tg,
                     "note": str(t.get("note") or "").strip(),
                     "aliases": _normalize_aliases(t.get("aliases"), s),
+                    "fix_source": bool(t.get("fix_source", False)),
                 }
 
-        if os.path.exists(OPTIONAL_JSON_TERMS_PATH):
-            try:
-                with open(OPTIONAL_JSON_TERMS_PATH, "r", encoding="utf-8") as f:
-                    raw_data = json.load(f)
-                _extract_generic_kb_pairs(raw_data, kb_entries, source_tag="term_map")
-            except Exception as exc:
-                rprint(
-                    f"[yellow]⚠️ Could not read {OPTIONAL_JSON_TERMS_PATH}: {exc}[/yellow]"
-                )
+        for json_path in (domain_dict, OPTIONAL_JSON_TERMS_PATH):
+            if json_path and os.path.exists(json_path):
+                try:
+                    with open(json_path, "r", encoding="utf-8") as f:
+                        raw_data = json.load(f)
+                    _extract_generic_kb_pairs(
+                        raw_data, kb_entries, source_tag="term_map"
+                    )
+                except Exception as exc:
+                    rprint(f"[yellow]⚠️ Could not read {json_path}: {exc}[/yellow]")
 
         exact_lower_map: dict[str, dict[str, Any]] = {}
         compact_map: dict[str, list[dict[str, Any]]] = {}
@@ -1146,6 +1207,12 @@ def _get_term_index() -> dict:
 
     term_json_path = resolve_task_path(_4_1_TERMINOLOGY)
     terms_contract_path = str(Path(term_json_path).with_name("terms.json"))
+    use_global = _should_load_domain_glossary()
+    domain_csv, domain_dict = _active_domain_paths() if use_global else (None, None)
+    abs_domain_csv = os.path.abspath(domain_csv) if domain_csv else ""
+    abs_domain_dict = os.path.abspath(domain_dict) if domain_dict else ""
+    domain_csv_mtime = _file_mtime(abs_domain_csv) if abs_domain_csv else None
+    domain_dict_mtime = _file_mtime(abs_domain_dict) if abs_domain_dict else None
     abs_json = os.path.abspath(term_json_path)
     abs_terms_contract = os.path.abspath(terms_contract_path)
     abs_global = os.path.abspath(GLOBAL_GLOSSARY_PATH)
@@ -1160,6 +1227,10 @@ def _get_term_index() -> dict:
     map_mtime = _file_mtime(abs_map)
 
     cache_key = (
+        abs_domain_csv,
+        domain_csv_mtime,
+        abs_domain_dict,
+        domain_dict_mtime,
         abs_json,
         json_mtime,
         abs_terms_contract,
@@ -1212,7 +1283,16 @@ def _get_term_index() -> dict:
 
         custom_list = load_custom_terms()
         custom_mtimes = [
-            m for m in (global_mtime, xlsx_mtime, csv_mtime, map_mtime) if m is not None
+            m
+            for m in (
+                domain_csv_mtime,
+                domain_dict_mtime,
+                global_mtime,
+                xlsx_mtime,
+                csv_mtime,
+                map_mtime,
+            )
+            if m is not None
         ]
         latest_custom_mtime = max(custom_mtimes) if custom_mtimes else 0.0
         task_mtimes = [m for m in (json_mtime, contract_mtime) if m is not None]

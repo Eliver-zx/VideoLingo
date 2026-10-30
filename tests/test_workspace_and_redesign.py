@@ -829,8 +829,12 @@ def test_sentence_initial_fix_source_and_global_glossary_cache_invalidation(
     monkeypatch.setattr("core.workspace.GLOBAL_GLOSSARY_CSV", global_csv)
     monkeypatch.setattr(_4_1_summarize, "GLOBAL_GLOSSARY_PATH", str(global_csv))
     monkeypatch.setattr(_4_1_summarize, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
-    monkeypatch.setattr(_4_1_summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
-    monkeypatch.setattr(_4_1_summarize, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json"))
+    monkeypatch.setattr(
+        _4_1_summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv")
+    )
+    monkeypatch.setattr(
+        _4_1_summarize, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json")
+    )
 
     ws = TaskWorkspace(output_root / "task_init")
     ws.ensure_dirs()
@@ -905,3 +909,428 @@ def test_sentence_initial_fix_source_and_global_glossary_cache_invalidation(
         )
         assert stamps == [(1.25, 2.95)]
 
+
+def test_domain_glossary_crud_import_and_task_binding(tmp_path: Path, monkeypatch):
+    """Domain glossary supports CRUD, CSV/JSON/large-table import, config.yaml persistence (including no-domain ''),
+    per-task domain binding (decoupled from subsequent global domain switches), and Stage 03 promote_to_domain."""
+    import json
+    from core import _4_1_summarize
+
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    glossary_root = tmp_path / "glossary"
+    monkeypatch.setattr("core.workspace.OUTPUT_ROOT", output_root)
+    monkeypatch.setattr("core.workspace.GLOSSARY_DIR", glossary_root)
+    monkeypatch.setattr(api, "OUTPUT", output_root)
+    monkeypatch.setattr(_4_1_summarize, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
+    monkeypatch.setattr(
+        _4_1_summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv")
+    )
+    monkeypatch.setattr(
+        _4_1_summarize, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json")
+    )
+
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("target_language: '简体中文'\n", encoding="utf-8")
+    monkeypatch.setattr(config_utils, "CONFIG_PATH", str(cfg_file))
+    config_utils.ensure_config_schema(str(cfg_file))
+    assert config_utils.load_key("glossary_domain") == "destiny2"
+
+    client = TestClient(api.app)
+
+    # 1. Listing domains auto-creates default 'destiny2' domain directory and terms.csv
+    res_domains = client.get("/api/glossary/domains")
+    assert res_domains.status_code == 200
+    data_domains = res_domains.json()
+    assert data_domains["active_domain"] == "destiny2"
+    assert any(d["domain"] == "destiny2" for d in data_domains["domains"])
+    assert (glossary_root / "destiny2" / "terms.csv").exists()
+
+    # 2. Create a new domain 'medical', import small CSV (<=500 rows) -> terms.csv, and import JSON -> dict.json
+    res_create_dom = client.post("/api/glossary/domains", json={"domain": "medical"})
+    assert res_create_dom.status_code == 201
+    assert res_create_dom.json()["domain"] == "medical"
+    assert (glossary_root / "medical" / "terms.csv").exists()
+
+    csv_bytes = (
+        "src,tgt,aliases,note,fix_source\nMRI,核磁共振,M R I,imaging,true\n".encode(
+            "utf-8"
+        )
+    )
+    res_imp_csv = client.post(
+        "/api/glossary/domains/medical/import",
+        files={"file": ("med.csv", csv_bytes, "text/csv")},
+    )
+    assert res_imp_csv.status_code == 200
+    assert res_imp_csv.json()["imported_as"] == "terms.csv"
+    assert res_imp_csv.json()["terms_count"] == 1
+
+    dict_bytes = json.dumps({"CT Scan": "CT扫描", "ECG": "心电图"}).encode("utf-8")
+    res_imp_json = client.post(
+        "/api/glossary/domains/medical/import",
+        files={"file": ("med_kb.json", dict_bytes, "application/json")},
+    )
+    assert res_imp_json.status_code == 200
+    assert res_imp_json.json()["imported_as"] == "dict.json"
+    assert res_imp_json.json()["dict_count"] == 2
+    assert (glossary_root / "medical" / "dict.json").exists()
+
+    # Importing >500 rows CSV with rich columns (note, aliases, fix_source) routes to dict.json and preserves all fields
+    big_rows = ["src,tgt,aliases,note,fix_source"] + [
+        f"Term{i},译名{i},Variant{i},Note{i},true" for i in range(505)
+    ]
+    res_imp_big = client.post(
+        "/api/glossary/domains/destiny2/import",
+        files={"file": ("big.csv", "\n".join(big_rows).encode("utf-8"), "text/csv")},
+    )
+    assert res_imp_big.status_code == 200
+    assert res_imp_big.json()["imported_as"] == "dict.json"
+    assert res_imp_big.json()["dict_count"] == 505
+    saved_big_dict = json.loads(
+        (glossary_root / "destiny2" / "dict.json").read_text(encoding="utf-8")
+    )
+    assert "terms" in saved_big_dict
+    assert saved_big_dict["terms"][0]["note"] == "Note0"
+    assert saved_big_dict["terms"][0]["aliases"] == ["Variant0"]
+    assert saved_big_dict["terms"][0]["fix_source"] is True
+
+    # Importing a GB18030/GBK encoded CSV file works without UnicodeDecodeError
+    gbk_csv = "原词,译名,备注\nGjallarhorn,加拉尔号角,异域火箭筒\n".encode("gb18030")
+    res_imp_gbk = client.post(
+        "/api/glossary/domains/destiny2/import",
+        files={"file": ("gbk_terms.csv", gbk_csv, "text/csv")},
+    )
+    assert res_imp_gbk.status_code == 200
+    assert res_imp_gbk.json()["imported_as"] == "terms.csv"
+    assert any(
+        t["src"] == "Gjallarhorn" and t["tgt"] == "加拉尔号角"
+        for t in res_imp_gbk.json()["terms"]
+    )
+
+    # Remove dict.json from destiny2
+    res_del_dict = client.delete("/api/glossary/domains/destiny2/dict")
+    assert res_del_dict.status_code == 200
+    assert not (glossary_root / "destiny2" / "dict.json").exists()
+
+    # 3. Task creation binds glossary_domain into config_override and isolates from subsequent config.yaml switches
+    sample_video = tmp_path / "lecture.mp4"
+    sample_video.write_bytes(b"fake-video-bytes")
+
+    # Add a term to destiny2 domain
+    client.put(
+        "/api/glossary?domain=destiny2",
+        json={
+            "terms": [
+                {
+                    "src": "Vanguard",
+                    "tgt": "先锋敢死队",
+                    "aliases": ["van guard"],
+                    "fix_source": True,
+                }
+            ]
+        },
+    )
+
+    # Create task_d2 bound to destiny2
+    res_t1 = client.post(
+        "/api/tasks",
+        json={
+            "source": str(sample_video),
+            "glossary_domain": "destiny2",
+            "autorun": False,
+        },
+    )
+    assert res_t1.status_code == 202
+    t1_id = res_t1.json()["task_id"]
+    assert res_t1.json()["config_override"]["glossary_domain"] == "destiny2"
+
+    # Now switch global config.yaml to "" (无领域) and verify it persists in config.yaml
+    client.put("/api/config", json={"updates": {"glossary_domain": ""}})
+    assert config_utils.load_key("glossary_domain") == ""
+
+    # Create task_none under 无领域 ("")
+    sample_video2 = tmp_path / "general.mp4"
+    sample_video2.write_bytes(b"fake-video-bytes-2")
+    res_t2 = client.post(
+        "/api/tasks",
+        json={"source": str(sample_video2), "autorun": False},
+    )
+    assert res_t2.status_code == 202
+    t2_id = res_t2.json()["task_id"]
+    assert res_t2.json()["config_override"]["glossary_domain"] == ""
+
+    ws_t1 = TaskWorkspace(output_root / t1_id)
+    ws_t2 = TaskWorkspace(output_root / t2_id)
+
+    # Verify task_d2 still loads 'destiny2' terms even though global config.yaml is now ""
+    with (
+        workspace_context(ws_t1),
+        config_utils.task_config_context(ws_t1.load_manifest()["config_override"]),
+    ):
+        t1_custom = _4_1_summarize.load_custom_terms()
+        assert any(t["src"] == "Vanguard" for t in t1_custom)
+
+    # Verify task_none (bound to "") loads zero domain terms
+    with (
+        workspace_context(ws_t2),
+        config_utils.task_config_context(ws_t2.load_manifest()["config_override"]),
+    ):
+        t2_custom = _4_1_summarize.load_custom_terms()
+        assert t2_custom == []
+
+    # 4. Stage 03 promote_to_domain promotes to the task's bound domain (and skips when bound to "")
+    res_prom_t1 = client.put(
+        f"/api/tasks/{t1_id}/terms",
+        json={
+            "summary": "Destiny lore",
+            "terms": [
+                {
+                    "src": "Traveler",
+                    "tgt": "旅行者",
+                    "aliases": [],
+                    "note": "Entity",
+                    "fix_source": False,
+                    "promote_to_domain": True,
+                }
+            ],
+        },
+    )
+    assert res_prom_t1.status_code == 200
+    assert res_prom_t1.json()["promoted_to_domain"] == 1
+    d2_terms = client.get("/api/glossary?domain=destiny2").json()["terms"]
+    assert any(t["src"] == "Traveler" and t["tgt"] == "旅行者" for t in d2_terms)
+
+    # When task is bound to "", promote_to_domain does not promote anywhere
+    res_prom_t2 = client.put(
+        f"/api/tasks/{t2_id}/terms",
+        json={
+            "summary": "General video",
+            "terms": [
+                {
+                    "src": "hemeral",
+                    "tgt": "临时词",
+                    "aliases": [],
+                    "note": "",
+                    "fix_source": False,
+                    "promote_to_domain": True,
+                }
+            ],
+        },
+    )
+    assert res_prom_t2.status_code == 200
+    assert res_prom_t2.json()["promoted_to_domain"] == 0
+
+    # Switching task_t2's bound domain in Stage 03 to 'medical' and promoting works
+    res_switch_t2 = client.put(
+        f"/api/tasks/{t2_id}/terms",
+        json={
+            "summary": "Switched to medical",
+            "glossary_domain": "medical",
+            "terms": [
+                {
+                    "src": "Biopsy",
+                    "tgt": "活检",
+                    "aliases": [],
+                    "note": "",
+                    "fix_source": False,
+                    "promote_to_domain": True,
+                }
+            ],
+        },
+    )
+    assert res_switch_t2.status_code == 200
+    assert res_switch_t2.json()["glossary_domain"] == "medical"
+    assert res_switch_t2.json()["promoted_to_domain"] == 1
+    med_terms = client.get("/api/glossary?domain=medical").json()["terms"]
+    assert any(t["src"] == "Biopsy" for t in med_terms)
+
+    # Verify Stage 03 rerun-terms-extract-btn invalidates 'summarize' stage cleanly (and WebUI JS sends 'summarize', not 'summary')
+    res_inv_sum = client.post(
+        f"/api/tasks/{t2_id}/invalidate",
+        json={"stage": "summarize", "autorun": False, "run_stage": "subtitles"},
+    )
+    assert res_inv_sum.status_code == 200
+    assert "summarize" in res_inv_sum.json()["invalidated"]
+    assert "translate" in res_inv_sum.json()["invalidated"]
+    html_text = client.get("/").text
+    assert "stage: 'summarize'" in html_text
+    assert "stage: 'summary'" not in html_text
+
+    # 5. Delete domain 'medical' and 'destiny2' (verify deleting default domain destiny2 does NOT recreate it)
+    res_del_dom = client.delete("/api/glossary/domains/medical")
+    assert res_del_dom.status_code == 200
+    assert not (glossary_root / "medical").exists()
+
+    client.put("/api/config", json={"updates": {"glossary_domain": "destiny2"}})
+    res_del_d2 = client.delete("/api/glossary/domains/destiny2")
+    assert res_del_d2.status_code == 200
+    assert res_del_d2.json()["active_domain"] == ""
+    assert not (glossary_root / "destiny2").exists()
+    # Calling GET /api/glossary/domains after deleting destiny2 must NOT recreate destiny2!
+    res_domains_after_del = client.get("/api/glossary/domains").json()
+    assert res_domains_after_del["domains"] == []
+    assert not (glossary_root / "destiny2").exists()
+
+
+def test_review_fixes_large_dict_fix_source_paused_invalidate_domain_mtime_and_headerless_excel(
+    tmp_path: Path, monkeypatch
+):
+    """Regression test for the 5 code review findings:
+    1. >500 dict.json fix_source consistency in load_custom_terms() & _get_kb_index() preserves fix_source.
+    2. Stage 03 invalidate while runner is paused stops the paused runner and succeeds (200 instead of 409).
+    3. Switching task glossary_domain via PUT /api/tasks/{id}/terms without terms payload does not bump terms.json mtime.
+    4. Headerless .xlsx import preserves the first data row instead of swallowing it as header.
+    """
+    import io
+    import os
+    import time
+    from core import _4_1_summarize, _4_2_translate
+
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    glossary_root = tmp_path / "glossary"
+    monkeypatch.setattr("core.workspace.OUTPUT_ROOT", output_root)
+    monkeypatch.setattr("core.workspace.GLOSSARY_DIR", glossary_root)
+    monkeypatch.setattr(api, "OUTPUT", output_root)
+    monkeypatch.setattr(_4_1_summarize, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
+    monkeypatch.setattr(
+        _4_1_summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv")
+    )
+    monkeypatch.setattr(
+        _4_1_summarize, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json")
+    )
+    monkeypatch.setattr(
+        _4_1_summarize, "GLOBAL_GLOSSARY_PATH", str(tmp_path / "no_global.csv")
+    )
+
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("target_language: '简体中文'\n", encoding="utf-8")
+    monkeypatch.setattr(config_utils, "CONFIG_PATH", str(cfg_file))
+    config_utils.ensure_config_schema(str(cfg_file))
+
+    client = TestClient(api.app)
+
+    # Finding 5: Headerless .xlsx import must not drop row 0
+    client.post("/api/glossary/domains", json={"domain": "excel_dom"})
+    excel_buf = io.BytesIO()
+    pd.DataFrame(
+        [
+            ["Kubernetes", "K8s容器编排", "Cloud native", "kube|k8s", "true"],
+            ["Prometheus", "普罗米修斯监控", "Metrics", "prom", "false"],
+        ]
+    ).to_excel(excel_buf, index=False, header=False)
+    res_xlsx = client.post(
+        "/api/glossary/domains/excel_dom/import",
+        files={
+            "file": (
+                "headerless.xlsx",
+                excel_buf.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert res_xlsx.status_code == 200
+    assert res_xlsx.json()["imported_count"] == 2
+    xlsx_terms = res_xlsx.json()["terms"]
+    assert len(xlsx_terms) == 2
+    assert any(
+        t["src"] == "Kubernetes" and t["fix_source"] is True and "kube" in t["aliases"]
+        for t in xlsx_terms
+    )
+
+    # Finding 1: >500 entries in dict.json with fix_source=True must be returned by load_custom_terms()
+    # AND _get_kb_index(custom_terms_list) must preserve fix_source on custom terms
+    big_rows = ["src,tgt,aliases,note,fix_source"] + [
+        f"BigTerm{i},大词{i},big alias {i},note {i},{'true' if i == 0 else 'false'}"
+        for i in range(505)
+    ]
+    res_big = client.post(
+        "/api/glossary/domains/excel_dom/import",
+        files={"file": ("big.csv", "\n".join(big_rows).encode("utf-8"), "text/csv")},
+    )
+    assert res_big.status_code == 200
+    assert res_big.json()["imported_as"] == "dict.json"
+
+    ws = TaskWorkspace(output_root / "task_rev")
+    ws.ensure_dirs()
+    ws.update_manifest(config_override={"glossary_domain": "excel_dom"})
+
+    with (
+        workspace_context(ws),
+        config_utils.task_config_context({"glossary_domain": "excel_dom"}),
+    ):
+        custom = _4_1_summarize.load_custom_terms()
+        # BigTerm0 has fix_source=True inside >500 dict.json, so load_custom_terms() must include it!
+        assert any(t["src"] == "BigTerm0" and t["fix_source"] is True for t in custom)
+        # BigTerm1 has fix_source=False inside >500 dict.json, so it stays in KB index only
+        assert not any(t["src"] == "BigTerm1" for t in custom)
+        kb_idx = _4_1_summarize._get_kb_index(custom)
+        assert kb_idx["entries"]["kubernetes"]["fix_source"] is True
+        assert kb_idx["entries"]["bigterm0"]["fix_source"] is True
+        # Toggling fix_source on custom_terms_list must invalidate _get_kb_index cache
+        toggled_custom = [
+            {**t, "fix_source": False} if t["src"] == "Kubernetes" else t
+            for t in custom
+        ]
+        kb_idx_toggled = _4_1_summarize._get_kb_index(toggled_custom)
+        assert kb_idx_toggled["entries"]["kubernetes"]["fix_source"] is False
+
+    # Finding 4: Switching stage3 glossary_domain without passing terms must NOT bump terms.json mtime
+    ws.save_terms(
+        "Old summary",
+        [
+            {
+                "src": "Kubernetes",
+                "tgt": "旧译名",
+                "aliases": [],
+                "note": "",
+                "fix_source": False,
+            }
+        ],
+    )
+    old_mtime = 1_700_000_000.0
+    os.utime(ws.terms_path, (old_mtime, old_mtime))
+    os.utime(ws.log_dir / "terminology.json", (old_mtime, old_mtime))
+
+    res_dom_only = client.put(
+        "/api/tasks/task_rev/terms",
+        json={"glossary_domain": "excel_dom"},
+    )
+    assert res_dom_only.status_code == 200
+    assert os.stat(ws.terms_path).st_mtime == old_mtime
+    assert os.stat(ws.log_dir / "terminology.json").st_mtime == old_mtime
+    # Because terms.json mtime was NOT bumped above excel_dom/terms.csv mtime, domain CSV ("K8s容器编排") wins!
+    with (
+        workspace_context(ws),
+        config_utils.task_config_context({"glossary_domain": "excel_dom"}),
+    ):
+        idx_data = _4_1_summarize._get_term_index()
+        k8s_entry = next(e for e in idx_data["terms"] if e["src"] == "Kubernetes")
+        assert k8s_entry["tgt"] == "K8s容器编排"
+        assert (
+            _4_2_translate.apply_fix_source_terms(
+                "We deploy on kube today.", idx_data["terms"]
+            )
+            == "We deploy on Kubernetes today."
+        )
+
+    # Finding 2: Calling POST /api/tasks/{id}/invalidate when runner is paused at review_terminology
+    def _paused_step():
+        api.runner.pause("Terminology is ready for review.")
+        api.runner.check_cancel()
+
+    api.runner.start([("Pause step", _paused_step)], task_id="task_rev")
+    deadline = time.time() + 2.0
+    while api.runner.state != "paused" and time.time() < deadline:
+        time.sleep(0.02)
+    assert api.runner.state == "paused"
+    assert api.runner.is_active is True
+
+    res_inv_paused = client.post(
+        "/api/tasks/task_rev/invalidate",
+        json={"stage": "summarize", "autorun": False, "run_stage": "subtitles"},
+    )
+    assert res_inv_paused.status_code == 200
+    assert "summarize" in res_inv_paused.json()["invalidated"]
+    assert not api.runner.is_active
+    api.runner.reset()

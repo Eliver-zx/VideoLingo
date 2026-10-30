@@ -1347,7 +1347,7 @@
 
       <button id="open-glossary-btn" type="button">
         <svg class="icon" viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
-        <span data-i18n="btn_global_glossary">全局术语库</span>
+        <span data-i18n="btn_global_glossary">领域术语库</span>
       </button>
       <button id="open-settings-btn" type="button">
         <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -1757,7 +1757,7 @@
             </div>
           </div>
 
-          <div style="display:grid; grid-template-columns: 1.05fr 1fr 1.65fr 1.35fr auto; gap:0.65rem; align-items:end;">
+          <div style="display:grid; grid-template-columns: 1fr 0.95fr 1.15fr 1.55fr 1.25fr auto; gap:0.65rem; align-items:end;">
             <label class="field">
               <span data-i18n="recog_lang_label">识别语言 (Recog Lang)</span>
               <select id="task-src-lang">
@@ -1797,6 +1797,13 @@
             <label class="field">
               <span data-i18n="target_lang_label">目标语言 (Target Lang)</span>
               <input id="task-tgt-lang" type="text" value="简体中文" placeholder="自然语言描述，如 简体中文">
+            </label>
+            <label class="field">
+              <span data-i18n="domain_label">术语领域 (Domain)</span>
+              <select id="task-glossary-domain" title="记忆当前选择的术语领域，仅在手动切换时更改；选择无领域则不注入预设领域词库">
+                <option value="">无领域 (不使用领域词库)</option>
+                <option value="destiny2" selected>destiny2</option>
+              </select>
             </label>
             <label class="field">
               <span data-i18n="exec_stage_label">流水线范围</span>
@@ -2001,13 +2008,25 @@
               </div>
             </header>
             <div class="wf-body hidden" id="wf-body-3">
-              <label class="field" style="margin-block-end:0.35rem;">
-                <span style="font-size:0.75rem; font-weight:600; color:var(--text-secondary);">视频主题与背景摘要 (theme / summary · 注入每次翻译上下文)</span>
-                <input id="terms-summary-input" type="text" placeholder="两句话概括视频主题与领域背景，帮助翻译模型消歧...">
-              </label>
+              <div style="display:grid; grid-template-columns: 1fr auto; gap:0.65rem; align-items:end; margin-block-end:0.35rem;">
+                <label class="field">
+                  <span style="font-size:0.75rem; font-weight:600; color:var(--text-secondary);">视频主题与背景摘要 (theme / summary · 注入每次翻译上下文)</span>
+                  <input id="terms-summary-input" type="text" placeholder="两句话概括视频主题与领域背景，帮助翻译模型消歧...">
+                </label>
+                <div class="row" style="gap:0.4rem;">
+                  <label class="field" style="min-inline-size:180px;">
+                    <span style="font-size:0.75rem; font-weight:600; color:var(--text-secondary);">当前任务绑定领域</span>
+                    <select id="stage3-glossary-domain">
+                      <option value="">无领域 (不加载领域库)</option>
+                      <option value="destiny2">destiny2</option>
+                    </select>
+                  </label>
+                  <button id="rerun-terms-extract-btn" class="sm" type="button" title="按所选领域重新提取术语并翻译">重跑术语提取</button>
+                </div>
+              </div>
               <div class="row" style="justify-content:space-between;">
                 <span style="font-size:0.79rem; color:var(--text-secondary);">
-                  支持多对一 ASR 谐音纠错（<code class="mono">aliases</code> 用 <code class="mono">|</code> 分隔，如 <code class="mono">pie torch</code> → <code class="mono">PyTorch</code>）；勾选「修正原文」自动替换原文字幕错词。
+                  支持多对一 ASR 谐音纠错（<code class="mono">aliases</code> 用 <code class="mono">|</code> 分隔，如 <code class="mono">pie torch</code> → <code class="mono">PyTorch</code>）；勾选「修正原文」自动替换原文字幕错词，勾选「存入领域库」将术语归档至当前绑定领域。
                 </span>
                 <div class="row">
                   <button id="add-term-row-btn" class="sm" type="button">+ 新增术语</button>
@@ -2024,7 +2043,7 @@
                       <th style="width:20%;">目标译名 (tgt)</th>
                       <th style="width:22%;">ASR 谐音 / 变体 (aliases)</th>
                       <th style="width:22%;">上下文备注 (note)</th>
-                      <th style="width:18%; white-space:nowrap;">修正与全局入库</th>
+                      <th style="width:18%; white-space:nowrap;">修正与领域入库</th>
                     </tr>
                   </thead>
                   <tbody id="terms-tbody"></tbody>
@@ -2144,20 +2163,56 @@
     </main>
   </div>
 
-  <!-- 全局术语库模态框 (modern-web-guidance: light-dismiss-a-dialog) -->
+  <!-- 领域术语库模态框 (modern-web-guidance: light-dismiss-a-dialog) -->
   <dialog id="glossary-dialog" closedby="any" aria-labelledby="glossary-dialog-title">
     <form method="dialog" id="glossary-form" style="display:flex; flex-direction:column; gap:0.85rem;">
       <div class="card-header">
-        <h2 id="glossary-dialog-title" style="font-size:0.98rem;">全局术语库 (glossary/custom_terms.csv)</h2>
+        <div>
+          <h2 id="glossary-dialog-title" style="font-size:0.98rem;">领域术语库管理 (glossary/&lt;domain&gt;/)</h2>
+          <span id="glossary-domain-path-hint" class="mono" style="font-size:0.72rem; color:var(--text-muted);">glossary/destiny2/terms.csv</span>
+        </div>
         <button type="submit" value="cancel" class="sm">关闭</button>
       </div>
-      <div class="row" style="justify-content:space-between;">
-        <span style="font-size:0.79rem; color:var(--text-secondary);">全局术语会自动注入所有新视频任务的术语提取、ASR 谐音纠错与翻译提示词中。</span>
-        <button id="add-global-term-btn" class="sm" type="button">+ 新增全局术语</button>
+
+      <!-- 领域切换、创建与删除栏 -->
+      <div class="card-subtle" style="display:flex; flex-direction:column; gap:0.55rem;">
+        <div class="row" style="justify-content:space-between; gap:0.5rem;">
+          <div class="row" style="gap:0.45rem; flex:1;">
+            <strong style="font-size:0.78rem; white-space:nowrap;">当前工作领域：</strong>
+            <select id="glossary-domain-select" style="width:auto; min-inline-size:170px;">
+              <option value="">无领域 (不使用领域词库)</option>
+              <option value="destiny2">destiny2</option>
+            </select>
+            <button id="delete-domain-btn" type="button" class="danger sm" title="删除当前选中的领域目录">删除领域</button>
+          </div>
+          <div class="row" style="gap:0.4rem;">
+            <input id="new-domain-name-input" type="text" placeholder="输入新领域名，如 ai_ml" style="width:165px; padding:0.28rem 0.5rem; font-size:0.78rem;">
+            <button id="create-domain-btn" type="button" class="sm">+ 新建领域</button>
+          </div>
+        </div>
+
+        <!-- 挂载权威词典 (dict.json) 与导入栏 -->
+        <div id="domain-dict-bar" class="row" style="justify-content:space-between; padding-block-start:0.35rem; border-block-start:1px solid var(--border-color);">
+          <div class="row" style="gap:0.45rem;">
+            <span id="domain-dict-badge" class="badge">未挂载 dict.json 词典</span>
+            <button id="remove-domain-dict-btn" type="button" class="danger sm hidden">移除词典</button>
+          </div>
+          <div class="row" style="gap:0.4rem;">
+            <input id="import-glossary-file-input" type="file" accept=".csv,.xlsx,.xls,.json" style="display:none;">
+            <button id="import-glossary-file-btn" type="button" class="sm" title="CSV/XLSX (<=500条) 合并入表格；JSON 或 >500条词表存为后台权威词典 dict.json">导入词表文件 (CSV / XLSX / JSON)</button>
+            <button id="add-global-term-btn" class="sm" type="button">+ 新增领域术语</button>
+          </div>
+        </div>
       </div>
-      <div tabindex="0" role="region" aria-labelledby="global-terms-caption" class="table-wrapper">
+
+      <div id="glossary-no-domain-notice" class="card-subtle hidden" style="text-align:center; padding:1rem;">
+        <strong style="font-size:0.84rem;">当前处于「无领域」模式</strong>
+        <span style="font-size:0.76rem; color:var(--text-secondary);">在「无领域」模式下，新建视频任务不会加载任何领域预设术语表。您可以从上方下拉框切换已有领域，或新建一个领域来管理专属词汇。</span>
+      </div>
+
+      <div id="glossary-table-section" tabindex="0" role="region" aria-labelledby="global-terms-caption" class="table-wrapper">
         <table class="data-table" style="--label-2:'译名 tgt'; --label-3:'别名 aliases'; --label-4:'备注 note'; --label-5:'选项';">
-          <caption id="global-terms-caption">跨任务复用的全局术语表</caption>
+          <caption id="global-terms-caption">当前领域自定义术语表（terms.csv）</caption>
           <thead>
             <tr>
               <th style="width:19%;">标准原词 (src)</th>
@@ -2172,7 +2227,7 @@
       </div>
       <div class="row" style="justify-content:flex-end;">
         <button type="submit" value="cancel">取消</button>
-        <button id="save-global-glossary-btn" class="primary" type="button">保存全局术语库</button>
+        <button id="save-global-glossary-btn" class="primary" type="button">保存领域术语库</button>
       </div>
     </form>
   </dialog>
@@ -2375,7 +2430,7 @@
     const I18N = {
       'zh-CN': {
         nav_task_manager: '任务管理',
-        btn_global_glossary: '全局术语库',
+        btn_global_glossary: '领域术语库',
         btn_global_settings: '全局配置与外观',
         new_task_title: '新建音视频 / 字幕任务',
         source_path_label: '本地媒体路径 或 YouTube 链接',
@@ -2383,6 +2438,7 @@
         dropzone_hint: '拖拽本地音视频 / SRT 到此处，或点击上传',
         recog_lang_label: '识别语言 (Recog Lang)',
         target_lang_label: '目标语言 (Target Lang)',
+        domain_label: '术语领域 (Domain)',
         exec_stage_label: '流水线范围',
         autorun_label: '启动策略',
         btn_enqueue: '创建任务并进入流水线',
@@ -2394,7 +2450,7 @@
       },
       'en': {
         nav_task_manager: 'Tasks',
-        btn_global_glossary: 'Global Glossary',
+        btn_global_glossary: 'Domain Glossary',
         btn_global_settings: 'Settings & Theme',
         new_task_title: 'New Media / Subtitle Task',
         source_path_label: 'Local Media Path or YouTube URL',
@@ -2402,6 +2458,7 @@
         dropzone_hint: 'Drag & drop local video/audio/SRT here, or click to upload',
         recog_lang_label: 'Recog Lang',
         target_lang_label: 'Target Lang',
+        domain_label: 'Glossary Domain',
         exec_stage_label: 'Pipeline Scope',
         autorun_label: 'Start Policy',
         btn_enqueue: 'Create & Enter Pipeline',
@@ -2431,6 +2488,10 @@
       terms: [],
       utterances: [],
       config: {},
+      glossaryDomains: [],
+      activeGlossaryDomain: 'destiny2',
+      modalDomain: 'destiny2',
+      modalDomainMeta: { has_dict: false, dict_count: 0 },
       uttFilter: '',
       expandedStages: new Set([1]),
       autoExpandedKey: '',
@@ -2755,6 +2816,50 @@
       syncAsrSubPanels();
       syncTtsSubPanels();
       updateSubtitlePreviewBox();
+      await loadGlossaryDomains();
+    }
+
+    function populateDomainSelect(selectEl, domains, selectedValue) {
+      if (!selectEl) return;
+      selectEl.innerHTML = '';
+      const noneOpt = document.createElement('option');
+      noneOpt.value = '';
+      noneOpt.textContent = '无领域 (不使用领域词库)';
+      selectEl.appendChild(noneOpt);
+      for (const d of domains) {
+        const opt = document.createElement('option');
+        opt.value = d.domain;
+        const details = [];
+        if (d.terms_count > 0) details.push(`${d.terms_count} 词`);
+        if (d.has_dict) details.push(`词典 ${d.dict_count}`);
+        opt.textContent = details.length > 0 ? `${d.domain} (${details.join(' + ')})` : d.domain;
+        selectEl.appendChild(opt);
+      }
+      const hasVal = selectedValue === '' || domains.some((d) => d.domain === selectedValue);
+      selectEl.value = hasVal ? selectedValue : (domains[0]?.domain ?? '');
+    }
+
+    async function loadGlossaryDomains() {
+      try {
+        const data = await apiFetch('/api/glossary/domains');
+        state.glossaryDomains = data.domains || [];
+        const cfgDomain = state.config.glossary_domain !== undefined
+          ? String(state.config.glossary_domain)
+          : String(data.active_domain ?? 'destiny2');
+        state.activeGlossaryDomain = cfgDomain;
+        populateDomainSelect(document.getElementById('task-glossary-domain'), state.glossaryDomains, cfgDomain);
+        const st3Sel = document.getElementById('stage3-glossary-domain');
+        if (st3Sel) {
+          const taskDomain = state.activeTaskData?.config_override?.glossary_domain !== undefined
+            ? String(state.activeTaskData.config_override.glossary_domain)
+            : cfgDomain;
+          populateDomainSelect(st3Sel, state.glossaryDomains, taskDomain);
+        }
+        const modalSel = document.getElementById('glossary-domain-select');
+        if (modalSel) {
+          populateDomainSelect(modalSel, state.glossaryDomains, state.modalDomain ?? cfgDomain);
+        }
+      } catch (_) {}
     }
 
     function bindConfigChange(id, keyPath, transform = (v) => v, afterFn = null) {
@@ -2772,6 +2877,13 @@
       const lang = e.target.value;
       applyUiLanguage(lang);
       await patchConfig({ 'display_language': lang });
+    });
+
+    document.getElementById('task-glossary-domain').addEventListener('change', async (e) => {
+      const dom = e.target.value;
+      state.activeGlossaryDomain = dom;
+      state.config.glossary_domain = dom;
+      await patchConfig({ 'glossary_domain': dom });
     });
 
     bindConfigChange('sb-api-key', 'api.key', (v) => v.trim());
@@ -3143,6 +3255,11 @@
         }
       }
 
+      const taskDomain = task.config_override?.glossary_domain !== undefined
+        ? String(task.config_override.glossary_domain)
+        : String(state.config.glossary_domain ?? '');
+      const domainTag = taskDomain ? `领域: ${taskDomain}` : '无领域';
+
       const summaries = {
         1: media.filename
           ? `已挂载 ${media.filename} (${media.display_width ? media.display_width + '×' + media.display_height : media.type || 'media'})${files.includes('audio/vocal.mp3') ? ' · 已分离人声与伴奏' : ''}`
@@ -3151,8 +3268,8 @@
           ? `已完成词级时间轴对齐与语义断句（共 ${uttCount} 个语义句段）`
           : '生成 words.json 词级时间轴并按声学停顿与语义切分句子',
         3: info.done[3]
-          ? `已提取并审校 ${termsCount} 条专业术语（点击「编辑术语 / 重跑」可就地修改）`
-          : '提取领域专有名词、ASR 谐音别名与固定译名',
+          ? `已提取并审校 ${termsCount} 条专业术语（${domainTag} · 点击「编辑术语 / 重跑」可就地修改）`
+          : `提取领域专有名词、ASR 谐音别名与固定译名（当前绑定 ${domainTag}）`,
         4: info.done[4]
           ? `已完成 ${uttCount} 句双语精翻与配音词生成（点击「编辑译文 / 重跑」可就地修改）`
           : '三步直译-反思-意译，独立校对画面字幕 (tgt) 与配音口播词 (tts_text)',
@@ -3362,6 +3479,14 @@
         stemsBox.innerHTML = `<div class="card-subtle" style="font-size:0.76rem; color:var(--text-muted);">流水线启动后将在此显示提取的音轨与伴奏预览。</div>`;
       }
 
+      const st3Sel = document.getElementById('stage3-glossary-domain');
+      if (st3Sel) {
+        const boundDomain = task.config_override?.glossary_domain !== undefined
+          ? String(task.config_override.glossary_domain)
+          : String(state.config.glossary_domain ?? '');
+        populateDomainSelect(st3Sel, state.glossaryDomains, boundDomain);
+      }
+
       await loadTaskTerms(task.task_id);
       await loadTaskUtterances(task.task_id);
       updateWaterfallCards(task, state.terms.length, state.utterances.length);
@@ -3385,9 +3510,13 @@
     function renderTermsTable() {
       const tbody = document.getElementById('terms-tbody');
       tbody.innerHTML = '';
+      const st3Sel = document.getElementById('stage3-glossary-domain');
+      const taskDomain = st3Sel ? st3Sel.value : '';
+      const promoteHint = taskDomain ? `存入领域库 (${taskDomain})` : '当前为无领域，入库需要先绑定领域';
       state.terms.forEach((t, idx) => {
         const tr = document.createElement('tr');
         const aliasesStr = Array.isArray(t.aliases) ? t.aliases.join(' | ') : (t.aliases || '');
+        const checkedPromote = Boolean(t.promote_to_domain || t.promote_to_global);
         tr.innerHTML = `
           <th><input type="text" data-idx="${idx}" data-field="src" value="${escapeAttr(t.src || '')}"></th>
           <td><input type="text" data-idx="${idx}" data-field="tgt" value="${escapeAttr(t.tgt || '')}"></td>
@@ -3396,7 +3525,7 @@
           <td>
             <div class="row" style="flex-wrap:nowrap; gap:0.55rem;">
               <label style="font-size:0.74rem; color:var(--text-secondary); display:inline-flex; align-items:center; gap:0.3rem; white-space:nowrap;"><input type="checkbox" data-idx="${idx}" data-field="fix_source" ${t.fix_source ? 'checked' : ''}> 修正原文</label>
-              <label style="font-size:0.74rem; color:var(--text-secondary); display:inline-flex; align-items:center; gap:0.3rem; white-space:nowrap;"><input type="checkbox" data-idx="${idx}" data-field="promote_to_global"> 存入全局</label>
+              <label title="${escapeAttr(promoteHint)}" style="font-size:0.74rem; color:var(--text-secondary); display:inline-flex; align-items:center; gap:0.3rem; white-space:nowrap;"><input type="checkbox" data-idx="${idx}" data-field="promote_to_domain" ${checkedPromote ? 'checked' : ''}> 存入领域库</label>
               <button type="button" class="danger sm" data-del-idx="${idx}">删除</button>
             </div>
           </td>
@@ -3430,7 +3559,7 @@
 
     document.getElementById('add-term-row-btn').addEventListener('click', () => {
       syncTermsFromDom();
-      state.terms.push({ src: '', tgt: '', aliases: [], note: '', fix_source: false, promote_to_global: false });
+      state.terms.push({ src: '', tgt: '', aliases: [], note: '', fix_source: false, promote_to_domain: false });
       renderTermsTable();
     });
 
@@ -3440,20 +3569,50 @@
       const sumInp = document.getElementById('terms-summary-input');
       const summary = sumInp ? sumInp.value.trim() : (state.termsSummary || '');
       state.termsSummary = summary;
+      const st3Sel = document.getElementById('stage3-glossary-domain');
+      const glossaryDomain = st3Sel ? st3Sel.value : undefined;
       const res = await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}/terms`, {
         method: 'PUT',
-        body: JSON.stringify({ summary, terms: state.terms }),
+        body: JSON.stringify({ summary, terms: state.terms, glossary_domain: glossaryDomain }),
       });
-      if (res && res.promoted_to_global > 0) {
-        state.terms.forEach((t) => { t.promote_to_global = false; });
+      const promotedCount = res?.promoted_to_domain ?? res?.promoted_to_global ?? 0;
+      if (promotedCount > 0) {
+        state.terms.forEach((t) => {
+          t.promote_to_domain = false;
+          t.promote_to_global = false;
+        });
         renderTermsTable();
+        await loadGlossaryDomains();
       }
       return res;
     }
 
+    document.getElementById('stage3-glossary-domain').addEventListener('change', async (e) => {
+      if (!state.activeTaskId) return;
+      renderTermsTable();
+      await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}/terms`, {
+        method: 'PUT',
+        body: JSON.stringify({ glossary_domain: e.target.value }),
+      });
+      flashSavedToast('已更新任务绑定领域');
+      await refreshActiveTask();
+    });
+
+    document.getElementById('rerun-terms-extract-btn').addEventListener('click', async () => {
+      if (!state.activeTaskId) return;
+      await saveTerms();
+      await apiFetch(`/api/tasks/${encodeURIComponent(state.activeTaskId)}/invalidate`, {
+        method: 'POST',
+        body: JSON.stringify({ stage: 'summarize', autorun: true, run_stage: 'subtitles' }),
+      });
+      flashSavedToast('已按所选领域重新提取术语并重跑翻译');
+      await loadTasks();
+    });
+
     document.getElementById('save-terms-btn').addEventListener('click', async () => {
       const res = await saveTerms();
-      const msg = res?.promoted_to_global ? `术语表已保存（${res.promoted_to_global} 条已入全局库）` : '术语表已保存';
+      const promotedCount = res?.promoted_to_domain ?? res?.promoted_to_global ?? 0;
+      const msg = promotedCount ? `术语表已保存（${promotedCount} 条已入领域库）` : '术语表已保存';
       flashSavedToast(msg);
     });
 
@@ -3658,6 +3817,7 @@
       const fileInp = document.getElementById('input-file-upload');
       const srcLang = document.getElementById('task-src-lang').value;
       const tgtLang = document.getElementById('task-tgt-lang').value.trim() || '简体中文';
+      const glossaryDomain = document.getElementById('task-glossary-domain').value;
       const stage = document.getElementById('task-stage').value;
       const autorun = document.getElementById('task-autorun').value === 'true';
 
@@ -3668,6 +3828,7 @@
           form.append('file', fileInp.files[0]);
           form.append('source_language', srcLang);
           form.append('target_language', tgtLang);
+          form.append('glossary_domain', glossaryDomain);
           form.append('stage', stage);
           form.append('autorun', String(autorun));
           const res = await fetch('/api/tasks/upload', { method: 'POST', body: form });
@@ -3686,6 +3847,7 @@
                 subtitles: subPath,
                 source_language: srcLang,
                 target_language: tgtLang,
+                glossary_domain: glossaryDomain,
                 stage,
                 dubbing: stage === 'all' || stage === 'dubbing',
                 autorun,
@@ -3777,7 +3939,7 @@
       }
     });
 
-    // 11. Global Glossary Dialog
+    // 11. Domain Glossary Dialog
     const glossaryDialog = document.getElementById('glossary-dialog');
     let globalGlossaryTerms = [];
     function renderGlobalGlossaryTable() {
@@ -3825,25 +3987,194 @@
       });
     }
 
-    document.getElementById('open-glossary-btn').addEventListener('click', async () => {
-      const data = await apiFetch('/api/glossary');
+    async function loadModalDomainData(domain) {
+      state.modalDomain = domain;
+      const modalSel = document.getElementById('glossary-domain-select');
+      if (modalSel && modalSel.value !== domain) {
+        modalSel.value = domain;
+      }
+      const pathHint = document.getElementById('glossary-domain-path-hint');
+      const noDomainNotice = document.getElementById('glossary-no-domain-notice');
+      const tableSec = document.getElementById('glossary-table-section');
+      const delDomainBtn = document.getElementById('delete-domain-btn');
+      const importBtn = document.getElementById('import-glossary-file-btn');
+      const addRowBtn = document.getElementById('add-global-term-btn');
+      const saveBtn = document.getElementById('save-global-glossary-btn');
+      const dictBadge = document.getElementById('domain-dict-badge');
+      const rmDictBtn = document.getElementById('remove-domain-dict-btn');
+
+      if (!domain) {
+        if (pathHint) pathHint.textContent = '当前模式：无领域（新建任务不挂载任何领域词库）';
+        if (noDomainNotice) noDomainNotice.classList.remove('hidden');
+        if (tableSec) tableSec.classList.add('hidden');
+        if (delDomainBtn) delDomainBtn.disabled = true;
+        if (importBtn) importBtn.disabled = true;
+        if (addRowBtn) addRowBtn.disabled = true;
+        if (saveBtn) saveBtn.disabled = true;
+        if (dictBadge) dictBadge.classList.add('hidden');
+        if (rmDictBtn) rmDictBtn.classList.add('hidden');
+        globalGlossaryTerms = [];
+        renderGlobalGlossaryTable();
+        return;
+      }
+
+      if (pathHint) pathHint.textContent = `glossary/${domain}/terms.csv`;
+      if (noDomainNotice) noDomainNotice.classList.add('hidden');
+      if (tableSec) tableSec.classList.remove('hidden');
+      if (delDomainBtn) delDomainBtn.disabled = false;
+      if (importBtn) importBtn.disabled = false;
+      if (addRowBtn) addRowBtn.disabled = false;
+      if (saveBtn) saveBtn.disabled = false;
+
+      const data = await apiFetch(`/api/glossary?domain=${encodeURIComponent(domain)}`);
       globalGlossaryTerms = data.terms || [];
+      state.modalDomainMeta = {
+        has_dict: Boolean(data.has_dict),
+        dict_count: Number(data.dict_count || 0),
+      };
+      if (state.modalDomainMeta.has_dict) {
+        if (dictBadge) {
+          dictBadge.textContent = `已挂载权威大词典 dict.json (${state.modalDomainMeta.dict_count} 词条)`;
+          dictBadge.classList.remove('hidden');
+        }
+        if (rmDictBtn) rmDictBtn.classList.remove('hidden');
+      } else {
+        if (dictBadge) dictBadge.classList.add('hidden');
+        if (rmDictBtn) rmDictBtn.classList.add('hidden');
+      }
       renderGlobalGlossaryTable();
+    }
+
+    document.getElementById('open-glossary-btn').addEventListener('click', async () => {
+      await loadGlossaryDomains();
+      const targetDomain = state.activeGlossaryDomain ?? 'destiny2';
+      const modalSel = document.getElementById('glossary-domain-select');
+      populateDomainSelect(modalSel, state.glossaryDomains, targetDomain);
+      await loadModalDomainData(modalSel.value);
       glossaryDialog.showModal();
     });
 
+    document.getElementById('glossary-domain-select').addEventListener('change', async (e) => {
+      const dom = e.target.value;
+      state.activeGlossaryDomain = dom;
+      state.config.glossary_domain = dom;
+      const taskSel = document.getElementById('task-glossary-domain');
+      if (taskSel) taskSel.value = dom;
+      await patchConfig({ 'glossary_domain': dom });
+      await loadModalDomainData(dom);
+    });
+
+    document.getElementById('create-domain-btn').addEventListener('click', async () => {
+      const inp = document.getElementById('new-domain-name-input');
+      const name = inp.value.trim();
+      if (!name) return alert('请输入新领域名称（如 destiny2、medical）');
+      try {
+        const res = await apiFetch('/api/glossary/domains', {
+          method: 'POST',
+          body: JSON.stringify({ domain: name }),
+        });
+        inp.value = '';
+        const newDom = res.domain;
+        state.activeGlossaryDomain = newDom;
+        state.config.glossary_domain = newDom;
+        await patchConfig({ 'glossary_domain': newDom });
+        await loadGlossaryDomains();
+        await loadModalDomainData(newDom);
+        flashSavedToast(`已创建并切换到领域 ${newDom}`);
+      } catch (e) {
+        alert(`新建领域失败: ${e.message}`);
+      }
+    });
+
+    document.getElementById('delete-domain-btn').addEventListener('click', async () => {
+      const dom = state.modalDomain;
+      if (!dom) return;
+      if (!confirm(`确认删除领域「${dom}」及其下所有词表 (terms.csv / dict.json)？`)) return;
+      try {
+        const res = await apiFetch(`/api/glossary/domains/${encodeURIComponent(dom)}`, { method: 'DELETE' });
+        const nextActive = res.active_domain ?? '';
+        const nextModal = nextActive || (res.domains?.[0]?.domain ?? '');
+        state.activeGlossaryDomain = nextActive;
+        state.config.glossary_domain = nextActive;
+        state.modalDomain = nextModal;
+        await loadGlossaryDomains();
+        await loadModalDomainData(nextModal);
+        flashSavedToast(`已删除领域 ${dom}`);
+      } catch (e) {
+        alert(`删除领域失败: ${e.message}`);
+      }
+    });
+
+    document.getElementById('import-glossary-file-btn').addEventListener('click', () => {
+      if (!state.modalDomain) return alert('请先选择或创建一个具体的领域');
+      document.getElementById('import-glossary-file-input').click();
+    });
+
+    document.getElementById('import-glossary-file-input').addEventListener('change', async (e) => {
+      const fileInp = e.target;
+      if (!fileInp.files || fileInp.files.length === 0) return;
+      const dom = state.modalDomain;
+      if (!dom) return;
+      const form = new FormData();
+      form.append('file', fileInp.files[0]);
+      try {
+        const res = await fetch(`/api/glossary/domains/${encodeURIComponent(dom)}/import`, {
+          method: 'POST',
+          body: form,
+        });
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(errText);
+        }
+        const data = await res.json();
+        await loadGlossaryDomains();
+        await loadModalDomainData(dom);
+        if (data.imported_as === 'dict.json') {
+          flashSavedToast(`已挂载权威大词典 dict.json（${data.dict_count} 词条）`);
+        } else {
+          flashSavedToast(`已导入 ${data.imported_count} 条词条至 ${dom}/terms.csv`);
+        }
+      } catch (err) {
+        alert(`导入词表失败: ${err.message}`);
+      } finally {
+        fileInp.value = '';
+      }
+    });
+
+    document.getElementById('remove-domain-dict-btn').addEventListener('click', async () => {
+      const dom = state.modalDomain;
+      if (!dom) return;
+      if (!confirm(`确认卸载并删除领域「${dom}」下的 dict.json 权威大词典？`)) return;
+      try {
+        await apiFetch(`/api/glossary/domains/${encodeURIComponent(dom)}/dict`, { method: 'DELETE' });
+        await loadGlossaryDomains();
+        await loadModalDomainData(dom);
+        flashSavedToast('已卸载 dict.json');
+      } catch (e) {
+        alert(`卸载词典失败: ${e.message}`);
+      }
+    });
+
     document.getElementById('add-global-term-btn').addEventListener('click', () => {
+      if (!state.modalDomain) return;
       syncGlobalGlossaryFromDom();
       globalGlossaryTerms.push({ src: '', tgt: '', aliases: [], note: '', fix_source: false });
       renderGlobalGlossaryTable();
     });
 
     document.getElementById('save-global-glossary-btn').addEventListener('click', async () => {
+      const dom = state.modalDomain;
+      if (!dom) {
+        closeTopLayer(glossaryDialog);
+        return;
+      }
       syncGlobalGlossaryFromDom();
-      await apiFetch('/api/glossary', {
+      await apiFetch(`/api/glossary?domain=${encodeURIComponent(dom)}`, {
         method: 'PUT',
         body: JSON.stringify({ terms: globalGlossaryTerms }),
       });
+      await loadGlossaryDomains();
+      flashSavedToast(`已保存领域 ${dom} 词表`);
       closeTopLayer(glossaryDialog);
     });
 

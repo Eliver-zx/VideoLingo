@@ -90,6 +90,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "reflect_translate": False,
     "translation_style": "",
+    "glossary_domain": "destiny2",
     "pause_before_translate": False,
     "pause_after_translate": False,
     "tts_method": "edge_tts",

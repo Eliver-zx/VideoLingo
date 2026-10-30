@@ -19,9 +19,11 @@ from core.utils.models import (
     resolve_task_path,
 )
 from core.workspace import TaskWorkspace, get_active_workspace
+
 console = Console()
 
 _4_2_TRANSLATION_RAW = "output/log/translation_raw.csv"
+
 
 def apply_fix_source_terms(text: str, terms: list[dict]) -> str:
     """Rewrite ASR alias variants into canonical ``src`` when ``fix_source`` is enabled on a term."""
@@ -35,10 +37,14 @@ def apply_fix_source_terms(text: str, terms: list[dict]) -> str:
         if not canonical:
             continue
         raw_aliases = entry.get("aliases") or []
-        candidates = [str(a).strip() for a in raw_aliases if str(a).strip()] + [canonical]
+        candidates = [str(a).strip() for a in raw_aliases if str(a).strip()] + [
+            canonical
+        ]
         for cand in sorted(set(candidates), key=len, reverse=True):
             if re.match(r"^[\w\s\-]+$", cand, flags=re.ASCII):
-                pattern = re.compile(rf"(?<!\w){re.escape(cand)}(?!\w)", flags=re.IGNORECASE)
+                pattern = re.compile(
+                    rf"(?<!\w){re.escape(cand)}(?!\w)", flags=re.IGNORECASE
+                )
             else:
                 pattern = re.compile(re.escape(cand), flags=re.IGNORECASE)
             out = pattern.sub(canonical, out)
@@ -46,11 +52,11 @@ def apply_fix_source_terms(text: str, terms: list[dict]) -> str:
 
 
 # Function to split text into chunks
-def split_chunks_by_chars(chunk_size=2400, max_i=15): 
+def split_chunks_by_chars(chunk_size=2400, max_i=15):
     """Split text into chunks based on character count, return a list of multi-line text chunks"""
     meaning_path = resolve_task_path(_3_2_SPLIT_BY_MEANING)
     with open(meaning_path, "r", encoding="utf-8") as file:
-        sentences = [line.strip() for line in file.read().split('\n') if line.strip()]
+        sentences = [line.strip() for line in file.read().split("\n") if line.strip()]
 
     if not sentences:
         return []
@@ -73,26 +79,38 @@ def split_chunks_by_chars(chunk_size=2400, max_i=15):
                     ws.save_utterances(utts)
 
     chunks = []
-    chunk = ''
+    chunk = ""
     sentence_count = 0
     for sentence in sentences:
-        if len(chunk) + len(sentence + '\n') > chunk_size or sentence_count == max_i:
-            if chunk.strip():  # a first sentence longer than chunk_size leaves nothing to flush
+        if len(chunk) + len(sentence + "\n") > chunk_size or sentence_count == max_i:
+            if (
+                chunk.strip()
+            ):  # a first sentence longer than chunk_size leaves nothing to flush
                 chunks.append(chunk.strip())
-            chunk = sentence + '\n'
+            chunk = sentence + "\n"
             sentence_count = 1
         else:
-            chunk += sentence + '\n'
+            chunk += sentence + "\n"
             sentence_count += 1
     if chunk.strip():
         chunks.append(chunk.strip())
     return chunks
 
+
 # Get context from surrounding chunks
 def get_previous_content(chunks, chunk_index):
-    return None if chunk_index == 0 else chunks[chunk_index - 1].split('\n')[-4:] # Get last 4 lines
+    return (
+        None if chunk_index == 0 else chunks[chunk_index - 1].split("\n")[-4:]
+    )  # Get last 4 lines
+
+
 def get_after_content(chunks, chunk_index):
-    return None if chunk_index == len(chunks) - 1 else chunks[chunk_index + 1].split('\n')[:3] # Get first 3 lines
+    return (
+        None
+        if chunk_index == len(chunks) - 1
+        else chunks[chunk_index + 1].split("\n")[:3]
+    )  # Get first 3 lines
+
 
 # 🔍 Translate a single chunk
 def translate_chunk(chunk, chunks, theme_prompt, i):
@@ -110,7 +128,14 @@ def translate_chunk(chunk, chunks, theme_prompt, i):
     )
     search_scope = "\n".join(part for part in (chunk, prev_str, after_str) if part)
     things_to_note_prompt = search_things_to_note_in_prompt(search_scope)
-    translation, english_result = translate_lines(chunk, previous_content_prompt, after_content_prompt, things_to_note_prompt, theme_prompt, i)
+    translation, english_result = translate_lines(
+        chunk,
+        previous_content_prompt,
+        after_content_prompt,
+        things_to_note_prompt,
+        theme_prompt,
+        i,
+    )
     return i, english_result, translation
 
 
@@ -122,7 +147,13 @@ def _translation_cache_fingerprint() -> str:
     ``terminology.json``, ``terms.json``, or global glossary files change.
     """
     h = hashlib.sha256()
-    for key in ("api.model", "target_language", "translation_style", "reflect_translate"):
+    for key in (
+        "api.model",
+        "target_language",
+        "translation_style",
+        "reflect_translate",
+        "glossary_domain",
+    ):
         val = str(load_key_or(key, "") or "")
         h.update(f"{key}={val}\n".encode("utf-8"))
     term_path = resolve_task_path(_4_1_TERMINOLOGY)
@@ -136,14 +167,18 @@ def _translation_cache_fingerprint() -> str:
         merged_terms = _get_term_index().get("terms", [])
         if merged_terms:
             h.update(
-                json.dumps(merged_terms, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                json.dumps(merged_terms, sort_keys=True, ensure_ascii=False).encode(
+                    "utf-8"
+                )
             )
     except Exception:
         pass
     return h.hexdigest()[:16]
 
 
-def _load_cached_raw_translation(expected_sources: list[str], fingerprint: str = "") -> pd.DataFrame | None:
+def _load_cached_raw_translation(
+    expected_sources: list[str], fingerprint: str = ""
+) -> pd.DataFrame | None:
     """Return cached raw translation DataFrame if it exists and matches ``expected_sources`` and ``fingerprint``."""
     raw_path = resolve_task_path(_4_2_TRANSLATION_RAW)
     if not os.path.exists(raw_path):
@@ -161,10 +196,14 @@ def _load_cached_raw_translation(expected_sources: list[str], fingerprint: str =
         cached_src = [str(s).strip() for s in df_cached["Source"].fillna("")]
         target_src = [str(s).strip() for s in expected_sources]
         if cached_src == target_src and len(df_cached) == len(expected_sources):
-            return pd.DataFrame({
-                "Source": expected_sources,
-                "Translation": [str(t) for t in df_cached["Translation"].fillna("")],
-            })
+            return pd.DataFrame(
+                {
+                    "Source": expected_sources,
+                    "Translation": [
+                        str(t) for t in df_cached["Translation"].fillna("")
+                    ],
+                }
+            )
     except Exception:
         return None
     return None
@@ -175,30 +214,48 @@ def _load_cached_raw_translation(expected_sources: list[str], fingerprint: str =
 def translate_all():
     console.print("[bold green]Start Translating All...[/bold green]")
     chunks = split_chunks_by_chars(chunk_size=2400, max_i=15)
-    expected_sources = [line for chunk in chunks for line in chunk.split('\n') if line.strip()]
+    expected_sources = [
+        line for chunk in chunks for line in chunk.split("\n") if line.strip()
+    ]
     fingerprint = _translation_cache_fingerprint()
     raw_path = resolve_task_path(_4_2_TRANSLATION_RAW)
     term_path = resolve_task_path(_4_1_TERMINOLOGY)
     cleaned_path = resolve_task_path(_2_CLEANED_CHUNKS)
     out_path = resolve_task_path(_4_2_TRANSLATION)
 
-    df_translate = _load_cached_raw_translation(expected_sources, fingerprint=fingerprint)
+    df_translate = _load_cached_raw_translation(
+        expected_sources, fingerprint=fingerprint
+    )
     direct_lines_all: list[str] = []
     if df_translate is not None:
-        console.print(f"[cyan]♻️ Reusing cached raw translations from `{raw_path}`[/cyan]")
+        console.print(
+            f"[cyan]♻️ Reusing cached raw translations from `{raw_path}`[/cyan]"
+        )
     else:
         LAST_DIRECT_BY_INDEX.clear()
-        with open(term_path, 'r', encoding='utf-8') as file:
+        with open(term_path, "r", encoding="utf-8") as file:
             term_data = json.load(file)
-            theme_prompt = term_data.get('theme') or term_data.get('topic') or term_data.get('summary')
+            theme_prompt = (
+                term_data.get("theme")
+                or term_data.get("topic")
+                or term_data.get("summary")
+            )
 
         # 🔄 Use concurrent execution for translation
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        ) as progress:
             task = progress.add_task("[cyan]Translating chunks...", total=len(chunks))
-            with concurrent.futures.ThreadPoolExecutor(max_workers=load_key("max_workers")) as executor:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=load_key("max_workers")
+            ) as executor:
                 futures = []
                 for i, chunk in enumerate(chunks):
-                    future = executor.submit(translate_chunk, chunk, chunks, theme_prompt, i)
+                    future = executor.submit(
+                        translate_chunk, chunk, chunks, theme_prompt, i
+                    )
                     futures.append(future)
                 results = []
                 try:
@@ -212,28 +269,30 @@ def translate_all():
                     raise
 
         results.sort(key=lambda x: x[0])  # Sort results based on original chunk index
-        
+
         # 💾 Save results to lists and Excel file
         src_text, trans_text = [], []
         for i, chunk in enumerate(chunks):
-            chunk_lines = chunk.split('\n')
+            chunk_lines = chunk.split("\n")
             src_text.extend(chunk_lines)
             _, _, chunk_trans = results[i]
-            trans_lines = chunk_trans.split('\n')
+            trans_lines = chunk_trans.split("\n")
             if len(trans_lines) != len(chunk_lines):
-                raise ValueError(f"Translation line count mismatch in chunk {i}: expected {len(chunk_lines)}, got {len(trans_lines)}")
+                raise ValueError(
+                    f"Translation line count mismatch in chunk {i}: expected {len(chunk_lines)}, got {len(trans_lines)}"
+                )
             trans_text.extend(trans_lines)
             direct_chunk = LAST_DIRECT_BY_INDEX.get(i)
             if direct_chunk and len(direct_chunk) == len(chunk_lines):
                 direct_lines_all.extend(direct_chunk)
             else:
                 direct_lines_all.extend(trans_lines)
-        
-        df_translate = pd.DataFrame({'Source': src_text, 'Translation': trans_text})
+
+        df_translate = pd.DataFrame({"Source": src_text, "Translation": trans_text})
         os.makedirs(os.path.dirname(raw_path) or ".", exist_ok=True)
         df_to_cache = df_translate.copy()
-        df_to_cache['Fingerprint'] = fingerprint
-        df_to_cache.to_csv(raw_path, index=False, encoding='utf-8-sig')
+        df_to_cache["Fingerprint"] = fingerprint
+        df_to_cache.to_csv(raw_path, index=False, encoding="utf-8-sig")
 
     # Update utterances.json with direct, tgt, and tts_text (preserving full punctuation)
     ws = (
@@ -251,21 +310,34 @@ def translate_all():
         for idx, u in enumerate(utterances):
             if idx < len(tr_list):
                 tgt_str = str(tr_list[idx]).strip()
-                dir_str = direct_lines_all[idx] if idx < len(direct_lines_all) else str(u.get("direct") or tgt_str)
+                dir_str = (
+                    direct_lines_all[idx]
+                    if idx < len(direct_lines_all)
+                    else str(u.get("direct") or tgt_str)
+                )
                 u["direct"] = dir_str
                 u["tgt"] = tgt_str
                 u["tts_text"] = tgt_str
         ws.save_utterances(utterances)
 
     df_text = pd.read_excel(cleaned_path)
-    df_text['text'] = df_text['text'].str.strip('"').str.strip()
-    subtitle_output_configs = [('trans_subs_for_audio.srt', ['Translation'])]
-    df_time = align_timestamp(df_text, df_translate, subtitle_output_configs, output_dir=None, for_display=False)
+    df_text["text"] = df_text["text"].str.strip('"').str.strip()
+    subtitle_output_configs = [("trans_subs_for_audio.srt", ["Translation"])]
+    df_time = align_timestamp(
+        df_text,
+        df_translate,
+        subtitle_output_configs,
+        output_dir=None,
+        for_display=False,
+    )
     console.print(df_time)
-    
+
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     df_time.to_excel(out_path, index=False)
-    console.print("[bold green]✅ Translation completed and results saved.[/bold green]")
+    console.print(
+        "[bold green]✅ Translation completed and results saved.[/bold green]"
+    )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     translate_all()

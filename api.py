@@ -29,17 +29,27 @@ from core.utils.config_utils import (
     CONFIG_PATH,
     ensure_config_schema,
     load_key,
+    load_key_or,
     task_config_context,
     update_key,
     update_keys,
     yaml,
 )
 from core.workspace import (
+    DEFAULT_GLOSSARY_DOMAIN,
     TaskWorkspace,
+    create_glossary_domain,
     create_task_workspace,
+    delete_glossary_domain,
+    domain_dict_json_path,
+    get_glossary_domain_meta,
+    list_glossary_domains,
     list_task_workspaces,
+    load_domain_glossary,
     load_global_glossary,
-    promote_terms_to_global,
+    promote_terms_to_domain,
+    sanitize_domain_name,
+    save_domain_glossary,
     save_global_glossary,
     workspace_context,
 )
@@ -121,6 +131,7 @@ class RunRequest(BaseModel):
     dubbing: bool = False
     target_language: str | None = Field(default=None, min_length=1)
     source_language: str | None = Field(default=None, min_length=1)
+    glossary_domain: str | None = None
 
 
 class CreateTaskRequest(BaseModel):
@@ -130,6 +141,7 @@ class CreateTaskRequest(BaseModel):
     title: str | None = None
     source_language: str | None = None
     target_language: str | None = None
+    glossary_domain: str | None = None
     stage: Literal["transcribe", "subtitles", "dubbing", "all"] = "subtitles"
     dubbing: bool = False
     autorun: bool = True
@@ -144,8 +156,15 @@ class InvalidateStageRequest(BaseModel):
 
 class TermsUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    terms: list[dict[str, Any]]
+    terms: list[dict[str, Any]] | None = None
     summary: str | None = None
+    glossary_domain: str | None = None
+
+
+class CreateDomainRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    domain: str | None = None
+    name: str | None = None
 
 
 class UtterancesUpdateRequest(BaseModel):
@@ -372,6 +391,14 @@ def create_task(request: CreateTaskRequest):
             overrides["whisper.detected_language"] = request.source_language
     if request.target_language:
         overrides["target_language"] = request.target_language
+    chosen_domain = (
+        request.glossary_domain.strip()
+        if request.glossary_domain is not None
+        else str(load_key_or("glossary_domain", DEFAULT_GLOSSARY_DOMAIN) or "").strip()
+    )
+    overrides["glossary_domain"] = chosen_domain
+    if request.glossary_domain is not None:
+        update_key("glossary_domain", chosen_domain, add_missing=True)
 
     sub_path = subtitle_file(request.subtitles) if request.subtitles else None
 
@@ -443,6 +470,7 @@ def upload_task(
     file: UploadFile = File(...),
     source_language: str = Form("en"),
     target_language: str = Form("简体中文"),
+    glossary_domain: str | None = Form(None),
     stage: Literal["transcribe", "subtitles", "dubbing", "all"] = Form("subtitles"),
     autorun: bool = Form(True),
 ):
@@ -472,9 +500,18 @@ def upload_task(
         with open(dst_path, "wb") as out_f:
             shutil.copyfileobj(file.file, out_f)
 
+    chosen_domain = (
+        glossary_domain.strip()
+        if glossary_domain is not None
+        else str(load_key_or("glossary_domain", DEFAULT_GLOSSARY_DOMAIN) or "").strip()
+    )
+    if glossary_domain is not None:
+        update_key("glossary_domain", chosen_domain, add_missing=True)
+
     overrides = {
         "whisper.language": source_language,
         "target_language": target_language,
+        "glossary_domain": chosen_domain,
     }
     if source_language != "auto":
         overrides["whisper.detected_language"] = source_language
@@ -497,6 +534,8 @@ def run_task(task_id: str, request: RunRequest):
         overrides["whisper.language"] = request.source_language
         if request.source_language != "auto":
             overrides["whisper.detected_language"] = request.source_language
+    if request.glossary_domain is not None:
+        overrides["glossary_domain"] = request.glossary_domain.strip()
     manifest["config_override"] = overrides
     ws.save_manifest(manifest)
 
@@ -541,10 +580,15 @@ def stop_task(task_id: str):
 def invalidate_task_stage(task_id: str, request: InvalidateStageRequest):
     ws = _resolve_workspace(task_id)
     if runner.active_task_id == ws.task_id and runner.is_active:
-        raise HTTPException(
-            409,
-            "Cannot invalidate stages while the task is actively running; stop it first.",
-        )
+        if runner.state == "paused":
+            runner.stop()
+            if runner._thread is not None and runner._thread.is_alive():
+                runner._thread.join(timeout=2.0)
+        if runner.is_active:
+            raise HTTPException(
+                409,
+                "Cannot invalidate stages while the task is actively running; stop it first.",
+            )
     try:
         invalidated = ws.invalidate_from_stage(request.stage)
     except ValueError as exc:
@@ -574,6 +618,30 @@ def get_task_terms(task_id: str):
 @app.put("/api/tasks/{task_id}/terms")
 def update_task_terms(task_id: str, request: TermsUpdateRequest):
     ws = _resolve_workspace(task_id)
+    manifest = ws.load_manifest()
+    overrides = dict(manifest.get("config_override") or {})
+    if request.glossary_domain is not None:
+        overrides["glossary_domain"] = request.glossary_domain.strip()
+        manifest["config_override"] = overrides
+        ws.save_manifest(manifest)
+
+    task_domain = overrides.get("glossary_domain")
+    if task_domain is None:
+        task_domain = str(
+            load_key_or("glossary_domain", DEFAULT_GLOSSARY_DOMAIN) or ""
+        ).strip()
+    else:
+        task_domain = str(task_domain).strip()
+
+    if request.terms is None:
+        current = get_task_terms(task_id)
+        return {
+            "saved": len(current.get("terms") or []),
+            "promoted_to_domain": 0,
+            "promoted_to_global": 0,
+            "glossary_domain": task_domain,
+        }
+
     current = get_task_terms(task_id)
     summary = (
         request.summary if request.summary is not None else current.get("summary", "")
@@ -581,9 +649,22 @@ def update_task_terms(task_id: str, request: TermsUpdateRequest):
     ws.save_terms(summary, request.terms)
     loaded = ws.load_terms()
 
-    to_promote = [t for t in request.terms if t.get("promote_to_global")]
-    promoted = promote_terms_to_global(to_promote) if to_promote else 0
-    return {"saved": len(loaded["terms"]), "promoted_to_global": promoted}
+    to_promote = [
+        t
+        for t in request.terms
+        if t.get("promote_to_domain") or t.get("promote_to_global")
+    ]
+    promoted = (
+        promote_terms_to_domain(to_promote, domain=task_domain)
+        if (to_promote and task_domain)
+        else 0
+    )
+    return {
+        "saved": len(loaded["terms"]),
+        "promoted_to_domain": promoted,
+        "promoted_to_global": promoted,
+        "glossary_domain": task_domain,
+    }
 
 
 @app.get("/api/tasks/{task_id}/utterances")
@@ -796,14 +877,332 @@ def check_llm_api(request: LLMProbeRequest):
 
 
 @app.get("/api/glossary")
-def get_global_glossary():
+def get_global_glossary(domain: str | None = None):
+    if domain is not None:
+        d = domain.strip()
+        if not d:
+            return {"domain": "", "terms": [], "has_dict": False, "dict_count": 0}
+        try:
+            meta = get_glossary_domain_meta(d)
+            terms = load_domain_glossary(d)
+            return {
+                "domain": meta["name"],
+                "terms": terms,
+                "has_dict": meta["has_dict"],
+                "dict_count": meta["dict_count"],
+            }
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     return {"terms": load_global_glossary()}
 
 
 @app.put("/api/glossary")
-def put_global_glossary(request: TermsUpdateRequest):
-    save_global_glossary(request.terms)
-    return {"saved": len(request.terms)}
+def put_global_glossary(request: TermsUpdateRequest, domain: str | None = None):
+    terms_list = request.terms or []
+    target_domain = (
+        domain
+        if domain is not None
+        else (request.glossary_domain if request.glossary_domain is not None else None)
+    )
+    if target_domain is not None:
+        d = target_domain.strip()
+        if not d:
+            return {"saved": 0, "domain": ""}
+        try:
+            save_domain_glossary(d, terms_list)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"saved": len(terms_list), "domain": d}
+    save_global_glossary(terms_list)
+    return {"saved": len(terms_list)}
+
+
+@app.get("/api/glossary/domains")
+def api_list_glossary_domains():
+    domains = list_glossary_domains()
+    active = str(load_key_or("glossary_domain", DEFAULT_GLOSSARY_DOMAIN) or "").strip()
+    return {"domains": domains, "active_domain": active}
+
+
+@app.post("/api/glossary/domains", status_code=201)
+def api_create_glossary_domain(request: CreateDomainRequest):
+    raw_name = (request.domain or request.name or "").strip()
+    if not raw_name:
+        raise HTTPException(422, "Domain name is required")
+    try:
+        meta = create_glossary_domain(raw_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    update_key("glossary_domain", meta["name"], add_missing=True)
+    return {
+        "domain": meta["name"],
+        "meta": meta,
+        "domains": list_glossary_domains(),
+    }
+
+
+@app.delete("/api/glossary/domains/{domain}")
+def api_delete_glossary_domain(domain: str):
+    try:
+        safe = sanitize_domain_name(domain)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    deleted = delete_glossary_domain(safe)
+    if not deleted:
+        raise HTTPException(404, f"Glossary domain not found: {safe}")
+    active = str(load_key_or("glossary_domain", DEFAULT_GLOSSARY_DOMAIN) or "").strip()
+    if active == safe:
+        update_key("glossary_domain", "", add_missing=True)
+        active = ""
+    return {
+        "deleted": safe,
+        "active_domain": active,
+        "domains": list_glossary_domains(),
+    }
+
+
+@app.get("/api/glossary/domains/{domain}")
+def api_get_glossary_domain(domain: str):
+    try:
+        meta = get_glossary_domain_meta(domain)
+        terms = load_domain_glossary(meta["name"])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {**meta, "terms": terms}
+
+
+@app.put("/api/glossary/domains/{domain}")
+def api_put_glossary_domain(domain: str, request: TermsUpdateRequest):
+    try:
+        safe = sanitize_domain_name(domain)
+        save_domain_glossary(safe, request.terms or [])
+        meta = get_glossary_domain_meta(safe)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"saved": meta["terms_count"], "domain": meta["name"], "meta": meta}
+
+
+@app.delete("/api/glossary/domains/{domain}/dict")
+def api_delete_glossary_domain_dict(domain: str):
+    try:
+        dict_file = domain_dict_json_path(domain)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if dict_file.is_file():
+        dict_file.unlink()
+    meta = get_glossary_domain_meta(domain)
+    return {
+        "domain": meta["name"],
+        "meta": meta,
+        "terms": load_domain_glossary(meta["name"]),
+    }
+
+
+@app.post("/api/glossary/domains/{domain}/import")
+def api_import_glossary_domain_file(domain: str, file: UploadFile = File(...)):
+    import pandas as pd
+    from core._4_1_summarize import _extract_generic_kb_pairs, _normalize_aliases
+
+    try:
+        safe = sanitize_domain_name(domain)
+        create_glossary_domain(safe)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    raw_name = file.filename or "terms.csv"
+    ext = Path(raw_name).suffix.lower()
+    content = file.file.read()
+    if not content:
+        raise HTTPException(422, "Uploaded file is empty")
+
+    if ext == ".json":
+        try:
+            parsed = json.loads(content.decode("utf-8-sig"))
+        except Exception as exc:
+            raise HTTPException(422, f"Invalid JSON file: {exc}") from exc
+        extracted: dict[str, dict[str, Any]] = {}
+        _extract_generic_kb_pairs(parsed, extracted, source_tag="domain_dict")
+        if not extracted:
+            raise HTTPException(422, "No valid bilingual term pairs found in JSON")
+        dict_file = domain_dict_json_path(safe)
+        dict_file.parent.mkdir(parents=True, exist_ok=True)
+        dict_file.write_bytes(content)
+        meta = get_glossary_domain_meta(safe)
+        meta["dict_count"] = len(extracted)
+        return {
+            "imported_as": "dict.json",
+            "imported_kind": "dict",
+            "imported_count": len(extracted),
+            "dict_count": len(extracted),
+            "terms_count": meta["terms_count"],
+            "domain": meta["name"],
+            "meta": meta,
+            "terms": load_domain_glossary(safe),
+        }
+
+    def _read_csv_with_encoding_fallback(
+        raw_bytes: bytes, **kwargs: Any
+    ) -> pd.DataFrame:
+        for enc in ("utf-8-sig", "gb18030", "latin1"):
+            try:
+                return pd.read_csv(io.BytesIO(raw_bytes), encoding=enc, **kwargs)
+            except UnicodeDecodeError:
+                continue
+        return pd.read_csv(io.BytesIO(raw_bytes), encoding="utf-8-sig", **kwargs)
+
+    if ext in {".csv", ".xlsx", ".xls"}:
+        try:
+            if ext == ".csv":
+                df = _read_csv_with_encoding_fallback(content)
+            else:
+                df = pd.read_excel(io.BytesIO(content))
+        except Exception as exc:
+            raise HTTPException(422, f"Could not parse {ext} file: {exc}") from exc
+
+        cols_lower = {str(c).strip().lower(): c for c in df.columns}
+        has_header = any(
+            k in cols_lower
+            for k in ("src", "source", "original", "term", "en", "原文", "原词")
+        )
+        if not has_header:
+            if ext == ".csv":
+                df = _read_csv_with_encoding_fallback(
+                    content,
+                    header=None,
+                    names=["src", "tgt", "note", "aliases", "fix_source"],
+                )
+            else:
+                df = pd.read_excel(io.BytesIO(content), header=None)
+                col_names = ["src", "tgt", "note", "aliases", "fix_source"]
+                df.columns = [
+                    col_names[i] if i < len(col_names) else f"col_{i}"
+                    for i in range(len(df.columns))
+                ]
+            cols_lower = {str(c).strip().lower(): c for c in df.columns}
+
+        src_col = (
+            cols_lower.get("src")
+            or cols_lower.get("source")
+            or cols_lower.get("original")
+            or cols_lower.get("term")
+            or cols_lower.get("en")
+            or cols_lower.get("原文")
+            or cols_lower.get("原词")
+            or (df.columns[0] if len(df.columns) >= 1 else None)
+        )
+        tgt_col = (
+            cols_lower.get("tgt")
+            or cols_lower.get("target")
+            or cols_lower.get("translation")
+            or cols_lower.get("zh")
+            or cols_lower.get("zh-chs")
+            or cols_lower.get("译文")
+            or cols_lower.get("译名")
+            or (df.columns[1] if len(df.columns) >= 2 else None)
+        )
+        note_col = (
+            cols_lower.get("note")
+            or cols_lower.get("notes")
+            or cols_lower.get("备注")
+            or (df.columns[2] if len(df.columns) >= 3 and not has_header else None)
+        )
+        aliases_col = (
+            cols_lower.get("aliases")
+            or cols_lower.get("alias")
+            or cols_lower.get("别名")
+        )
+        fix_col = cols_lower.get("fix_source")
+
+        if src_col is None or tgt_col is None:
+            raise HTTPException(
+                422, "Table must contain at least source and target columns"
+            )
+
+        rows_to_merge: list[dict[str, Any]] = []
+        for _, row in df.iterrows():
+            s_val = row.get(src_col)
+            t_val = row.get(tgt_col)
+            if (
+                s_val is None
+                or t_val is None
+                or bool(pd.isna(s_val))
+                or bool(pd.isna(t_val))
+            ):
+                continue
+            s = str(s_val).strip()
+            t = str(t_val).strip()
+            if (
+                not s
+                or not t
+                or s.lower() in {"src", "source", "original", "term", "nan"}
+            ):
+                continue
+            n_val = row.get(note_col) if note_col is not None else ""
+            n = "" if (n_val is None or bool(pd.isna(n_val))) else str(n_val).strip()
+            al_val = row.get(aliases_col) if aliases_col is not None else ""
+            al_raw = (
+                "" if (al_val is None or bool(pd.isna(al_val))) else str(al_val).strip()
+            )
+            f_val = row.get(fix_col) if fix_col is not None else False
+            fix_bool = (
+                False
+                if (f_val is None or bool(pd.isna(f_val)))
+                else str(f_val).strip().lower() in {"1", "true", "yes"}
+            )
+            rows_to_merge.append(
+                {
+                    "src": s,
+                    "tgt": t,
+                    "aliases": _normalize_aliases(al_raw, s),
+                    "note": n,
+                    "fix_source": fix_bool,
+                }
+            )
+
+        if len(rows_to_merge) > 500:
+            has_rich_fields = any(
+                item.get("note") or item.get("aliases") or item.get("fix_source")
+                for item in rows_to_merge
+            )
+            dict_payload: Any = (
+                {"terms": rows_to_merge}
+                if has_rich_fields
+                else {item["src"]: item["tgt"] for item in rows_to_merge}
+            )
+            dict_file = domain_dict_json_path(safe)
+            dict_file.parent.mkdir(parents=True, exist_ok=True)
+            dict_file.write_text(
+                json.dumps(dict_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            meta = get_glossary_domain_meta(safe)
+            return {
+                "imported_as": "dict.json",
+                "imported_kind": "dict",
+                "imported_count": len(rows_to_merge),
+                "dict_count": len(rows_to_merge),
+                "terms_count": meta["terms_count"],
+                "domain": meta["name"],
+                "meta": meta,
+                "terms": load_domain_glossary(safe),
+            }
+
+        promoted = promote_terms_to_domain(rows_to_merge, domain=safe)
+        meta = get_glossary_domain_meta(safe)
+        return {
+            "imported_as": "terms.csv",
+            "imported_kind": "terms",
+            "imported_count": promoted,
+            "terms_count": meta["terms_count"],
+            "dict_count": meta["dict_count"],
+            "domain": meta["name"],
+            "meta": meta,
+            "terms": load_domain_glossary(safe),
+        }
+
+    raise HTTPException(
+        422, f"Unsupported glossary file format: {ext} (expected .csv, .xlsx, or .json)"
+    )
 
 
 @app.get("/api/config")
