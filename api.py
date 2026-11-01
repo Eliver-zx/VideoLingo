@@ -72,7 +72,15 @@ app = FastAPI(
 runner = TaskRunner()
 operation_lock = Lock()
 OUTPUT = Path("output")
-WEBUI_HTML_PATH = Path(__file__).resolve().parent / "core" / "webui" / "index.html"
+WEBUI_DIR = Path(__file__).resolve().parent / "core" / "webui"
+WEBUI_HTML_PATH = WEBUI_DIR / "index.html"
+WEBUI_STATIC_ASSETS = {
+    "base.css": "text/css; charset=utf-8",
+    "workbench.css": "text/css; charset=utf-8",
+    "views.css": "text/css; charset=utf-8",
+    "data.js": "application/javascript; charset=utf-8",
+    "app.js": "application/javascript; charset=utf-8",
+}
 
 _sse_subscribers: list[queue.Queue[dict[str, Any]]] = []
 _sse_lock = Lock()
@@ -982,6 +990,38 @@ def api_put_glossary_domain(domain: str, request: TermsUpdateRequest):
     return {"saved": meta["terms_count"], "domain": meta["name"], "meta": meta}
 
 
+@app.get("/api/glossary/domains/{domain}/dict")
+def api_search_glossary_domain_dict(domain: str, q: str = "", limit: int = 50):
+    try:
+        dict_file = domain_dict_json_path(domain)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if not dict_file.is_file():
+        return {"entries": None, "total": 0}
+    try:
+        parsed = json.loads(dict_file.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return {"entries": [], "total": 0}
+    pairs: list[dict[str, str]] = []
+    if isinstance(parsed, dict):
+        terms_list = parsed.get("terms")
+        if isinstance(terms_list, list):
+            for item in terms_list:
+                if isinstance(item, dict) and item.get("src") and item.get("tgt"):
+                    pairs.append({"k": str(item["src"]), "v": str(item["tgt"])})
+        else:
+            for k_val, v_val in parsed.items():
+                if isinstance(v_val, str):
+                    pairs.append({"k": str(k_val), "v": v_val})
+    query = q.strip().lower()
+    matched = [
+        p
+        for p in pairs
+        if not query or query in p["k"].lower() or query in p["v"].lower()
+    ]
+    return {"entries": matched[: max(1, min(limit, 200))], "total": len(matched)}
+
+
 @app.delete("/api/glossary/domains/{domain}/dict")
 def api_delete_glossary_domain_dict(domain: str):
     try:
@@ -1386,6 +1426,25 @@ def archive():
             raise HTTPException(409, "No output to archive")
         runner.start([("Archive output", archive_output)])
         return {"accepted": True}
+
+
+@app.post("/api/tasks/{task_id}/open-dir")
+def open_task_dir(task_id: str):
+    ws = _resolve_workspace(task_id)
+    return {"task_id": ws.task_id, "path": str(ws.root.resolve())}
+
+
+@app.get("/{asset_name}")
+def webui_static_asset(asset_name: str):
+    media_type = WEBUI_STATIC_ASSETS.get(asset_name)
+    if media_type is None:
+        raise HTTPException(404, "Not found")
+    asset_path = WEBUI_DIR / asset_name
+    if not asset_path.is_file():
+        raise HTTPException(404, f"Web UI asset not found: {asset_name}")
+    return Response(
+        content=asset_path.read_text(encoding="utf-8"), media_type=media_type
+    )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,108 @@
+  <!-- =========================================================
+       VIEW 2: 领域词表中心 (Edge-to-Edge Split Studio Shell)
+       ========================================================= -->
+  <section id="view-glossary" class="glossary-shell hidden">
+
+    <!-- 左栏：领域目录列表与新建/删除 -->
+    <aside class="task-rail" aria-label="领域词表">
+      <div class="rail-header">
+        <span class="rail-title">领域词表</span>
+      </div>
+
+      <div class="rail-list" id="domain-list-box">
+        <div class="domain-item active" data-domain="destiny2">
+          <div style="min-inline-size:0;">
+            <strong class="mono" style="font-size:var(--fs-sm); display:block;">destiny2</strong>
+            <div class="field-hint" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">8 条术语 · 4.2万词典</div>
+          </div>
+          <span class="status-pill completed">默认</span>
+        </div>
+        <div class="domain-item" data-domain="ai_ml">
+          <div style="min-inline-size:0;">
+            <strong class="mono" style="font-size:var(--fs-sm); display:block;">ai_ml</strong>
+            <div class="field-hint" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">8 条术语</div>
+          </div>
+          <span class="status-pill">可用</span>
+        </div>
+      </div>
+
+      <div style="padding:12px 4px 8px; display:flex; flex-direction:column; gap:12px;">
+        <label class="field">
+          <span class="field-label"><span>新建领域</span></span>
+          <input id="new-domain-input" type="text" class="mono" placeholder="例如：poe2 或 unreal5">
+        </label>
+        <div class="row" style="justify-content:space-between;">
+          <button type="button" class="primary xs" id="btn-create-domain">+ 新建</button>
+          <button type="button" class="danger xs" id="btn-delete-domain">删除</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 右栏上下分栏：上 terms.csv 自定义表 + 下 dict.json 权威大词典检索 -->
+    <div class="glossary-main">
+
+      <!-- 上半屏：自定义术语表 terms.csv -->
+      <section class="glossary-pane">
+        <div class="subpane-bar">
+          <div class="row">
+            <strong id="glossary-active-title" style="font-size:var(--fs-sm); font-weight:600;">destiny2 · 自定义术语</strong>
+            <span class="field-key">terms.csv</span>
+          </div>
+          <div class="row">
+            <input id="glossary-csv-search" type="text" placeholder="搜索术语…" style="inline-size:200px;">
+            <button type="button" class="xs" id="btn-import-glossary">导入</button>
+            <button type="button" class="xs" id="btn-add-domain-term">+ 新增</button>
+            <button type="button" class="primary xs" id="btn-save-domain-csv">保存</button>
+          </div>
+        </div>
+
+        <div class="table-scroll">
+          <table class="data-grid">
+            <thead>
+              <tr>
+                <th style="width:16%;">原文</th>
+                <th style="width:15%;">译名</th>
+                <th style="width:32%;">术语别名</th>
+                <th style="width:27%;">备注</th>
+                <th style="width:10%;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="domain-csv-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 下半屏：权威大词典 dict.json 实时检索与一键转入 -->
+      <section class="glossary-pane" style="border-block-end:none;">
+        <div class="subpane-bar">
+          <div class="row">
+            <strong style="font-size:var(--fs-sm); font-weight:600;">内置词典</strong>
+            <span class="field-key">dict.json</span>
+            <span class="status-pill completed" id="dict-count-pill">
+              <span class="status-dot"></span>
+              <span>42,810 词</span>
+            </span>
+          </div>
+          <div class="row">
+            <input id="dict-search-input" type="text" value="Attrition" placeholder="搜索词典…" style="inline-size:240px;">
+            <button type="button" class="xs" id="btn-import-dict">导入词典</button>
+          </div>
+        </div>
+
+        <div class="table-scroll">
+          <table class="data-grid">
+            <thead>
+              <tr>
+                <th style="width:32%;">原文</th>
+                <th style="width:42%;">译名</th>
+                <th style="width:26%;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="dict-search-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+    </div>
+  </section>
+
