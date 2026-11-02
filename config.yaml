@@ -68,8 +68,8 @@ whisper:
 burn_subtitles: true
 
 ## ======================== Advanced Settings ======================== ##
-# *🔬 h264_nvenc GPU acceleration for ffmpeg, make sure your GPU supports it
-ffmpeg_gpu: false
+# *🔬 h264_nvenc / VideoToolbox GPU acceleration for ffmpeg
+ffmpeg_gpu: true
 
 # *Youtube settings
 youtube:
@@ -91,18 +91,18 @@ subtitle:
   style:
     source:
       font_name: ''
-      font_size: 15
+      font_size: 14
       font_color: '&HFFFFFF'
       outline_color: '&H000000'
-      outline_width: 1
+      outline_width: 1.5
     translation:
       font_name: ''
-      font_size: 17
-      font_color: '&H00FFFF'
+      font_size: 18
+      font_color: '&H00D7FF'
       outline_color: '&H000000'
-      outline_width: 1
-      back_color: '&H33000000'
-      margin_v: 27
+      outline_width: 2.0
+      back_color: '&HFF000000'
+      margin_v: 28
 
 # *Whether to reflect the translation result in the original text
 reflect_translate: false
@@ -176,19 +176,19 @@ f5tts:
 
 # *Audio speed range
 speed_factor:
-  min: 1
-  accept: 1.2 # Maximum acceptable speed
-  max: 1.4
+  min: 1.0
+  accept: 1.15 # Maximum acceptable speed
+  max: 1.28
 
 # *Merge audio configuration
-min_subtitle_duration: 2.5 # Minimum subtitle duration, will be forcibly extended
-tolerance: 1.5 # Allowed extension time to the next subtitle
+min_subtitle_duration: 1.8 # Minimum subtitle duration, will be forcibly extended
+tolerance: 1.2 # Allowed extension time to the next subtitle
 
 # *Raw audio extraction quality (raw.mp3). Demucs vocals and voice-clone reference clips inherit this bandwidth;
-# *16000 caps them near 7 kHz. v2.2.1 used 32000 / 128k. Existing output/audio/raw.mp3 is not re-extracted.
+# *16000 caps them near 7 kHz. Existing output/audio/raw.mp3 is not re-extracted.
 audio:
-  raw_sample_rate: 32000
-  raw_bitrate: '128k'
+  raw_sample_rate: 44100
+  raw_bitrate: '192k'
 
 
 

@@ -31,15 +31,21 @@ def provider_label(name):
     if name not in TRANSLATED_PROVIDERS:
         return name
     from translations.translations import translate as t
+
     return t(name)
 
 
 def configured_keys(provider, method, load_key):
     """Prefer the selected method; reuse a sole existing key without writing it."""
     paths = KEY_PATHS[provider]
-    values = {path: str(load_key(path) or "") for path in paths}  # YAML reads a digits-only key as int
-    usable = {path: value for path, value in values.items()
-              if value and not value.startswith("YOUR_")}
+    values = {
+        path: str(load_key(path) or "") for path in paths
+    }  # YAML reads a digits-only key as int
+    usable = {
+        path: value
+        for path, value in values.items()
+        if value and not value.startswith("YOUR_")
+    }
     current = paths[PROVIDERS[provider].index(method)]
     conflict = len(set(usable.values())) > 1
     value = usable.get(current, "" if conflict else next(iter(usable.values()), ""))
@@ -50,16 +56,7 @@ def save_settings(values):
     """Write `section.key` values; a section that an older config.yaml does not have is created."""
     from core.utils import config_utils
 
-    with config_utils.lock:
-        with open(config_utils.CONFIG_PATH, encoding="utf-8") as file:
-            data = config_utils.yaml.load(file)
-        for path, value in values.items():
-            section, key = path.split(".")
-            if not isinstance(data.get(section), dict):
-                data[section] = {}
-            data[section][key] = value
-        with open(config_utils.CONFIG_PATH, "w", encoding="utf-8") as file:
-            config_utils.yaml.dump(data, file)
+    config_utils.update_keys(values, add_missing=True)
 
 
 def save_provider_key(provider, value):
@@ -73,33 +70,58 @@ def select_tts_method(labels):
     from core.utils.config_utils import load_key, load_key_or, update_key
 
     current = load_key("tts_method")
-    provider = next((name for name, methods in PROVIDERS.items() if current in methods), None)
-    chosen = st.selectbox(t("TTS Provider"), list(PROVIDERS),
-                          index=list(PROVIDERS).index(provider) if provider else None,
-                          format_func=provider_label)
+    provider = next(
+        (name for name, methods in PROVIDERS.items() if current in methods), None
+    )
+    chosen = st.selectbox(
+        t("TTS Provider"),
+        list(PROVIDERS),
+        index=list(PROVIDERS).index(provider) if provider else None,
+        format_func=provider_label,
+    )
     if chosen is None:
-        st.warning(t("The dubbing method of your configuration is not available any more. Select another one."))
+        st.warning(
+            t(
+                "The dubbing method of your configuration is not available any more. Select another one."
+            )
+        )
         return None
     methods = PROVIDERS[chosen]
     if len(methods) == 1:  # nothing to choose: no box
         selected = methods[0]
     else:
         # After a provider switch the old method is not in the list: take the provider's first one
-        selected = st.selectbox(t("TTS Method"), methods,
-                                index=methods.index(current) if current in methods else 0,
-                                format_func=lambda method: labels[method])
+        selected = st.selectbox(
+            t("TTS Method"),
+            methods,
+            index=methods.index(current) if current in methods else 0,
+            format_func=lambda method: labels[method],
+        )
     if selected is None:
         return None
     if selected != current:
         update_key("tts_method", selected)
         st.rerun()
     if chosen in KEY_PATHS:
-        load_optional = lambda path: load_key_or(path, "")  # a provider that is newer than the config.yaml
+
+        def load_optional(path):
+            return load_key_or(
+                path, ""
+            )  # a provider that is newer than the config.yaml
+
         value, conflict = configured_keys(chosen, selected, load_optional)
         if conflict:
-            st.warning(t("Existing methods use different keys. Editing this field replaces all keys for this provider."))
-        entered = st.text_input(t("Provider API Key"), value=value, type="password",
-                                help=t("Shared by all TTS methods under this provider."))
+            st.warning(
+                t(
+                    "Existing methods use different keys. Editing this field replaces all keys for this provider."
+                )
+            )
+        entered = st.text_input(
+            t("Provider API Key"),
+            value=value,
+            type="password",
+            help=t("Shared by all TTS methods under this provider."),
+        )
         if entered != value:
             save_provider_key(chosen, entered)
             st.rerun()

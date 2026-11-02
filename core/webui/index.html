@@ -847,7 +847,7 @@
                     <strong>GPU 硬件加速</strong>
                     <div class="field-hint">使用显卡加速压制</div>
                   </span>
-                  <input type="checkbox" class="switch" role="switch" data-cfg="ffmpeg_gpu">
+                  <input type="checkbox" class="switch" role="switch" checked data-cfg="ffmpeg_gpu">
                 </label>
                 <label class="field">
                   <span class="field-label"><span>单行字数上限</span><span class="field-key">max_length</span></span>
@@ -887,13 +887,13 @@
                   </label>
                   <label class="field">
                     <span class="field-label"><span>字号</span><span class="field-key">font_size</span></span>
-                    <input type="number" class="mono" id="ass-tr-size" value="17" data-cfg="subtitle.style.translation.font_size">
+                    <input type="number" class="mono" id="ass-tr-size" value="18" data-cfg="subtitle.style.translation.font_size">
                   </label>
                   <label class="field">
                     <span class="field-label"><span>字体颜色</span><span class="field-key">font_color</span></span>
                     <div class="color-field">
-                      <input type="color" id="ass-tr-color-picker" class="color-swatch" value="#ffff00">
-                      <input type="text" id="ass-tr-color" class="mono" value="#FFFF00" data-cfg="subtitle.style.translation.font_color">
+                      <input type="color" id="ass-tr-color-picker" class="color-swatch" value="#ffd700">
+                      <input type="text" id="ass-tr-color" class="mono" value="&H00D7FF" data-cfg="subtitle.style.translation.font_color">
                     </div>
                   </label>
                   <label class="field">
@@ -904,15 +904,15 @@
                 <div class="grid-3" style="margin-block-start:12px;">
                   <label class="field">
                     <span class="field-label"><span>描边宽度</span><span class="field-key">outline_width</span></span>
-                    <input type="number" class="mono" step="0.5" id="ass-tr-outline-w" value="1" data-cfg="subtitle.style.translation.outline_width">
+                    <input type="number" class="mono" step="0.5" id="ass-tr-outline-w" value="2.0" data-cfg="subtitle.style.translation.outline_width">
                   </label>
                   <label class="field">
                     <span class="field-label"><span>背景色</span><span class="field-key">back_color</span></span>
-                    <input type="text" class="mono" value="&H33000000" data-cfg="subtitle.style.translation.back_color">
+                    <input type="text" class="mono" value="&HFF000000" data-cfg="subtitle.style.translation.back_color">
                   </label>
                   <label class="field">
                     <span class="field-label"><span>底部边距</span><span class="field-key">margin_v</span></span>
-                    <input type="number" class="mono" id="ass-tr-margin" value="27" data-cfg="subtitle.style.translation.margin_v">
+                    <input type="number" class="mono" id="ass-tr-margin" value="28" data-cfg="subtitle.style.translation.margin_v">
                   </label>
                 </div>
               </div>
@@ -926,7 +926,7 @@
                   </label>
                   <label class="field">
                     <span class="field-label"><span>字号</span><span class="field-key">font_size</span></span>
-                    <input type="number" class="mono" id="ass-src-size" value="15" data-cfg="subtitle.style.source.font_size">
+                    <input type="number" class="mono" id="ass-src-size" value="14" data-cfg="subtitle.style.source.font_size">
                   </label>
                   <label class="field">
                     <span class="field-label"><span>字体颜色</span><span class="field-key">font_color</span></span>
@@ -992,17 +992,17 @@
               <span class="field-label"><span>语速范围（最小 / 常规 / 最大）</span><span class="field-key">speed_factor</span></span>
               <div class="row" style="flex-wrap:nowrap;">
                 <input type="number" class="mono" step="0.05" value="1.0" title="最小语速" data-cfg="speed_factor.min">
-                <input type="number" class="mono" step="0.05" value="1.2" title="常规加速上限" data-cfg="speed_factor.accept">
-                <input type="number" class="mono" step="0.05" value="1.4" title="最大加速上限" data-cfg="speed_factor.max">
+                <input type="number" class="mono" step="0.05" value="1.15" title="常规加速上限" data-cfg="speed_factor.accept">
+                <input type="number" class="mono" step="0.05" value="1.28" title="最大加速上限" data-cfg="speed_factor.max">
               </div>
             </label>
             <label class="field">
               <span class="field-label"><span>最短片段时长 (s)</span><span class="field-key">min_subtitle_duration</span></span>
-              <input type="number" class="mono" step="0.1" value="2.5" data-cfg="min_subtitle_duration">
+              <input type="number" class="mono" step="0.1" value="1.8" data-cfg="min_subtitle_duration">
             </label>
             <label class="field">
               <span class="field-label"><span>对齐容差 (s)</span><span class="field-key">tolerance</span></span>
-              <input type="number" class="mono" step="0.1" value="1.5" data-cfg="tolerance">
+              <input type="number" class="mono" step="0.1" value="1.2" data-cfg="tolerance">
             </label>
           </div>
 
@@ -1131,16 +1131,16 @@
             <label class="field">
               <span class="field-label"><span>音频采样率</span><span class="field-key">audio.raw_sample_rate</span></span>
               <select data-cfg="audio.raw_sample_rate">
-                <option value="32000" selected>32000 Hz（推荐）</option>
-                <option value="44100">44100 Hz</option>
+                <option value="44100" selected>44100 Hz（推荐）</option>
+                <option value="32000">32000 Hz</option>
                 <option value="16000">16000 Hz</option>
               </select>
             </label>
             <label class="field">
               <span class="field-label"><span>音频码率</span><span class="field-key">audio.raw_bitrate</span></span>
               <select data-cfg="audio.raw_bitrate">
-                <option value="128k" selected>128k</option>
-                <option value="192k">192k</option>
+                <option value="192k" selected>192k</option>
+                <option value="128k">128k</option>
                 <option value="96k">96k</option>
               </select>
             </label>

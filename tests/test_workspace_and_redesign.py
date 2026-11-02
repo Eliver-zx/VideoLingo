@@ -1797,3 +1797,80 @@ def test_destiny2_authoritative_dict_homonym_priority_and_noise_purging():
     assert "No Ammo? No Problem" not in scanned_map, (
         "Phrase 'No Ammo? No Problem' must not be matched"
     )
+
+
+def test_config_stat_cache_zero_latency_sync_and_bidirectional_overrides(
+    tmp_path: Path, monkeypatch
+):
+    """load_key caches parsed YAML via (path, st_mtime_ns, st_size), syncs immediately on update_key or external file edits, and normalizes task_config_context overrides."""
+    root_cfg = Path(__file__).resolve().parents[1] / "config.yaml"
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(root_cfg.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setattr(config_utils, "CONFIG_PATH", str(cfg_file))
+
+    initial_lang = config_utils.load_key("target_language")
+    assert isinstance(initial_lang, str) and initial_lang
+
+    # Defensive copy: mutating returned dict does not pollute cache
+    whisper_cfg = config_utils.load_key("whisper")
+    orig_model = whisper_cfg["model"]
+    whisper_cfg["model"] = "mutated-in-place"
+    assert config_utils.load_key("whisper")["model"] == orig_model
+
+    # Zero-latency sync on update_key / update_keys
+    config_utils.update_key("target_language", "Français")
+    assert config_utils.load_key("target_language") == "Français"
+    config_utils.update_keys({"subtitle.max_length": 42, "burn_subtitles": False})
+    assert config_utils.load_key("subtitle.max_length") == 42
+    assert config_utils.load_key("subtitle")["max_length"] == 42
+    assert config_utils.load_key("burn_subtitles") is False
+
+    # Zero-latency invalidation when user edits config.yaml externally
+    raw_text = cfg_file.read_text(encoding="utf-8").replace(
+        "max_length: 42", "max_length: 68"
+    )
+    cfg_file.write_text(raw_text, encoding="utf-8")
+    assert config_utils.load_key("subtitle.max_length") == 68
+    assert config_utils.load_key("subtitle")["max_length"] == 68
+
+    # Bidirectional overrides in task_config_context (nested dict vs dot-key)
+    with config_utils.task_config_context(
+        {"subtitle": {"max_length": 24, "target_multiplier": 1.05}}
+    ):
+        assert config_utils.load_key("subtitle.max_length") == 24
+        assert config_utils.load_key("subtitle.target_multiplier") == 1.05
+        sub_section = config_utils.load_key("subtitle")
+        assert sub_section["max_length"] == 24
+        assert "style" in sub_section  # sibling keys from config.yaml preserved
+
+        # Updating a key while inside task_config_context updates active override too
+        config_utils.update_key("subtitle.max_length", 30)
+        assert config_utils.load_key("subtitle.max_length") == 30
+        assert config_utils.load_key("subtitle")["max_length"] == 30
+
+    # Opaque dict keys (fish_audio.voices) preserve dots in user-defined labels and replace cleanly
+    with config_utils.task_config_context(
+        {"fish_audio": {"voices": {"Dr. Smith (en)": "voice-123"}}}
+    ):
+        assert config_utils.load_key("fish_audio.voices") == {
+            "Dr. Smith (en)": "voice-123"
+        }
+        assert config_utils.load_key("fish_audio")["voices"] == {
+            "Dr. Smith (en)": "voice-123"
+        }
+        config_utils.update_key("fish_audio.voices", {"Mr. Jones (uk)": "voice-456"})
+        assert config_utils.load_key("fish_audio.voices") == {
+            "Mr. Jones (uk)": "voice-456"
+        }
+        assert config_utils.load_key("fish_audio")["voices"] == {
+            "Mr. Jones (uk)": "voice-456"
+        }
+
+    # Nested task_config_context isolation and empty-dict replacement
+    with config_utils.task_config_context({"subtitle.max_length": 50}):
+        with config_utils.task_config_context({"subtitle": {}}):
+            assert config_utils.load_key("subtitle") == {}
+            config_utils.update_key("subtitle.max_length", 36)
+            assert config_utils.load_key("subtitle.max_length") == 36
+        # Exiting inner context restores outer override without pollution
+        assert config_utils.load_key("subtitle.max_length") == 50

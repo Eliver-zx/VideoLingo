@@ -1749,11 +1749,12 @@
     });
 
     document.getElementById('btn-reset-ass-style')?.addEventListener('click', () => {
-      document.getElementById('ass-tr-size').value = '17';
-      document.getElementById('ass-tr-color').value = '#FFFF00';
-      document.getElementById('ass-tr-color-picker').value = '#ffff00';
-      document.getElementById('ass-tr-margin').value = '27';
-      document.getElementById('ass-src-size').value = '15';
+      document.getElementById('ass-tr-size').value = '18';
+      document.getElementById('ass-tr-color').value = '&H00D7FF';
+      document.getElementById('ass-tr-color-picker').value = '#ffd700';
+      document.getElementById('ass-tr-outline-w').value = '2.0';
+      document.getElementById('ass-tr-margin').value = '28';
+      document.getElementById('ass-src-size').value = '14';
       document.getElementById('ass-src-color').value = '#FFFFFF';
       document.getElementById('ass-src-color-picker').value = '#ffffff';
       updateAssPreview();
@@ -1793,19 +1794,19 @@
         'whisper.qwen_model': '1.7b',
         'whisper.qwen_engine': 'auto',
         burn_subtitles: true,
-        ffmpeg_gpu: false,
+        ffmpeg_gpu: true,
         'subtitle.max_length': 75,
         'subtitle.target_multiplier': 1.3,
         'subtitle.sub_video_subtitles': 'bilingual',
         'subtitle.dub_video_subtitles': 'translation',
         'speed_factor.min': 1.0,
-        'speed_factor.accept': 1.2,
-        'speed_factor.max': 1.4,
-        min_subtitle_duration: 2.5,
-        tolerance: 1.5,
+        'speed_factor.accept': 1.15,
+        'speed_factor.max': 1.28,
+        min_subtitle_duration: 1.8,
+        tolerance: 1.2,
         ytb_resolution: '1080',
-        'audio.raw_sample_rate': 32000,
-        'audio.raw_bitrate': '128k',
+        'audio.raw_sample_rate': 44100,
+        'audio.raw_bitrate': '192k',
       };
       Object.entries(defaults).forEach(([k, v]) => {
         const el = document.querySelector(`[data-cfg="${k}"]`);

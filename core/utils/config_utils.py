@@ -22,6 +22,16 @@ _TASK_CONFIG_OVERRIDES: contextvars.ContextVar[dict[str, Any] | None] = (
 _PROCESS_CONFIG_OVERRIDES: dict[str, Any] | None = None
 _OVERRIDES_LOCK = threading.Lock()
 
+# In-memory cache of plain Python dicts keyed by (resolved_path, st_ino, st_mtime_ns, st_size).
+# Eliminates repeated disk reads & ruamel.yaml parsing while staying 0-latency coherent
+# whenever config.yaml is edited externally or updated via update_key / update_keys.
+_CACHED_CONFIG_STAT: tuple[str, int, int, int] | None = None
+_CACHED_CONFIG_DATA: dict[str, Any] | None = None
+
+# Free-form mapping keys whose children are arbitrary user labels (may contain dots)
+# rather than nested config sections.
+_OPAQUE_DICT_KEYS = frozenset({"fish_audio.voices"})
+
 PLACEHOLDER_KEY_PREFIXES = ("your_", "YOUR_")
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -58,7 +68,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "replicate_api_key": "",
     },
     "burn_subtitles": True,
-    "ffmpeg_gpu": False,
+    "ffmpeg_gpu": True,
     "youtube": {
         "cookies_path": "",
         "proxy": None,
@@ -72,19 +82,19 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "style": {
             "source": {
                 "font_name": "",
-                "font_size": 15,
+                "font_size": 14,
                 "font_color": "&HFFFFFF",
                 "outline_color": "&H000000",
-                "outline_width": 1,
+                "outline_width": 1.5,
             },
             "translation": {
                 "font_name": "",
-                "font_size": 17,
-                "font_color": "&H00FFFF",
+                "font_size": 18,
+                "font_color": "&H00D7FF",
                 "outline_color": "&H000000",
-                "outline_width": 1,
-                "back_color": "&H33000000",
-                "margin_v": 27,
+                "outline_width": 2.0,
+                "back_color": "&HFF000000",
+                "margin_v": 28,
             },
         },
     },
@@ -132,14 +142,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "speed_factor": {
         "min": 1.0,
-        "accept": 1.2,
-        "max": 1.4,
+        "accept": 1.15,
+        "max": 1.28,
     },
-    "min_subtitle_duration": 2.5,
-    "tolerance": 1.5,
+    "min_subtitle_duration": 1.8,
+    "tolerance": 1.2,
     "audio": {
-        "raw_sample_rate": 32000,
-        "raw_bitrate": "128k",
+        "raw_sample_rate": 44100,
+        "raw_bitrate": "192k",
     },
     "model_dir": "./_model_cache",
     "allowed_video_formats": ["mp4", "mov", "avi", "mkv", "flv", "wmv", "webm"],
@@ -158,6 +168,84 @@ def is_placeholder_key(val: Any) -> bool:
     return stripped.startswith(PLACEHOLDER_KEY_PREFIXES)
 
 
+def _to_plain_data(obj: Any) -> Any:
+    """Recursively convert ruamel.yaml CommentedMap/CommentedSeq into plain Python dicts and lists."""
+    if isinstance(obj, dict):
+        return {str(k): _to_plain_data(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_to_plain_data(x) for x in obj]
+    return obj
+
+
+def _is_section_dict(path: str, val: Any) -> bool:
+    """Return True only if `path` corresponds to a nested configuration section in DEFAULT_CONFIG."""
+    if not isinstance(val, dict) or not val or path in _OPAQUE_DICT_KEYS:
+        return False
+    cur: Any = DEFAULT_CONFIG
+    for part in path.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return True
+    return isinstance(cur, dict)
+
+
+def _flatten_overrides(
+    mapping: dict[str, Any], prefix: str = "", out: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Normalize nested section dicts into dot-separated leaf keys while preserving opaque dicts."""
+    if out is None:
+        out = {}
+    for k, v in mapping.items():
+        full_key = f"{prefix}.{k}" if prefix else str(k)
+        if _is_section_dict(full_key, v):
+            _flatten_overrides(v, full_key, out)
+        else:
+            out[full_key] = copy.deepcopy(v)
+    return out
+
+
+def _apply_override_entries(
+    base: dict[str, Any], incoming: dict[str, Any]
+) -> dict[str, Any]:
+    """Return a new override dict with `incoming` applied, clearing stale child/parent keys."""
+    result = dict(base)
+    for raw_key, raw_val in incoming.items():
+        flat = (
+            _flatten_overrides({raw_key: raw_val})
+            if _is_section_dict(raw_key, raw_val)
+            else {raw_key: copy.deepcopy(raw_val)}
+        )
+        prefix = f"{raw_key}."
+        for existing_k in [k for k in result if k == raw_key or k.startswith(prefix)]:
+            del result[existing_k]
+        for fk in flat:
+            parts = fk.split(".")
+            for i in range(1, len(parts)):
+                ancestor = ".".join(parts[:i])
+                if ancestor in result and isinstance(result[ancestor], dict):
+                    if ancestor in _OPAQUE_DICT_KEYS and i == len(parts) - 1:
+                        updated_map = copy.deepcopy(result[ancestor])
+                        updated_map[parts[-1]] = copy.deepcopy(flat[fk])
+                        result[ancestor] = updated_map
+                        flat = {}
+                        break
+                    if result[ancestor] == {}:
+                        del result[ancestor]
+                elif ancestor in result:
+                    del result[ancestor]
+        result.update(flat)
+    return result
+
+
+def _get_active_overrides() -> dict[str, Any] | None:
+    overrides = _TASK_CONFIG_OVERRIDES.get()
+    with _OVERRIDES_LOCK:
+        if overrides is None:
+            overrides = _PROCESS_CONFIG_OVERRIDES
+        return dict(overrides) if overrides is not None else None
+
+
 @contextlib.contextmanager
 def task_config_context(overrides: dict[str, Any] | None):
     """Apply task-scoped configuration overrides without mutating global `config.yaml` (propagates to worker threads)."""
@@ -165,8 +253,12 @@ def task_config_context(overrides: dict[str, Any] | None):
     current = _TASK_CONFIG_OVERRIDES.get()
     if current is None:
         with _OVERRIDES_LOCK:
-            current = _PROCESS_CONFIG_OVERRIDES or {}
-    merged = {**current, **(overrides or {})}
+            current = (
+                dict(_PROCESS_CONFIG_OVERRIDES) if _PROCESS_CONFIG_OVERRIDES else {}
+            )
+    else:
+        current = dict(current)
+    merged = _apply_override_entries(current, overrides) if overrides else current
     token = _TASK_CONFIG_OVERRIDES.set(merged)
     with _OVERRIDES_LOCK:
         prev_proc = _PROCESS_CONFIG_OVERRIDES
@@ -177,6 +269,44 @@ def task_config_context(overrides: dict[str, Any] | None):
         with _OVERRIDES_LOCK:
             _PROCESS_CONFIG_OVERRIDES = prev_proc
         _TASK_CONFIG_OVERRIDES.reset(token)
+
+
+def _refresh_cache_for_path(target: Path, plain_data: dict[str, Any]) -> None:
+    """Update the in-memory plain dict cache immediately after an atomic write."""
+    global _CACHED_CONFIG_STAT, _CACHED_CONFIG_DATA
+    try:
+        st = target.stat()
+        _CACHED_CONFIG_STAT = (
+            str(target.resolve()),
+            st.st_ino,
+            st.st_mtime_ns,
+            st.st_size,
+        )
+        _CACHED_CONFIG_DATA = plain_data
+    except OSError:
+        _CACHED_CONFIG_STAT = None
+        _CACHED_CONFIG_DATA = None
+
+
+def _load_cached_config_dict(config_path: str | Path = CONFIG_PATH) -> dict[str, Any]:
+    """Return plain config dict from memory if `(resolved_path, ino, mtime_ns, size)` matches disk; otherwise reload."""
+    global _CACHED_CONFIG_STAT, _CACHED_CONFIG_DATA
+    target = Path(config_path)
+    with lock:
+        resolved = str(target.resolve())
+        st = target.stat()
+        stat_key = (resolved, st.st_ino, st.st_mtime_ns, st.st_size)
+        if _CACHED_CONFIG_STAT == stat_key and _CACHED_CONFIG_DATA is not None:
+            return _CACHED_CONFIG_DATA
+
+        with open(target, "r", encoding="utf-8") as file:
+            raw = yaml.load(file)
+        if not isinstance(raw, dict):
+            raise KeyError(f"Configuration file {config_path!r} is empty or invalid")
+        plain = _to_plain_data(raw)
+        _CACHED_CONFIG_STAT = stat_key
+        _CACHED_CONFIG_DATA = plain
+        return plain
 
 
 def _atomic_dump_yaml(data: Any, config_path: str | Path) -> None:
@@ -191,6 +321,8 @@ def _atomic_dump_yaml(data: Any, config_path: str | Path) -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, target)
+        if isinstance(data, dict):
+            _refresh_cache_for_path(target, _to_plain_data(data))
     finally:
         if tmp_path.exists():
             with contextlib.suppress(OSError):
@@ -203,13 +335,21 @@ def _atomic_dump_yaml(data: Any, config_path: str | Path) -> None:
 
 
 def load_key(key: str) -> Any:
-    overrides = _TASK_CONFIG_OVERRIDES.get()
-    if overrides is None:
-        with _OVERRIDES_LOCK:
-            overrides = _PROCESS_CONFIG_OVERRIDES
+    overrides = _get_active_overrides()
     if overrides:
         if key in overrides:
             return copy.deepcopy(overrides[key])
+        parts_for_ancestor = key.split(".")
+        for i in range(1, len(parts_for_ancestor)):
+            anc = ".".join(parts_for_ancestor[:i])
+            if anc in overrides and isinstance(overrides[anc], dict):
+                sub_val: Any = overrides[anc]
+                for rem in parts_for_ancestor[i:]:
+                    if isinstance(sub_val, dict) and rem in sub_val:
+                        sub_val = sub_val[rem]
+                    else:
+                        raise KeyError(f"Key '{rem}' not found in configuration")
+                return copy.deepcopy(sub_val)
         prefix = f"{key}."
         sub_overrides = {
             k[len(prefix) :]: v for k, v in overrides.items() if k.startswith(prefix)
@@ -217,12 +357,7 @@ def load_key(key: str) -> Any:
     else:
         sub_overrides = {}
 
-    with lock:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as file:
-            data = yaml.load(file)
-
-    if not isinstance(data, dict):
-        raise KeyError(f"Configuration file {CONFIG_PATH!r} is empty or invalid")
+    data = _load_cached_config_dict(CONFIG_PATH)
 
     keys = key.split(".")
     value: Any = data
@@ -233,7 +368,7 @@ def load_key(key: str) -> Any:
             raise KeyError(f"Key '{k}' not found in configuration")
 
     if sub_overrides and isinstance(value, dict):
-        merged = copy.deepcopy(dict(value))
+        merged = copy.deepcopy(value)
         for sub_k, sub_v in sub_overrides.items():
             parts = sub_k.split(".")
             cur = merged
@@ -241,8 +376,11 @@ def load_key(key: str) -> Any:
                 if not isinstance(cur.get(p), dict):
                     cur[p] = {}
                 cur = cur[p]
-            cur[parts[-1]] = sub_v
+            cur[parts[-1]] = copy.deepcopy(sub_v)
         return merged
+
+    if isinstance(value, (dict, list)):
+        return copy.deepcopy(value)
     return value
 
 
@@ -252,6 +390,25 @@ def load_key_or(key, default=None):
         return load_key(key)
     except KeyError:
         return default
+
+
+def _sync_active_override_on_update(key: str, new_value: Any) -> None:
+    """Keep active task override dictionary consistent when a key is updated in-flight."""
+    global _PROCESS_CONFIG_OVERRIDES
+    incoming: dict[str, Any] = {key: new_value}
+    if key == "whisper.language" and new_value != "auto":
+        incoming["whisper.detected_language"] = new_value
+    with _OVERRIDES_LOCK:
+        ctx_target = _TASK_CONFIG_OVERRIDES.get()
+        proc_target = _PROCESS_CONFIG_OVERRIDES
+        base = ctx_target if ctx_target is not None else proc_target
+        if base is None:
+            return
+        updated = _apply_override_entries(base, incoming)
+        if ctx_target is not None:
+            _TASK_CONFIG_OVERRIDES.set(updated)
+        if proc_target is not None:
+            _PROCESS_CONFIG_OVERRIDES = updated
 
 
 def update_key(key: str, new_value: Any, add_missing: bool = False) -> bool:
@@ -281,6 +438,7 @@ def update_key(key: str, new_value: Any, add_missing: bool = False) -> bool:
             if key == "whisper.language" and new_value != "auto":
                 current["detected_language"] = new_value
             _atomic_dump_yaml(data, CONFIG_PATH)
+            _sync_active_override_on_update(key, new_value)
             return True
         else:
             raise KeyError(f"Key '{keys[-1]}' not found in configuration")
@@ -319,6 +477,8 @@ def update_keys(updates: dict[str, Any], add_missing: bool = True) -> bool:
                 raise KeyError(f"Key '{keys[-1]}' not found in configuration")
 
         _atomic_dump_yaml(data, CONFIG_PATH)
+        for key, new_value in updates.items():
+            _sync_active_override_on_update(key, new_value)
         return True
 
 
