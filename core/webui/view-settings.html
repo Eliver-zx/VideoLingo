@@ -40,9 +40,9 @@
           <div class="row">
             <button type="button" class="xs" id="btn-fetch-models">获取模型列表</button>
             <button type="button" class="primary xs" id="btn-check-llm">测试连接</button>
-            <span class="status-pill completed" id="llm-check-status">
+            <span class="status-pill" id="llm-check-status">
               <span class="status-dot"></span>
-              <span>连接正常 · 182ms</span>
+              <span>未测试</span>
             </span>
           </div>
         </div>
@@ -51,7 +51,7 @@
           <div class="grid-4">
             <label class="field">
               <span class="field-label"><span>API Key</span><span class="field-key">api.key</span></span>
-              <input type="password" class="mono" value="sk-openlux-demo-key-9921" data-cfg="api.key">
+              <input type="password" class="mono" value="" placeholder="输入 API Key" data-cfg="api.key">
             </label>
             <label class="field">
               <span class="field-label"><span>接口地址</span><span class="field-key">api.base_url</span></span>
@@ -80,14 +80,13 @@
             </label>
             <label class="field">
               <span class="field-label"><span>翻译风格</span><span class="field-key">translation_style</span></span>
-              <input type="text" value="口语化、简短自然，保留游戏玩家黑话习惯" placeholder="选填，如口语化、简短自然" data-cfg="translation_style">
+              <input type="text" value="" placeholder="选填，如口语化、简短自然" data-cfg="translation_style">
             </label>
             <label class="field">
               <span class="field-label"><span>默认词表</span><span class="field-key">glossary_domain</span></span>
               <select data-cfg="glossary_domain">
                 <option value="">不挂载</option>
                 <option value="destiny2" selected>destiny2</option>
-                <option value="ai_ml">ai_ml</option>
               </select>
             </label>
             <label class="field">
@@ -428,10 +427,10 @@
                 </div>
                 <div class="ass-caption-stack" id="ass-preview-box" style="margin-block-end: 18px;">
                   <div id="ass-preview-tr" style="color:#ffff00; font-size:21px; font-weight:700; text-shadow: 0 0 4px #000, 1px 1px 2px #000;">
-                    首先，你可能注意到排在榜首的是带有高爆载荷和羸弱能量球的死从天降
+                    示例译文字幕样式预览，可实时调整字号、颜色与边距
                   </div>
                   <div id="ass-preview-src" style="color:#ffffff; font-size:16px; text-shadow: 0 0 3px #000, 1px 1px 2px #000;">
-                    So, starting off, you might notice at the top here, we have DFA with explosive payload and attrition orbs.
+                    Sample bilingual subtitle style preview for live adjustment.
                   </div>
                 </div>
               </div>
@@ -482,7 +481,7 @@
             <div data-tts-panel="fish_audio" class="grid-4">
               <label class="field">
                 <span class="field-label"><span>API Key</span><span class="field-key">fish_audio.api_key</span></span>
-                <input type="password" class="mono" value="fish_demo_key_8812" data-cfg="fish_audio.api_key">
+                <input type="password" class="mono" value="" placeholder="输入 Fish Audio Key" data-cfg="fish_audio.api_key">
               </label>
               <label class="field">
                 <span class="field-label"><span>配音模式</span><span class="field-key">fish_audio.mode</span></span>
@@ -635,19 +634,16 @@
       </div>
       <button type="button" class="xs" id="btn-close-preview-modal">关闭</button>
     </div>
-    <div class="cfg-body">
+    <div class="cfg-body" id="video-preview-body">
       <div class="ass-monitor" style="aspect-ratio:16/9;">
         <div class="ass-safe-frame"></div>
         <div class="ass-hud-top">
-          <span class="ass-hud-tag">output_sub.mp4 · 1920×1080</span>
-          <span class="ass-hud-tag">23.976 fps</span>
+          <span class="ass-hud-tag" id="preview-video-tag">未生成视频</span>
+          <span class="ass-hud-tag">1920×1080</span>
         </div>
         <div class="ass-caption-stack" style="margin-block-end:22px;">
-          <div style="color:#ffff00; font-size:21px; font-weight:700; text-shadow: 0 0 4px #000, 1px 1px 2px #000;">
-            首先，你可能注意到排在榜首的是带有高爆载荷和羸弱能量球的死从天降
-          </div>
-          <div style="color:#ffffff; font-size:16px; text-shadow: 0 0 3px #000, 1px 1px 2px #000;">
-            So, starting off, you might notice at the top here, we have DFA with explosive payload and attrition orbs.
+          <div id="preview-modal-status" style="color:#cbd5e1; font-size:14px;">
+            当前任务尚未生成成片视频（output_sub.mp4 / output_dub.mp4）
           </div>
         </div>
       </div>

@@ -441,15 +441,17 @@ def test_fastapi_webui_tasks_terms_and_utterances_endpoints(
         'id="btn-run-dubbing"',
         'id="btn-preview-video-modal"',
         'id="btn-stop-task"',
-        # 5-Stage Pipeline Ribbon & State Switcher
+        # 5-Stage Pipeline Ribbon
+        'id="pill-stage-1"',
+        'id="pill-badge-1"',
+        'id="pill-stage-2"',
+        'id="pill-badge-2"',
         'id="pill-stage-3"',
         'id="pill-badge-3"',
         'id="pill-stage-4"',
         'id="pill-badge-4"',
         'id="pill-stage-5"',
         'id="pill-badge-5"',
-        'id="btn-sim-srt-ready"',
-        'id="btn-sim-checkpoint-terms"',
         # Center Master-Detail Workspace (Batch Tree + Subtitle Stream + Terms Workbench)
         'id="workspace-mode-timeline"',
         'id="batch-count-badge"',
@@ -552,9 +554,32 @@ def test_fastapi_webui_tasks_terms_and_utterances_endpoints(
     for anchor in required_dom_anchors:
         assert anchor in res_root.text, f"Spec anchor missing in GET /: {anchor}"
 
-    for asset in ("/base.css", "/workbench.css", "/views.css", "/data.js", "/app.js"):
+    forbidden_prototype_placeholders = [
+        "Destiny2_Attrition_Orbs_Guide",
+        "Qwen3_ASR_Architecture_Review",
+        "Apple_MLX_Optimization_Talk",
+        "Attrition Orbs",
+        "Multimach CCX",
+        "btn-sim-srt-ready",
+        "btn-sim-checkpoint-terms",
+        "sk-openlux-demo-key",
+        "fish_demo_key",
+        'value="Attrition"',
+    ]
+    for asset in (
+        "/",
+        "/base.css",
+        "/workbench.css",
+        "/views.css",
+        "/data.js",
+        "/app.js",
+    ):
         res_asset = client.get(asset)
         assert res_asset.status_code == 200, f"Static asset {asset} failed"
+        for placeholder in forbidden_prototype_placeholders:
+            assert placeholder not in res_asset.text, (
+                f"Prototype placeholder {placeholder!r} still present in {asset}"
+            )
 
     # 2. Mount local video task (with Chinese characters in title to verify RFC 5987 Content-Disposition)
     res_task = client.post(
@@ -1329,3 +1354,446 @@ def test_review_fixes_large_dict_fix_source_paused_invalidate_domain_mtime_and_h
     assert "summarize" in res_inv_paused.json()["invalidated"]
     assert not api.runner.is_active
     api.runner.reset()
+
+
+def test_destiny2_authoritative_dict_homonym_priority_and_noise_purging():
+    """Verify Destiny 2 dict.json homonyms are resolved canonically, conversational emotes and generic UI words are purged,
+    and terms.csv has no duplicate entries."""
+    import csv
+    import json
+    from core._4_1_summarize import (
+        _extract_generic_kb_pairs,
+        _scan_text_for_kb_terms,
+        _tokenize_and_normalize,
+        _KB_STOP_TOKENS,
+    )
+
+    dict_path = Path("glossary/destiny2/dict.json")
+    terms_csv_path = Path("glossary/destiny2/terms.csv")
+    assert dict_path.is_file(), "glossary/destiny2/dict.json must exist"
+    assert terms_csv_path.is_file(), "glossary/destiny2/terms.csv must exist"
+
+    dict_data = json.loads(dict_path.read_text(encoding="utf-8"))
+    assert len(dict_data) > 10000
+
+    # 1. Homonym Priority Verifications
+    expected_homonyms = {
+        "Titan": "泰坦",
+        "Kinetic": "动能",
+        "Solar": "烈日",
+        "Arc": "电弧",
+        "Void": "虚空",
+        "Sparrows": "快雀",
+        "The Last City": "圣城",
+        "Vanguard Ops": "先锋行动",
+        "Tomorrow's Answer": "明日答案",
+        "Tomorrow's Answer (Adept)": "明日答案（专家）",
+        "Surrounded": "腹背受敌",
+        "Together Forever": "长相聚",
+        "Worm God Incarnation": "虫神化身",
+        "Pulse Rifle Scavenger": "脉冲步枪弹药回收器",
+        "Unstoppable Hand Cannon": "势不可挡手炮",
+        "Overload Hand Cannon": "超载手炮",
+        "Unstoppable Grenade Launcher": "势不可挡榴弹发射器",
+        "Snapload Finisher": "速装终结技",
+        "Guiding Light": "指引之光",
+        "Kinetic Dexterity": "动能武器灵巧",
+        "Unflinching Kinetic Aim": "稳定动能武器瞄准",
+        "Match Game": "元素匹配",
+        "Raid": "突袭",
+        "Salvage": "回收",
+        "Shock and Awe": "震慑行动",
+        "Lightning Strikes Twice": "两次闪电打击",
+        "Radiant Largesse": "光辉慷慨",
+        "Energized": "充能",
+        "Reflection Effects": "映像效果",
+        "Heartbreaker": "碎心者",
+        "Praetorian Ornament": "禁卫军皮肤",
+        "Event Pack": "活动包",
+        "Rapid Response": "快速反应",
+        "Momentum": "动量",
+        "Heat of the Moment": "瞬时热情",
+        "Shocker": "震荡",
+        "Clash": "死斗",
+        "Control": "占领",
+        "Elimination": "灭绝",
+        "Mayhem": "鏖战",
+        "Rumble": "混战",
+        "Supremacy": "霸权",
+        "Survival": "生存",
+        "Rift": "裂痕",
+        "Doubles": "双打",
+        "Nightfall: The Pyramidion": "日落：金字塔",
+        "Nightfall: The Inverted Spire": "日落：倒置尖塔",
+        "Nightfall: Exodus Crash": "日落：移民号的坠毁",
+        "Nightfall: The Arms Dealer": "日落：军火交易商",
+        "Nightfall: Savathûn's Song": "日落：萨瓦图恩之歌",
+        "Iron Banner Clash": "铁旗死斗",
+        "Iron Banner Control": "铁旗占领",
+        "Iron Banner Supremacy": "铁旗霸权",
+        "Nightfall: A Garden World": "日落：锦绣世界",
+        "Nightfall: Tree of Probabilities": "日落：概率之树",
+    }
+    for term, expected_zh in expected_homonyms.items():
+        assert dict_data.get(term) == expected_zh, (
+            f"Homonym mismatch for {term}: got {dict_data.get(term)!r}, expected {expected_zh!r}"
+        )
+
+    # 2. Noise & Everyday UI Purge Verifications
+    purged_items = [
+        "You're Welcome",
+        "And Another Thing",
+        "Once More",
+        "Out of Place",
+        "At Any Cost",
+        "The Right Choice",
+        "Over and Done With",
+        "A Bad Run",
+        "Stronger Than Now",
+        "Here I Stand",
+        "Where I Belong",
+        "Mind of Its Own",
+        "The Thick of It",
+        "In With the New",
+        "Yes, Queen",
+        "The Past",
+        "Past Is Past",
+        "New Tricks",
+        "Cleans Up Good",
+        "Unequip All",
+        "No Projection",
+        "A Challenge Awaits…",
+        "Quickplay: Normal",
+        "Help",
+        "All",
+        "General",
+        "Normal",
+        "Soon",
+        "Information",
+        "Messages",
+        "Social",
+        "Story",
+        "Explore",
+        "Career",
+        "Hardware",
+        "Secrets",
+        "Confidence",
+        "Doubt",
+        "Purpose",
+        "Anticipation",
+        "Forgiveness",
+        "Farewell",
+        "Togetherness",
+        "Packages",
+        "Accessories",
+        "Materials",
+        "Consumables",
+        "Currencies",
+        "Playlists",
+        "Collections",
+        "Vendor",
+        "Vehicle",
+        "Watermelon",
+        "Mint",
+        "Cocoa",
+        "Candy",
+        "Ingredient",
+        "Pantry",
+        "Butterfly",
+        "Six",
+        "Attack",
+        "Defense",
+        "Speed",
+        "Boost",
+        "Zoom",
+        "Release",
+        "Wait",
+        "Stop",
+        "Look",
+        "Laugh",
+        "Cry",
+        "Wave",
+        "Dance",
+        "Cheer",
+        "Point",
+        "Salute",
+        "Clap",
+        "Shrug",
+        "Nod",
+        "Thanks",
+        "Sorry",
+        "Please",
+        "Hello",
+        # Emotes and banter
+        "The Game is Afoot!",
+        "Arach-NO!",
+        "Enhance!",
+        "No Ammo? No Problem",
+        "You Gonna Eat That Pack",
+        "What If",
+        "They Had Built",
+        "By My Blade",
+        "Up My Sleeve",
+        "Off My Lawn",
+        "On Your Sleeve",
+        "You Were Already Dead",
+        "I Am Alive",
+        "Filamentary, My Dear Ghost",
+        "I Said What I Fragment",
+        "From Whence They Came",
+        "They All Fall Down",
+        "I Want Him Dead",
+        "My Captain",
+        "Your Light in Dark Times",
+        "Fight! Projection",
+        "Collect! Projection",
+        "Bank! Projection",
+        "Invade! Projection",
+        "Attack! Projection",
+        "Season of the Risen Exotic Emote Pack",
+        "Season of the Haunted Exotic Emote Pack",
+        "Season of Plunder Exotic Emote Pack",
+        # Quest objectives and patrol phrases
+        "Defeat enemies",
+        "Defeat Enemies",
+        "Defeat the Target",
+        "Collect Hive Tablets",
+        "Collect Supplies",
+        "Collect Candy",
+        "Talk to the Drifter",
+        "Open the Gate",
+        "Destroy the Brain",
+        "Return to the Arbor of Light",
+        "Stop and Go",
+        "Survey mission",
+        "Survey the Area",
+        "Survey the Hive",
+        "Combat Mission",
+        "Combat mission",
+        "Salvage Mission",
+        "Salvage mission",
+        "Fragment of Graviton Spike Catalyst acquired",
+        "Attune to The When and Where",
+        "A New Season Arrives at Eververse",
+        "Welcome to the Hall of Heroes",
+        "UNLOCKED BY QUEST",
+        "Locked Armor Mod",
+        "Locked Artifice Socket",
+        # Kepler mechanics and instructions
+        "Shoot rotatable relays to change their alignment, altering the path of Relocator Launcher shots",
+        "Access Matterspark shortcuts across Kepler.",
+        "Deal increased Matterspark damage.",
+        "Health regeneration begins immediately upon activating Matterspark.",
+        "Auto-reload all weapons shortly after entering Matterspark.",
+        "Relocator teleportation applies a Void overshield.",
+        "Effect lasts for 30 minutes.",
+        # Dummy non-alphanumeric entries
+        "???",
+        "???????",
+    ]
+    dict_keys_lower = {k.lower() for k in dict_data}
+    assert len(dict_data) == len(dict_keys_lower), (
+        f"dict.json must not have duplicate keys differing only in casing ({len(dict_data)} vs {len(dict_keys_lower)})"
+    )
+    for p in purged_items:
+        assert p.lower() not in dict_keys_lower, (
+            f"Purged term {p!r} must NOT be in dict.json"
+        )
+
+    # 3. Game Term Keepers Verifications
+    keepers = [
+        "Thorn",
+        "Lumina",
+        "Truth",
+        "Rose",
+        "Beloved",
+        "Adored",
+        "Austringer",
+        "Forbearance",
+        "Succession",
+        "Heritage",
+        "Commemoration",
+        "Bequest",
+        "Trustee",
+        "Posterity",
+        "Rampage",
+        "Outlaw",
+        "Frenzy",
+        "Subsistence",
+        "Demolitionist",
+        "Headstone",
+        "Incandescent",
+        "Voltshot",
+        "Hatchling",
+        "Radiant",
+        "Scorch",
+        "Ignition",
+        "Jolted",
+        "Amplified",
+        "Blind",
+        "Devour",
+        "Volatile",
+        "Weaken",
+        "Suppression",
+        "Overshield",
+        "Invisibility",
+        "Slow",
+        "Freeze",
+        "Shatter",
+        "Suspend",
+        "Sever",
+        "Unravel",
+        "Tangle",
+        "Threadling",
+        "Transcendence",
+        "Resilience",
+        "Recovery",
+        "Discipline",
+        "Intellect",
+        "Strength",
+        "Mobility",
+        "Stability",
+        "Handling",
+        "Range",
+        "Impact",
+        "Magazine",
+        "Velocity",
+        "Glimmer",
+        "Silver",
+        "Engram",
+        "Catalyst",
+        "Masterwork",
+        "Vanguard",
+        "Crucible",
+        "Gambit",
+        "Nightfall",
+        "Raid",
+        "Dungeon",
+        "Strike",
+        "Patrol",
+        "Bounty",
+        "Triumph",
+        "Shader",
+        "Emblem",
+        "Finisher",
+        "Sparrow",
+        "Ghost",
+        "Guardian",
+        "Hunter",
+        "Titan",
+        "Warlock",
+        "Arc",
+        "Solar",
+        "Void",
+        "Stasis",
+        "Strand",
+        "Kinetic",
+        "Champion",
+        "Exotic",
+        "Legendary",
+    ]
+    for k in keepers:
+        assert k in dict_data, (
+            f"Official Destiny 2 term {k!r} must be kept in dict.json"
+        )
+
+    # 4. terms.csv Integrity & Duplicate Prevention
+    with open(terms_csv_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        csv_rows = list(reader)
+    assert len(csv_rows) >= 400
+    src_set = set()
+    for row in csv_rows:
+        src_val = row["src"].strip().lower()
+        assert src_val not in src_set, (
+            f"Duplicate src term {row['src']!r} found in terms.csv"
+        )
+        src_set.add(src_val)
+
+    # 5. Transcript pre-scanning integration test
+    kb_entries = {}
+    _extract_generic_kb_pairs(dict_data, kb_entries)
+    exact_lower_map = {}
+    compact_map = {}
+    token_inv = {}
+    p3_inv = {}
+    stem_ngram_map = {}
+    for key, entry in kb_entries.items():
+        en = entry["src"]
+        exact_lower_map[key] = entry
+        for q in re.findall(r'"([^"]+)"', en):
+            ql = q.strip().lower()
+            if len(ql) >= 3 and ql not in exact_lower_map:
+                exact_lower_map[ql] = entry
+        for al in entry.get("aliases") or []:
+            al_low = str(al).strip().lower()
+            if al_low and al_low not in exact_lower_map:
+                exact_lower_map[al_low] = entry
+        comp = re.sub(r"[^a-z0-9]", "", key)
+        if len(comp) >= 2:
+            compact_map.setdefault(comp, []).append(entry)
+        toks = [
+            t
+            for t in re.findall(r"[a-z0-9]+", key)
+            if len(t) >= 3 and t not in _KB_STOP_TOKENS
+        ]
+        for t in set(toks):
+            if t not in token_inv:
+                token_inv[t] = []
+                p3_inv.setdefault(t[:3], []).append(t)
+            token_inv[t].append(entry)
+        _, stems = _tokenize_and_normalize(en)
+        if stems and len(stems) <= 6:
+            st_tuple = tuple(stems)
+            if st_tuple not in stem_ngram_map:
+                stem_ngram_map[st_tuple] = entry
+
+    synthetic_kb = {
+        "entries": kb_entries,
+        "exact_lower_map": exact_lower_map,
+        "compact_map": compact_map,
+        "token_inv": token_inv,
+        "p3_inv": p3_inv,
+        "stem_ngram_map": stem_ngram_map,
+    }
+
+    transcript = (
+        "Hello and welcome back everyone. Today we are looking at Thorn and Lumina in Destiny 2. "
+        "You're welcome to leave a comment below. If you want help with your build, soon we will explore "
+        "the new Void and Solar fragments. The Titan class has high Resilience and Recovery. "
+        "And another thing, we need to talk about Overload Hand Cannon and Surrounded on our Austringer. "
+        "You can enhance your weapons at the enclave. You need to defeat enemies quickly. "
+        "If you talk to the Drifter he will give you a quest. We should open the gate right now. "
+        "No ammo no problem with this build."
+    )
+    scanned = _scan_text_for_kb_terms(transcript, synthetic_kb)
+    scanned_map = {s["src"]: s["tgt"] for s in scanned}
+
+    assert "Thorn" in scanned_map and scanned_map["Thorn"] == "荆棘"
+    assert "Lumina" in scanned_map and scanned_map["Lumina"] == "流明"
+    assert (
+        "Overload Hand Cannon" in scanned_map
+        and scanned_map["Overload Hand Cannon"] == "超载手炮"
+    )
+    assert "Surrounded" in scanned_map and scanned_map["Surrounded"] == "腹背受敌"
+    assert "Titan" in scanned_map and scanned_map["Titan"] == "泰坦"
+    assert "Solar" in scanned_map and scanned_map["Solar"] == "烈日"
+    assert "You're Welcome" not in scanned_map, (
+        "Conversational phrase 'You're Welcome' must not be matched"
+    )
+    assert "And Another Thing" not in scanned_map, (
+        "Conversational phrase 'And Another Thing' must not be matched"
+    )
+    assert "Enhance!" not in scanned_map, "Emote 'Enhance!' must not be matched"
+    assert "Defeat enemies" not in scanned_map, (
+        "Quest objective 'Defeat enemies' must not be matched"
+    )
+    assert "Talk to the Drifter" not in scanned_map, (
+        "Quest objective 'Talk to the Drifter' must not be matched"
+    )
+    assert "Open the Gate" not in scanned_map, (
+        "Quest objective 'Open the Gate' must not be matched"
+    )
+    assert "No Ammo? No Problem" not in scanned_map, (
+        "Phrase 'No Ammo? No Problem' must not be matched"
+    )

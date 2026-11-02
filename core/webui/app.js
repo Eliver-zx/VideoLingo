@@ -2,13 +2,10 @@
     // 0. API Client & State Synchronization
     // =========================================================================
     let isBackendConnected = false;
-    let activeGlossaryDomain = 'destiny2';
-    let domainTermsMap = { destiny2: [...REAL_TASK_TERMS] };
-    let domainDictEntries = [...REAL_DICT_ENTRIES];
-    let domainListMeta = [
-      { domain: 'destiny2', terms_count: 8, has_dict: true, dict_count: 42810 },
-      { domain: 'ai_ml', terms_count: 8, has_dict: false, dict_count: 0 },
-    ];
+    let activeGlossaryDomain = '';
+    let domainTermsMap = {};
+    let domainDictEntries = [];
+    let domainListMeta = [];
     let currentConfig = {};
 
     async function apiFetch(url, options = {}) {
@@ -97,6 +94,10 @@
     function updateTopRunnerBadge() {
       const badge = document.getElementById('top-runner-badge');
       if (!badge) return;
+      if (REAL_TASKS.length === 0) {
+        badge.innerHTML = `<span class="status-dot" style="color:var(--text-muted);"></span><span>暂无任务</span>`;
+        return;
+      }
       const runningCount = REAL_TASKS.filter(t => t.state === 'running').length;
       const pausedCount = REAL_TASKS.filter(t => t.state === 'paused').length;
       if (runningCount > 0) {
@@ -112,6 +113,15 @@
       const box = document.getElementById('task-rail-list');
       document.getElementById('nav-task-count').textContent = String(REAL_TASKS.length);
       updateTopRunnerBadge();
+      if (REAL_TASKS.length === 0) {
+        box.innerHTML = `
+          <div style="padding:28px 14px; text-align:center; color:var(--text-muted); font-size:var(--fs-xs); line-height:1.6;">
+            <div>暂无任务</div>
+            <div style="margin-block-start:4px;">点击右上角「新建」导入视频或字幕</div>
+          </div>
+        `;
+        return;
+      }
       box.innerHTML = REAL_TASKS.map(t => {
         const active = t.id === activeTaskId ? 'active' : '';
         const pillClass = t.state === 'completed' ? 'completed' : (t.state === 'paused' ? 'paused' : (t.state === 'error' ? 'error' : 'running'));
@@ -143,20 +153,50 @@
       });
     }
 
+    function resetWorkbenchToEmpty() {
+      document.getElementById('detail-task-title').textContent = '未选择任务';
+      const detailBadge = document.getElementById('detail-task-badge');
+      if (detailBadge) {
+        detailBadge.className = 'status-pill';
+        detailBadge.innerHTML = '<span class="status-dot"></span><span>等待导入</span>';
+      }
+      document.getElementById('detail-domain-pill').textContent = '无领域';
+      REAL_TASK_TERMS.splice(0, REAL_TASK_TERMS.length);
+      STREAM_TABLE_ROWS.splice(0, STREAM_TABLE_ROWS.length);
+      PIPELINE_BATCH_NODES.splice(
+        0,
+        PIPELINE_BATCH_NODES.length,
+        ...DEFAULT_PIPELINE_BATCH_NODES.map(n => ({ ...n }))
+      );
+      const themeInput = document.getElementById('terms-theme-input');
+      if (themeInput) themeInput.value = '';
+      activeBatchId = 'all';
+      syncPipelineRibbon(null, 0, 0);
+      renderBatchTree();
+      syncDetailPane();
+      renderStreamTable();
+      renderTaskTerms();
+    }
+
     async function selectActiveTask(taskId) {
       const task = REAL_TASKS.find(x => x.id === taskId);
-      if (task) {
-        document.getElementById('detail-task-title').textContent = task.title;
-        document.getElementById('detail-domain-pill').textContent = task.domain || '无领域';
-        const domSel = document.getElementById('detail-domain-select');
-        if (domSel) domSel.value = task.domain || '';
-        if (task.fromBackend) {
-          await loadBackendTaskDetail(task.id);
-        } else if (task.state === 'paused') {
-          applyTaskStateSimulation('paused_terms');
-        } else {
-          applyTaskStateSimulation('srt_ready');
-        }
+      if (!task) {
+        resetWorkbenchToEmpty();
+        renderTaskRail();
+        return;
+      }
+      document.getElementById('detail-task-title').textContent = task.title;
+      document.getElementById('detail-domain-pill').textContent = task.domain || '无领域';
+      const domSel = document.getElementById('detail-domain-select');
+      if (domSel) domSel.value = task.domain || '';
+      if (task.fromBackend) {
+        await loadBackendTaskDetail(task.id);
+      } else {
+        syncPipelineRibbon(task, STREAM_TABLE_ROWS.length, REAL_TASK_TERMS.length);
+        renderBatchTree();
+        syncDetailPane();
+        renderStreamTable();
+        renderTaskTerms();
       }
       renderTaskRail();
     }
@@ -224,13 +264,17 @@
         const data = await apiFetch('/api/tasks');
         isBackendConnected = true;
         const tasks = (data.tasks || []).map(mapBackendTaskToCard);
-        if (tasks.length > 0) {
-          REAL_TASKS.splice(0, REAL_TASKS.length, ...tasks);
+        REAL_TASKS.splice(0, REAL_TASKS.length, ...tasks);
+        if (REAL_TASKS.length > 0) {
           if (!REAL_TASKS.some(t => t.id === activeTaskId)) {
             activeTaskId = REAL_TASKS[0].id;
           }
           renderTaskRail();
           await selectActiveTask(activeTaskId);
+        } else {
+          activeTaskId = '';
+          renderTaskRail();
+          resetWorkbenchToEmpty();
         }
       } catch (_) {}
     }
@@ -245,29 +289,33 @@
         const card = mapBackendTaskToCard(taskData);
         const idx = REAL_TASKS.findIndex(x => x.id === taskId);
         if (idx >= 0) REAL_TASKS[idx] = card;
-
-        // Populate terms
-        if (Array.isArray(termsData.terms) && termsData.terms.length > 0) {
-          REAL_TASK_TERMS.splice(
-            0,
-            REAL_TASK_TERMS.length,
-            ...termsData.terms.map(item => ({
-              src: item.src || '',
-              tgt: item.tgt || '',
-              aliases: Array.isArray(item.aliases) ? item.aliases : [],
-              note: item.note || '',
-              fix_source: Boolean(item.fix_source),
-              promote: Boolean(item.promote_to_domain ?? item.promote ?? false),
-            }))
-          );
+        if (taskId !== activeTaskId) {
+          renderTaskRail();
+          return;
         }
+
+        // Always sync REAL_TASK_TERMS with backend task's terms (including empty array)
+        const rawTerms = Array.isArray(termsData.terms) ? termsData.terms : [];
+        REAL_TASK_TERMS.splice(
+          0,
+          REAL_TASK_TERMS.length,
+          ...rawTerms.map(item => ({
+            src: item.src || '',
+            tgt: item.tgt || '',
+            aliases: Array.isArray(item.aliases) ? item.aliases : [],
+            note: item.note || '',
+            fix_source: Boolean(item.fix_source),
+            promote: Boolean(item.promote_to_domain ?? item.promote ?? false),
+          }))
+        );
         const themeInput = document.getElementById('terms-theme-input');
-        if (themeInput && termsData.summary) {
-          themeInput.value = termsData.summary;
+        if (themeInput) {
+          themeInput.value = termsData.summary || '';
         }
 
-        // Populate utterances into STREAM_TABLE_ROWS if present
-        const utts = uttsData.utterances || [];
+        // Always sync STREAM_TABLE_ROWS and PIPELINE_BATCH_NODES with backend utterances
+        const utts = Array.isArray(uttsData.utterances) ? uttsData.utterances : [];
+        const sd = taskData.stages_done || {};
         if (utts.length > 0) {
           const batchCount = Math.max(1, Math.ceil(utts.length / 15));
           const rows = utts.map((u, i) => {
@@ -291,10 +339,9 @@
           });
           STREAM_TABLE_ROWS.splice(0, STREAM_TABLE_ROWS.length, ...rows);
 
-          // Rebuild batch tree nodes dynamically to match actual batches
           const baseNodes = [
             { id: 'all', kind: 'summary', step: 'ALL', title: '全部字幕', meta: `${utts.length} 句`, time: '', desc: `全部字幕 (${utts.length} 句)` },
-            { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: '已完成', time: '', desc: '语音识别' },
+            { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: sd.asr ? '已完成' : '未开始', time: '', desc: '语音识别' },
             { id: 'nlp-all', kind: 'step', step: '02', title: '标点与断句', meta: `${utts.length} 句`, time: '', desc: `标点与断句 · ${utts.length} 句` },
             { id: 'terms-03', kind: 'step', step: '03', title: '术语审校', meta: `${REAL_TASK_TERMS.length} 条`, time: '', desc: '术语审校' },
             { id: 'step-04-group', kind: 'group', step: '04', title: '字幕翻译', meta: `${batchCount} 批`, time: '', desc: `字幕翻译 · ${batchCount} 批` },
@@ -330,16 +377,32 @@
           if (!PIPELINE_BATCH_NODES.some(n => n.id === activeBatchId)) {
             activeBatchId = 'all';
           }
-          document.getElementById('pill-badge-4').textContent = `${batchCount}/${batchCount}批`;
+        } else {
+          STREAM_TABLE_ROWS.splice(0, STREAM_TABLE_ROWS.length);
+          PIPELINE_BATCH_NODES.splice(
+            0,
+            PIPELINE_BATCH_NODES.length,
+            { id: 'all', kind: 'summary', step: 'ALL', title: '全部字幕', meta: '0 句', time: '', desc: '全部字幕 (0 句)' },
+            { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: sd.asr ? '已完成' : '未开始', time: '', desc: '语音识别' },
+            { id: 'nlp-all', kind: 'step', step: '02', title: '标点与断句', meta: '0 句', time: '', desc: '标点与断句' },
+            { id: 'terms-03', kind: 'step', step: '03', title: '术语审校', meta: `${REAL_TASK_TERMS.length} 条`, time: '', desc: '术语审校' },
+            { id: 'step-04-group', kind: 'group', step: '04', title: '字幕翻译', meta: '0 批', time: '', desc: '字幕翻译' }
+          );
+          if (!PIPELINE_BATCH_NODES.some(n => n.id === activeBatchId)) {
+            activeBatchId = 'all';
+          }
         }
 
-        renderTaskTerms();
+        syncPipelineRibbon(card, utts.length, REAL_TASK_TERMS.length);
         if (card.state === 'paused' && card.stateLabel === '待审术语') {
-          applyTaskStateSimulation('paused_terms');
-        } else {
-          applyTaskStateSimulation('srt_ready');
-          document.getElementById('pill-badge-4').textContent = `${Math.max(1, Math.ceil((utts.length || 189) / 15))}/${Math.max(1, Math.ceil((utts.length || 189) / 15))}批`;
+          activeBatchId = 'terms-03';
+        } else if (activeBatchId === 'terms-03' && REAL_TASK_TERMS.length === 0) {
+          activeBatchId = 'all';
         }
+        renderBatchTree();
+        syncDetailPane();
+        renderStreamTable();
+        renderTaskTerms();
       } catch (_) {}
     }
 
@@ -504,7 +567,13 @@
     });
 
     document.getElementById('btn-create-task').addEventListener('click', async () => {
-      const rawPath = document.getElementById('input-source-path').value.trim() || 'New_Media_Task.mp4';
+      const sourceInput = document.getElementById('input-source-path');
+      const rawPath = sourceInput.value.trim();
+      if (!rawPath && !droppedFile) {
+        sourceInput.focus();
+        appendLog('warn', 'WARN', '请先选择本地媒体文件或输入有效的视频路径 / YouTube 链接', true);
+        return;
+      }
       const subPath = document.getElementById('input-sub-path').value.trim() || null;
       const srcLang = document.getElementById('task-src-lang').value || 'en';
       const tgtLang = document.getElementById('task-tgt-lang').value.trim() || '简体中文';
@@ -547,13 +616,15 @@
           }
           if (created && created.task_id) {
             activeTaskId = created.task_id;
+            sourceInput.value = '';
             closeTopLayer(newTaskDialog);
             appendLog('asr', 'ASR', `Created workspace output/${created.task_id}/ and started pipeline...`, false);
             await loadBackendTasks();
             return;
           }
         } catch (err) {
-          appendLog('warn', 'WARN', `任务创建提示: ${err.message}`, true);
+          appendLog('warn', 'WARN', `任务创建失败: ${err.message}`, true);
+          return;
         }
       }
 
@@ -641,6 +712,20 @@
         ? `${filtered.length} / ${STREAM_TABLE_ROWS.length} 句`
         : `共 ${filtered.length} 句`;
 
+      if (filtered.length === 0) {
+        const emptyHint = REAL_TASKS.length === 0
+          ? '当前暂无任务，请点击左上角「新建」导入视频或字幕文件'
+          : (STREAM_TABLE_ROWS.length === 0 ? '当前阶段尚未生成字幕数据' : '未匹配到符合搜索条件的字幕行');
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="4" style="padding:36px 16px; text-align:center; color:var(--text-muted); font-size:var(--fs-xs);">
+              ${escapeHtml(emptyHint)}
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
       tbody.innerHTML = filtered.map(r => `
         <tr>
           <td>
@@ -661,48 +746,87 @@
     document.getElementById('subtitle-stream-search').addEventListener('input', renderStreamTable);
 
     // =========================================================================
-    // 5. 状态模拟切换 (字幕就绪 vs 待审术语)
+    // 5. 五阶段流水线进度状态同步
     // =========================================================================
-    const btnSimSrt = document.getElementById('btn-sim-srt-ready');
-    const btnSimTerms = document.getElementById('btn-sim-checkpoint-terms');
     const detailBadge = document.getElementById('detail-task-badge');
+    const pill1 = document.getElementById('pill-stage-1');
+    const pill2 = document.getElementById('pill-stage-2');
     const pill3 = document.getElementById('pill-stage-3');
     const pill4 = document.getElementById('pill-stage-4');
+    const pill5 = document.getElementById('pill-stage-5');
+    const line1 = document.getElementById('pipe-line-1');
+    const line2 = document.getElementById('pipe-line-2');
     const line3 = document.getElementById('pipe-line-3');
+    const line4 = document.getElementById('pipe-line-4');
 
-    function applyTaskStateSimulation(mode) {
-      if (mode === 'paused_terms') {
-        btnSimTerms.classList.add('active');
-        btnSimSrt.classList.remove('active');
-        detailBadge.className = 'status-pill paused';
-        detailBadge.innerHTML = '<span class="status-dot"></span><span>待审术语</span>';
-        pill3.className = 'pipe-node paused';
-        document.getElementById('pill-badge-3').textContent = '待确认';
-        if (line3) line3.className = 'pipe-line';
-        pill4.className = 'pipe-node';
-        document.getElementById('pill-badge-4').textContent = '等待中';
-        activeBatchId = 'terms-03';
-        renderBatchTree();
-        syncDetailPane();
-      } else {
-        btnSimSrt.classList.add('active');
-        btnSimTerms.classList.remove('active');
-        detailBadge.className = 'status-pill completed';
-        detailBadge.innerHTML = '<span class="status-dot"></span><span>字幕就绪</span>';
-        pill3.className = 'pipe-node done';
-        document.getElementById('pill-badge-3').textContent = `${REAL_TASK_TERMS.length}条`;
-        if (line3) line3.className = 'pipe-line done';
-        pill4.className = 'pipe-node active';
-        document.getElementById('pill-badge-4').textContent = '13/13批';
-        if (activeBatchId === 'terms-03') activeBatchId = 'all';
-        renderBatchTree();
-        syncDetailPane();
-        renderStreamTable();
+    function syncPipelineRibbon(card, uttCount = 0, termCount = 0) {
+      const b1 = document.getElementById('pill-badge-1');
+      const b2 = document.getElementById('pill-badge-2');
+      const b3 = document.getElementById('pill-badge-3');
+      const b4 = document.getElementById('pill-badge-4');
+      const b5 = document.getElementById('pill-badge-5');
+
+      if (!card) {
+        [pill1, pill2, pill3, pill4, pill5].forEach(el => { if (el) el.className = 'pipe-node'; });
+        [line1, line2, line3, line4].forEach(el => { if (el) el.className = 'pipe-line'; });
+        if (b1) b1.textContent = '未开始';
+        if (b2) b2.textContent = '0句';
+        if (b3) b3.textContent = '0条';
+        if (b4) b4.textContent = '0批';
+        if (b5) b5.textContent = '待合成';
+        return;
       }
+
+      const sd = card.raw?.stages_done || {};
+      const pillClass = card.state === 'completed' ? 'completed' : (card.state === 'paused' ? 'paused' : (card.state === 'error' ? 'error' : 'running'));
+      if (detailBadge) {
+        detailBadge.className = `status-pill ${pillClass}`;
+        detailBadge.innerHTML = `<span class="status-dot"></span><span>${escapeHtml(card.stateLabel || '就绪')}</span>`;
+      }
+
+      if (pill1) pill1.className = sd.asr ? 'pipe-node done' : (card.state === 'running' ? 'pipe-node active' : 'pipe-node');
+      if (b1) b1.textContent = sd.asr ? '已完成' : (card.state === 'running' ? '识别中' : '未开始');
+      if (line1) line1.className = sd.asr ? 'pipe-line done' : 'pipe-line';
+
+      if (pill2) pill2.className = sd.split ? 'pipe-node done' : 'pipe-node';
+      if (b2) b2.textContent = `${uttCount}句`;
+      if (line2) line2.className = sd.split ? 'pipe-line done' : 'pipe-line';
+
+      if (card.state === 'paused' && card.stateLabel === '待审术语') {
+        if (pill3) pill3.className = 'pipe-node paused';
+        if (b3) b3.textContent = '待确认';
+        if (line3) line3.className = 'pipe-line';
+        if (pill4) pill4.className = 'pipe-node';
+        if (b4) b4.textContent = '等待中';
+      } else {
+        if (pill3) pill3.className = sd.terms ? 'pipe-node done' : 'pipe-node';
+        if (b3) b3.textContent = `${termCount}条`;
+        if (line3) line3.className = sd.terms ? 'pipe-line done' : 'pipe-line';
+
+        const batchCount = uttCount > 0 ? Math.max(1, Math.ceil(uttCount / 15)) : 0;
+        const transDone = Boolean(sd.translate || sd.subtitles);
+        if (pill4) pill4.className = transDone ? 'pipe-node done' : 'pipe-node';
+        if (b4) b4.textContent = transDone && batchCount > 0 ? `${batchCount}/${batchCount}批` : `${batchCount}批`;
+        if (line4) line4.className = transDone ? 'pipe-line done' : 'pipe-line';
+      }
+
+      const mergeDone = Boolean(sd.sub_video || sd.dub_video);
+      if (pill5) pill5.className = mergeDone ? 'pipe-node done' : 'pipe-node';
+      if (b5) b5.textContent = sd.dub_video ? '已配音' : (sd.sub_video ? '已压制' : '待合成');
     }
 
-    btnSimSrt.addEventListener('click', () => applyTaskStateSimulation('srt_ready'));
-    btnSimTerms.addEventListener('click', () => applyTaskStateSimulation('paused_terms'));
+    pill1?.addEventListener('click', () => {
+      activeBatchId = 'asr-01';
+      renderBatchTree();
+      syncDetailPane();
+      renderStreamTable();
+    });
+    pill2?.addEventListener('click', () => {
+      activeBatchId = 'nlp-all';
+      renderBatchTree();
+      syncDetailPane();
+      renderStreamTable();
+    });
     pill3?.addEventListener('click', () => {
       activeBatchId = 'terms-03';
       renderBatchTree();
@@ -741,10 +865,24 @@
         renderBatchTree();
       }
 
+      if (filtered.length === 0) {
+        const emptyHint = REAL_TASK_TERMS.length === 0
+          ? '当前任务暂无提取的术语，可点击右上角「+ 新增」手动添加或「重新提取」'
+          : '未匹配到符合搜索条件的术语';
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="5" style="padding:36px 16px; text-align:center; color:var(--text-muted); font-size:var(--fs-xs);">
+              ${escapeHtml(emptyHint)}
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
       tbody.innerHTML = filtered.map(({ item: t, idx }) => `
         <tr data-term-row="${idx}">
-          <td><input type="text" class="cell-input mono" value="${escapeAttr(t.src)}" data-term-field="src" data-idx="${idx}"></td>
-          <td><input type="text" class="cell-input" style="font-weight:600; color:var(--brand-bright);" value="${escapeAttr(t.tgt)}" data-term-field="tgt" data-idx="${idx}"></td>
+          <td><input type="text" class="cell-input mono" value="${escapeAttr(t.src)}" placeholder="原文术语" data-term-field="src" data-idx="${idx}"></td>
+          <td><input type="text" class="cell-input" style="font-weight:600; color:var(--brand-bright);" value="${escapeAttr(t.tgt)}" placeholder="目标译名" data-term-field="tgt" data-idx="${idx}"></td>
           <td>
             <div class="alias-inline-bar">
               ${t.aliases.map((al, aIdx) => `
@@ -756,7 +894,7 @@
               <input type="text" class="alias-add-input mono" placeholder="+ 添加别名" data-add-alias="${idx}">
             </div>
           </td>
-          <td><input type="text" class="cell-input" value="${escapeAttr(t.note)}" data-term-field="note" data-idx="${idx}"></td>
+          <td><input type="text" class="cell-input" value="${escapeAttr(t.note)}" placeholder="选填备注" data-term-field="note" data-idx="${idx}"></td>
           <td>
             <div class="switch-pair">
               <label class="switch-label" title="将该词的语音误识别变体修正回原文字幕">
@@ -777,7 +915,6 @@
           const [rIdx, aIdx] = btn.getAttribute('data-del-alias').split(':').map(Number);
           REAL_TASK_TERMS[rIdx].aliases.splice(aIdx, 1);
           renderTaskTerms();
-          renderDomainCsvTable();
         });
       });
 
@@ -788,7 +925,6 @@
             const rIdx = Number(inp.getAttribute('data-add-alias'));
             REAL_TASK_TERMS[rIdx].aliases.push(inp.value.trim());
             renderTaskTerms();
-            renderDomainCsvTable();
           }
         });
       });
@@ -832,15 +968,16 @@
 
     document.getElementById('btn-add-task-term').addEventListener('click', () => {
       REAL_TASK_TERMS.unshift({
-        src: 'Envious Arsenal',
-        tgt: '嫉妒兵工厂',
-        aliases: ['Envious'],
-        note: '《命运2》武器换弹perk',
-        fix_source: true,
+        src: '',
+        tgt: '',
+        aliases: [],
+        note: '',
+        fix_source: false,
         promote: true
       });
       renderTaskTerms();
-      renderDomainCsvTable();
+      const firstInput = document.querySelector('#task-terms-tbody input[data-term-field="src"]');
+      firstInput?.focus();
     });
 
     async function persistTaskTermsToBackend() {
@@ -848,14 +985,16 @@
       if (!isBackendConnected || !task?.fromBackend) return;
       const summary = document.getElementById('terms-theme-input')?.value?.trim() || '';
       const glossary_domain = document.getElementById('detail-domain-select')?.value ?? task.domain ?? '';
-      const payloadTerms = REAL_TASK_TERMS.map(t => ({
-        src: t.src,
-        tgt: t.tgt,
-        aliases: t.aliases,
-        note: t.note,
-        fix_source: Boolean(t.fix_source),
-        promote_to_domain: Boolean(t.promote),
-      }));
+      const payloadTerms = REAL_TASK_TERMS
+        .filter(t => String(t.src || '').trim() || String(t.tgt || '').trim())
+        .map(t => ({
+          src: t.src,
+          tgt: t.tgt,
+          aliases: t.aliases,
+          note: t.note,
+          fix_source: Boolean(t.fix_source),
+          promote_to_domain: Boolean(t.promote),
+        }));
       await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/terms`, {
         method: 'PUT',
         body: JSON.stringify({ summary, terms: payloadTerms, glossary_domain }),
@@ -913,8 +1052,10 @@
         } catch (_) {}
       }
       activeBatchId = 'step-04-group';
-      applyTaskStateSimulation('srt_ready');
-      appendLog('llm', 'TERMS', 'Saved output/log/terms.json (promoted 8 terms to glossary/destiny2/terms.csv) and resumed Step 04 translation...', false);
+      renderBatchTree();
+      syncDetailPane();
+      renderStreamTable();
+      appendLog('llm', 'TERMS', `Saved terms.json (${REAL_TASK_TERMS.length} terms) and resumed Step 04 translation...`, false);
     });
 
     document.getElementById('btn-save-terms-only').addEventListener('click', async () => {
@@ -934,18 +1075,24 @@
         warnBtn.textContent = warnOnlyLog ? '全部日志' : `仅看告警 (${warnCount})`;
       }
       const list = warnOnlyLog ? REAL_SYSTEM_LOGS.filter(x => x.warn) : REAL_SYSTEM_LOGS;
-      box.innerHTML = list.map(item => `
-        <div class="log-row ${item.warn ? 'warn' : ''}">
-          <span class="log-time">${escapeHtml(item.time)}</span>
-          <span class="log-tag ${escapeAttr(item.tag)}">${escapeHtml(item.label)}</span>
-          <span class="log-msg">${escapeHtml(item.msg)}</span>
-        </div>
-      `).join('');
+      if (list.length === 0) {
+        box.innerHTML = `<div class="log-row"><span class="log-time">--:--:--</span><span class="log-tag">IDLE</span><span class="log-msg">${warnOnlyLog ? '暂无告警日志' : '等待任务运行输出日志…'}</span></div>`;
+      } else {
+        box.innerHTML = list.map(item => `
+          <div class="log-row ${item.warn ? 'warn' : ''}">
+            <span class="log-time">${escapeHtml(item.time)}</span>
+            <span class="log-tag ${escapeAttr(item.tag)}">${escapeHtml(item.label)}</span>
+            <span class="log-msg">${escapeHtml(item.msg)}</span>
+          </div>
+        `).join('');
+      }
       box.scrollTop = box.scrollHeight;
       const previewEl = document.getElementById('console-latest-preview');
       const lastItem = REAL_SYSTEM_LOGS[REAL_SYSTEM_LOGS.length - 1];
-      if (previewEl && lastItem) {
-        previewEl.textContent = `${lastItem.time} · [${lastItem.label}] ${lastItem.msg}`;
+      if (previewEl) {
+        previewEl.textContent = lastItem
+          ? `${lastItem.time} · [${lastItem.label}] ${lastItem.msg}`
+          : '等待任务运行…';
       }
     }
 
@@ -984,7 +1131,8 @@
     // =========================================================================
     document.getElementById('btn-open-task-dir').addEventListener('click', async () => {
       const task = REAL_TASKS.find(x => x.id === activeTaskId);
-      if (isBackendConnected && task?.fromBackend) {
+      if (!task) return;
+      if (isBackendConnected && task.fromBackend) {
         try {
           await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/open-dir`, { method: 'POST' });
         } catch (_) {}
@@ -993,11 +1141,12 @@
     });
 
     document.getElementById('btn-burn-sub-video').addEventListener('click', async () => {
+      const task = REAL_TASKS.find(x => x.id === activeTaskId);
+      if (!task) return;
       document.getElementById('pill-stage-5').className = 'pipe-node active';
       document.getElementById('pill-badge-5').textContent = '烧录中…';
       appendLog('llm', 'MERGE', `Burning bilingual ASS subtitles into output/${activeTaskId}/output_sub.mp4...`, false);
-      const task = REAL_TASKS.find(x => x.id === activeTaskId);
-      if (isBackendConnected && task?.fromBackend) {
+      if (isBackendConnected && task.fromBackend) {
         try {
           await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/run`, {
             method: 'POST',
@@ -1009,11 +1158,12 @@
     });
 
     document.getElementById('btn-run-dubbing').addEventListener('click', async () => {
+      const task = REAL_TASKS.find(x => x.id === activeTaskId);
+      if (!task) return;
       document.getElementById('pill-stage-5').className = 'pipe-node active';
       document.getElementById('pill-badge-5').textContent = '配音中…';
-      appendLog('llm', 'TTS', `Running Fish Audio TTS alignment from edited trans.srt -> output/${activeTaskId}/output_dub.mp4...`, false);
-      const task = REAL_TASKS.find(x => x.id === activeTaskId);
-      if (isBackendConnected && task?.fromBackend) {
+      appendLog('llm', 'TTS', `Running TTS alignment from edited trans.srt -> output/${activeTaskId}/output_dub.mp4...`, false);
+      if (isBackendConnected && task.fromBackend) {
         try {
           await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/run`, {
             method: 'POST',
@@ -1026,7 +1176,8 @@
 
     document.getElementById('btn-stop-task')?.addEventListener('click', async () => {
       const task = REAL_TASKS.find(x => x.id === activeTaskId);
-      if (isBackendConnected && task?.fromBackend) {
+      if (!task) return;
+      if (isBackendConnected && task.fromBackend) {
         try {
           await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/stop`, { method: 'POST' });
           await loadBackendTasks();
@@ -1038,9 +1189,48 @@
     const previewDialog = document.getElementById('video-preview-dialog');
     wireModalDialog(previewDialog);
     document.getElementById('btn-preview-video-modal').addEventListener('click', () => {
+      const bodyEl = document.getElementById('video-preview-body');
+      const task = REAL_TASKS.find(x => x.id === activeTaskId);
+      const sd = task?.raw?.stages_done || {};
+      const files = task?.raw?.files || [];
+      let videoFile = null;
+      if (sd.dub_video || files.includes('output_dub.mp4')) {
+        videoFile = 'output_dub.mp4';
+      } else if (sd.sub_video || files.includes('output_sub.mp4')) {
+        videoFile = 'output_sub.mp4';
+      } else if (task?.raw?.media?.filename && files.includes(task.raw.media.filename)) {
+        videoFile = task.raw.media.filename;
+      }
+      if (bodyEl) {
+        if (task && videoFile) {
+          const srcUrl = `/api/tasks/${encodeURIComponent(task.id)}/files/${encodeURIComponent(videoFile)}`;
+          bodyEl.innerHTML = `
+            <div style="border-radius:var(--radius-md); overflow:hidden; background:#000;">
+              <video controls preload="metadata" style="inline-size:100%; display:block; aspect-ratio:16/9;" src="${escapeAttr(srcUrl)}"></video>
+            </div>
+          `;
+        } else {
+          bodyEl.innerHTML = `
+            <div class="ass-monitor" style="aspect-ratio:16/9;">
+              <div class="ass-safe-frame"></div>
+              <div class="ass-hud-top">
+                <span class="ass-hud-tag" id="preview-video-tag">${task ? escapeHtml(task.title) : '未选择任务'}</span>
+                <span class="ass-hud-tag">未生成成片</span>
+              </div>
+              <div class="ass-caption-stack" style="margin-block-end:22px;">
+                <div id="preview-modal-status" style="color:#cbd5e1; font-size:14px;">
+                  ${task ? '当前任务尚未生成成片视频（output_sub.mp4 / output_dub.mp4）' : '请先在左侧选择或新建任务'}
+                </div>
+              </div>
+            </div>
+          `;
+        }
+      }
       previewDialog.showModal();
     });
     document.getElementById('btn-close-preview-modal').addEventListener('click', () => {
+      const videoEl = previewDialog.querySelector('video');
+      if (videoEl) videoEl.pause();
       closeTopLayer(previewDialog);
     });
 
@@ -1048,49 +1238,58 @@
     // 9. 领域词表中心 (terms.csv + dict.json 检索与转入)
     // =========================================================================
     function getActiveDomainTerms() {
+      if (!activeGlossaryDomain) return [];
       if (!domainTermsMap[activeGlossaryDomain]) {
-        domainTermsMap[activeGlossaryDomain] = activeGlossaryDomain === 'destiny2' ? [...REAL_TASK_TERMS] : [];
+        domainTermsMap[activeGlossaryDomain] = [];
       }
-      return activeGlossaryDomain === 'destiny2' ? REAL_TASK_TERMS : domainTermsMap[activeGlossaryDomain];
+      return domainTermsMap[activeGlossaryDomain];
     }
 
     function renderDomainList() {
       const box = document.getElementById('domain-list-box');
       if (!box) return;
-      box.innerHTML = domainListMeta.map((d, idx) => {
-        const active = d.domain === activeGlossaryDomain ? 'active' : '';
-        const dictLabel = d.dict_count >= 10000
-          ? `${(d.dict_count / 10000).toFixed(1)}万词典`
-          : `${Number(d.dict_count || 0).toLocaleString()}词典`;
-        const hint = d.has_dict
-          ? `${d.terms_count || 0} 条术语 · ${dictLabel}`
-          : `${d.terms_count || 0} 条术语`;
-        const pillClass = idx === 0 ? 'status-pill completed' : 'status-pill';
-        const pillText = idx === 0 ? '默认' : '可用';
-        return `
-          <div class="domain-item ${active}" data-domain="${escapeAttr(d.domain)}">
-            <div style="min-inline-size:0;">
-              <strong class="mono" style="font-size:var(--fs-sm); display:block;">${escapeHtml(d.domain)}</strong>
-              <div class="field-hint" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(hint)}</div>
-            </div>
-            <span class="${pillClass}">${pillText}</span>
+      if (domainListMeta.length === 0) {
+        box.innerHTML = `
+          <div style="padding:20px 12px; text-align:center; color:var(--text-muted); font-size:var(--fs-xs);">
+            暂无领域词表，可在下方新建
           </div>
         `;
-      }).join('');
+      } else {
+        box.innerHTML = domainListMeta.map((d, idx) => {
+          const active = d.domain === activeGlossaryDomain ? 'active' : '';
+          const dictLabel = d.dict_count >= 10000
+            ? `${(d.dict_count / 10000).toFixed(1)}万词典`
+            : `${Number(d.dict_count || 0).toLocaleString()}词典`;
+          const hint = d.has_dict
+            ? `${d.terms_count || 0} 条术语 · ${dictLabel}`
+            : `${d.terms_count || 0} 条术语`;
+          const pillClass = idx === 0 ? 'status-pill completed' : 'status-pill';
+          const pillText = idx === 0 ? '默认' : '可用';
+          return `
+            <div class="domain-item ${active}" data-domain="${escapeAttr(d.domain)}">
+              <div style="min-inline-size:0;">
+                <strong class="mono" style="font-size:var(--fs-sm); display:block;">${escapeHtml(d.domain)}</strong>
+                <div class="field-hint" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(hint)}</div>
+              </div>
+              <span class="${pillClass}">${pillText}</span>
+            </div>
+          `;
+        }).join('');
 
-      box.querySelectorAll('.domain-item').forEach(card => {
-        card.addEventListener('click', async () => {
-          const dom = card.getAttribute('data-domain');
-          await selectGlossaryDomain(dom);
+        box.querySelectorAll('.domain-item').forEach(card => {
+          card.addEventListener('click', async () => {
+            const dom = card.getAttribute('data-domain');
+            await selectGlossaryDomain(dom);
+          });
         });
-      });
+      }
 
       const activeMeta = domainListMeta.find(d => d.domain === activeGlossaryDomain);
       const dictPill = document.getElementById('dict-count-pill');
       if (dictPill) {
         if (activeMeta?.has_dict) {
           dictPill.className = 'status-pill completed';
-          dictPill.innerHTML = `<span class="status-dot"></span><span>${Number(activeMeta.dict_count || 42810).toLocaleString()} 词</span>`;
+          dictPill.innerHTML = `<span class="status-dot"></span><span>${Number(activeMeta.dict_count || 0).toLocaleString()} 词</span>`;
         } else {
           dictPill.className = 'status-pill';
           dictPill.innerHTML = `<span class="status-dot"></span><span>未挂载词典</span>`;
@@ -1112,7 +1311,7 @@
 
       const cfgDomainSelect = document.querySelector('select[data-cfg="glossary_domain"]');
       if (cfgDomainSelect) {
-        const curCfgVal = cfgDomainSelect.value;
+        const curCfgVal = currentConfig.glossary_domain !== undefined ? String(currentConfig.glossary_domain) : cfgDomainSelect.value;
         cfgDomainSelect.innerHTML = [
           '<option value="">不挂载</option>',
           ...domainListMeta.map(d => `<option value="${escapeAttr(d.domain)}">${escapeHtml(d.domain)}</option>`),
@@ -1123,13 +1322,14 @@
       }
 
       const ntMenuList = document.getElementById('nt-domain-menu-list');
-      if (ntMenuList && domainListMeta.length > 0) {
-        const curTaskDom = document.getElementById('task-domain')?.value ?? 'destiny2';
-        const subLabels = { destiny2: '命运2', ai_ml: '机器学习', poe2: '流放之路2', unreal5: '虚幻引擎5' };
+      if (ntMenuList) {
+        const curTaskDom = document.getElementById('task-domain')?.value ?? '';
+        const matchedMeta = domainListMeta.find(d => d.domain === curTaskDom);
+        const effectiveDom = matchedMeta ? matchedMeta.domain : '';
         ntMenuList.innerHTML = [
           ...domainListMeta.map(d => {
-            const sub = subLabels[d.domain] || `${d.terms_count || 0}词`;
-            const isAct = d.domain === curTaskDom ? 'active' : '';
+            const sub = `${d.terms_count || 0} 词`;
+            const isAct = d.domain === effectiveDom ? 'active' : '';
             return `
               <button type="button" class="nt-menu-item ${isAct}" role="option" aria-selected="${Boolean(isAct)}" data-value="${escapeAttr(d.domain)}" data-sub="${escapeAttr(sub)}">
                 <span class="nt-item-main mono">${escapeHtml(d.domain)}</span>
@@ -1137,61 +1337,96 @@
               </button>
             `;
           }),
-          '<div class="nt-menu-sep" role="separator"></div>',
-          `<button type="button" class="nt-menu-item ${curTaskDom === '' ? 'active' : ''}" role="option" aria-selected="${curTaskDom === ''}" data-value="" data-sub="通用">
+          ...(domainListMeta.length > 0 ? ['<div class="nt-menu-sep" role="separator"></div>'] : []),
+          `<button type="button" class="nt-menu-item ${effectiveDom === '' ? 'active' : ''}" role="option" aria-selected="${effectiveDom === ''}" data-value="" data-sub="通用">
             <span class="nt-item-main">不挂载词表</span>
             <span class="nt-item-sub">通用</span>
           </button>`
         ].join('');
+
+        const slugEl = document.getElementById('nt-domain-slug');
+        const subEl = document.getElementById('nt-domain-sub');
+        if (slugEl && subEl) {
+          if (matchedMeta) {
+            document.getElementById('task-domain').value = matchedMeta.domain;
+            slugEl.textContent = matchedMeta.domain;
+            slugEl.classList.add('mono');
+            subEl.textContent = `${matchedMeta.terms_count || 0} 词`;
+          } else {
+            document.getElementById('task-domain').value = '';
+            slugEl.textContent = '不挂载词表';
+            slugEl.classList.remove('mono');
+            subEl.textContent = '通用';
+          }
+        }
       }
     }
 
     async function selectGlossaryDomain(dom) {
-      activeGlossaryDomain = dom;
-      document.getElementById('glossary-active-title').textContent = `${dom} · 自定义术语`;
-      if (isBackendConnected) {
+      activeGlossaryDomain = dom || '';
+      const titleEl = document.getElementById('glossary-active-title');
+      if (titleEl) {
+        titleEl.textContent = activeGlossaryDomain ? `${activeGlossaryDomain} · 自定义术语` : '未选择领域 · 自定义术语';
+      }
+      if (isBackendConnected && activeGlossaryDomain) {
         try {
-          const data = await apiFetch(`/api/glossary/domains/${encodeURIComponent(dom)}`);
+          const data = await apiFetch(`/api/glossary/domains/${encodeURIComponent(activeGlossaryDomain)}`);
           const terms = (data.terms || []).map(t => ({
             src: t.src || '',
             tgt: t.tgt || '',
             aliases: Array.isArray(t.aliases) ? t.aliases : [],
             note: t.note || '',
-            fix_source: false,
+            fix_source: Boolean(t.fix_source),
             promote: true,
           }));
-          if (dom === 'destiny2' && terms.length > 0) {
-            REAL_TASK_TERMS.splice(0, REAL_TASK_TERMS.length, ...terms);
+          domainTermsMap[activeGlossaryDomain] = terms;
+          const m = domainListMeta.find(x => x.domain === activeGlossaryDomain);
+          if (m) {
+            m.terms_count = terms.length;
+            m.has_dict = Boolean(data.has_dict);
+            m.dict_count = data.dict_count ?? 0;
           }
-          domainTermsMap[dom] = terms.length > 0 ? terms : (domainTermsMap[dom] || []);
         } catch (_) {}
       }
       renderDomainList();
       renderDomainCsvTable();
-      await loadDomainDictEntries(dom, document.getElementById('dict-search-input')?.value || '');
+      await loadDomainDictEntries(activeGlossaryDomain, document.getElementById('dict-search-input')?.value || '');
     }
 
     async function loadBackendGlossaryDomains() {
       try {
         const data = await apiFetch('/api/glossary/domains');
         isBackendConnected = true;
-        if (Array.isArray(data.domains) && data.domains.length > 0) {
-          domainListMeta = data.domains.map(d => ({
-            domain: d.domain || d.name,
-            terms_count: d.terms_count ?? 0,
-            has_dict: Boolean(d.has_dict),
-            dict_count: d.dict_count ?? (d.has_dict ? 42810 : 0),
-          }));
+        domainListMeta = Array.isArray(data.domains)
+          ? data.domains.map(d => ({
+              domain: d.domain || d.name,
+              terms_count: d.terms_count ?? 0,
+              has_dict: Boolean(d.has_dict),
+              dict_count: d.dict_count ?? 0,
+            }))
+          : [];
+        if (domainListMeta.length > 0) {
+          const preferred = data.active_domain !== undefined
+            ? (domainListMeta.some(x => x.domain === data.active_domain) ? data.active_domain : '')
+            : (currentConfig.glossary_domain !== undefined && domainListMeta.some(x => x.domain === currentConfig.glossary_domain)
+                ? String(currentConfig.glossary_domain)
+                : domainListMeta[0].domain);
+          const taskDomInput = document.getElementById('task-domain');
+          if (taskDomInput && !taskDomInput.value && preferred) {
+            taskDomInput.value = preferred;
+          }
           if (!domainListMeta.some(x => x.domain === activeGlossaryDomain)) {
-            activeGlossaryDomain = domainListMeta[0].domain;
+            activeGlossaryDomain = preferred || domainListMeta[0].domain;
           }
           await selectGlossaryDomain(activeGlossaryDomain);
+        } else {
+          await selectGlossaryDomain('');
         }
       } catch (_) {}
     }
 
     async function loadDomainDictEntries(dom, keyword = '') {
-      if (isBackendConnected) {
+      if (isBackendConnected && dom) {
         try {
           const data = await apiFetch(`/api/glossary/domains/${encodeURIComponent(dom)}/dict?q=${encodeURIComponent(keyword)}`);
           if (Array.isArray(data.entries)) {
@@ -1199,15 +1434,10 @@
             renderDictSearch(keyword, true);
             return;
           }
-          if (data.entries === null) {
-            domainDictEntries = dom === 'destiny2' ? [...REAL_DICT_ENTRIES] : [];
-            renderDictSearch(keyword, dom !== 'destiny2');
-            return;
-          }
         } catch (_) {}
       }
-      domainDictEntries = dom === 'destiny2' ? [...REAL_DICT_ENTRIES] : [];
-      renderDictSearch(keyword, dom !== 'destiny2');
+      domainDictEntries = [];
+      renderDictSearch(keyword, true);
     }
 
     function renderDomainCsvTable() {
@@ -1218,10 +1448,23 @@
         if (!q) return true;
         return t.src.toLowerCase().includes(q) || t.tgt.toLowerCase().includes(q) || t.aliases.join('|').toLowerCase().includes(q);
       });
+      if (rows.length === 0) {
+        const emptyHint = !activeGlossaryDomain
+          ? '请先在左侧选择或新建一个领域词表'
+          : (list.length === 0 ? '当前领域暂无自定义术语，可点击右上角「导入」或「+ 新增」' : '未匹配到符合搜索条件的自定义术语');
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="5" style="padding:28px 16px; text-align:center; color:var(--text-muted); font-size:var(--fs-xs);">
+              ${escapeHtml(emptyHint)}
+            </td>
+          </tr>
+        `;
+        return;
+      }
       tbody.innerHTML = rows.map(({ t, idx }) => `
         <tr>
-          <td><input type="text" class="cell-input mono" value="${escapeAttr(t.src)}" data-csv-field="src" data-idx="${idx}"></td>
-          <td><input type="text" class="cell-input" style="font-weight:600; color:var(--brand-bright);" value="${escapeAttr(t.tgt)}" data-csv-field="tgt" data-idx="${idx}"></td>
+          <td><input type="text" class="cell-input mono" value="${escapeAttr(t.src)}" placeholder="原文术语" data-csv-field="src" data-idx="${idx}"></td>
+          <td><input type="text" class="cell-input" style="font-weight:600; color:var(--brand-bright);" value="${escapeAttr(t.tgt)}" placeholder="目标译名" data-csv-field="tgt" data-idx="${idx}"></td>
           <td>
             <div class="alias-inline-bar">
               ${t.aliases.map((al, aIdx) => `
@@ -1233,7 +1476,7 @@
               <input type="text" class="alias-add-input mono" placeholder="+ 添加别名" data-add-csv-alias="${idx}">
             </div>
           </td>
-          <td><input type="text" class="cell-input" value="${escapeAttr(t.note)}" data-csv-field="note" data-idx="${idx}"></td>
+          <td><input type="text" class="cell-input" value="${escapeAttr(t.note)}" placeholder="选填备注" data-csv-field="note" data-idx="${idx}"></td>
           <td><button type="button" class="danger xs" data-del-csv="${idx}">删除</button></td>
         </tr>
       `).join('');
@@ -1243,7 +1486,6 @@
           const [rIdx, aIdx] = btn.getAttribute('data-del-csv-alias').split(':').map(Number);
           list[rIdx].aliases.splice(aIdx, 1);
           renderDomainCsvTable();
-          renderTaskTerms();
         });
       });
 
@@ -1254,7 +1496,6 @@
             const rIdx = Number(inp.getAttribute('data-add-csv-alias'));
             list[rIdx].aliases.push(inp.value.trim());
             renderDomainCsvTable();
-            renderTaskTerms();
           }
         });
       });
@@ -1272,7 +1513,6 @@
           const idx = Number(btn.getAttribute('data-del-csv'));
           list.splice(idx, 1);
           renderDomainCsvTable();
-          renderTaskTerms();
         });
       });
     }
@@ -1280,14 +1520,18 @@
     document.getElementById('glossary-csv-search').addEventListener('input', renderDomainCsvTable);
 
     document.getElementById('btn-add-domain-term').addEventListener('click', () => {
+      if (!activeGlossaryDomain) return;
       const list = getActiveDomainTerms();
-      list.unshift({ src: 'Chill Clip', tgt: '寒意弹夹', aliases: ['Chill'], note: '《命运2》冰影减速perk', fix_source: false, promote: true });
+      list.unshift({ src: '', tgt: '', aliases: [], note: '', fix_source: false, promote: true });
       renderDomainCsvTable();
-      renderTaskTerms();
+      const firstInput = document.querySelector('#domain-csv-tbody input[data-csv-field="src"]');
+      firstInput?.focus();
     });
 
     document.getElementById('btn-save-domain-csv')?.addEventListener('click', async () => {
-      const list = getActiveDomainTerms();
+      if (!activeGlossaryDomain) return;
+      const list = getActiveDomainTerms().filter(t => String(t.src || '').trim() || String(t.tgt || '').trim());
+      domainTermsMap[activeGlossaryDomain] = list;
       if (isBackendConnected) {
         try {
           await apiFetch(`/api/glossary/domains/${encodeURIComponent(activeGlossaryDomain)}`, {
@@ -1323,7 +1567,7 @@
 
     glossaryFileInput.addEventListener('change', async () => {
       const file = glossaryFileInput.files?.[0];
-      if (!file) return;
+      if (!file || !activeGlossaryDomain) return;
       if (isBackendConnected) {
         try {
           const form = new FormData();
@@ -1374,9 +1618,7 @@
         } catch (_) {}
       }
       domainListMeta = domainListMeta.filter(d => d.domain !== activeGlossaryDomain);
-      activeGlossaryDomain = domainListMeta[0]?.domain || 'destiny2';
-      renderDomainList();
-      renderDomainCsvTable();
+      await selectGlossaryDomain(domainListMeta[0]?.domain || '');
     });
 
     function renderDictSearch(keyword = '', prefiltered = false) {
@@ -1386,6 +1628,20 @@
       const matched = prefiltered
         ? sourceList
         : sourceList.filter(x => !q || x.k.toLowerCase().includes(q) || x.v.toLowerCase().includes(q));
+      if (matched.length === 0) {
+        const activeMeta = domainListMeta.find(d => d.domain === activeGlossaryDomain);
+        const emptyHint = !activeMeta?.has_dict
+          ? '当前领域尚未导入 dict.json 词典，可点击右上角「导入词典」上传 JSON 或大表'
+          : '未匹配到符合搜索条件的词条';
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="3" style="padding:28px 16px; text-align:center; color:var(--text-muted); font-size:var(--fs-xs);">
+              ${escapeHtml(emptyHint)}
+            </td>
+          </tr>
+        `;
+        return;
+      }
       tbody.innerHTML = matched.map((item, i) => `
         <tr>
           <td class="mono" style="font-weight:600;">${escapeHtml(item.k)}</td>
@@ -1401,7 +1657,6 @@
           if (item && !list.some(x => x.src === item.k)) {
             list.unshift({ src: item.k, tgt: item.v, aliases: [], note: '来自内置词典', fix_source: false, promote: true });
             renderDomainCsvTable();
-            renderTaskTerms();
           }
         });
       });
@@ -1409,13 +1664,6 @@
 
     document.getElementById('dict-search-input').addEventListener('input', e => {
       loadDomainDictEntries(activeGlossaryDomain, e.target.value);
-    });
-
-    document.querySelectorAll('#domain-list-box .domain-item').forEach(card => {
-      card.addEventListener('click', async () => {
-        const dom = card.getAttribute('data-domain');
-        await selectGlossaryDomain(dom);
-      });
     });
 
     document.querySelectorAll('.settings-nav .settings-nav-item').forEach(link => {
@@ -1645,7 +1893,14 @@
         const handler = () => {
           const path = inp.getAttribute('data-cfg');
           if (path) {
-            pendingConfigUpdates[path] = readCfgControlValue(inp);
+            const val = readCfgControlValue(inp);
+            pendingConfigUpdates[path] = val;
+            if (path === 'glossary_domain') {
+              currentConfig.glossary_domain = val;
+              const taskDomInput = document.getElementById('task-domain');
+              if (taskDomInput) taskDomInput.value = String(val ?? '');
+              renderDomainList();
+            }
           }
           setAutosaveStatus('paused', '保存中…');
           clearTimeout(saveTimer);
@@ -1669,6 +1924,14 @@
     }
     bindCfgControls();
 
+    const PLACEHOLDER_API_KEYS = new Set([
+      'YOUR_API_KEY',
+      'your_elevenlabs_api_key',
+      'YOUR_302_API_KEY',
+      'YOUR_FISH_AUDIO_KEY',
+      'YOUR_SF_KEY',
+    ]);
+
     async function loadBackendConfig() {
       try {
         const res = await apiFetch('/api/config');
@@ -1685,6 +1948,8 @@
             inp.value = normalizeAssColorToHex(val, path.includes('translation') ? '#FFFF00' : '#FFFFFF');
           } else if (path === 'subtitle.style.translation.outline_color' || path === 'subtitle.style.source.outline_color') {
             inp.value = normalizeAssColorToHex(val, '#000000');
+          } else if (inp.type === 'password' && PLACEHOLDER_API_KEYS.has(String(val).trim())) {
+            inp.value = '';
           } else {
             inp.value = String(val);
           }
@@ -1717,14 +1982,15 @@
       } catch (_) {}
     }
 
-    // 初始化全量视图 (同步立即渲染，随后异步探测后端数据)
+    // 初始化全量视图 (同步立即渲染空状态，随后异步同步后端数据)
     renderTaskRail();
     renderBatchTree();
     renderStreamTable();
     renderTaskTerms();
     renderSystemLogs();
+    renderDomainList();
     renderDomainCsvTable();
-    renderDictSearch('Attrition');
+    renderDictSearch('', true);
     updateAssPreview();
 
     (async () => {

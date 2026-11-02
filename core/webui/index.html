@@ -33,8 +33,8 @@
       <span class="brand-name">VideoLingo</span>
       <span class="brand-divider"></span>
       <span class="status-pill" id="top-runner-badge">
-        <span class="status-dot" style="color:var(--emerald-bright);"></span>
-        <span>1 个任务待审校</span>
+        <span class="status-dot" style="color:var(--text-muted);"></span>
+        <span>暂无任务</span>
       </span>
     </div>
 
@@ -42,14 +42,14 @@
       <button type="button" class="seg-btn active" data-nav="workbench" id="tab-workbench">
         <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M14 9h4M14 13h4"/></svg>
         <span>工作台</span>
-        <span class="seg-count" id="nav-task-count">3</span>
+        <span class="seg-count" id="nav-task-count">0</span>
       </button>
       <button type="button" class="seg-btn" data-nav="glossary" id="tab-glossary">
         <svg class="icon" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         <span>词表</span>
       </button>
       <button type="button" class="seg-btn" data-nav="settings" id="tab-settings">
-        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06-.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06-.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         <span>设置</span>
       </button>
     </nav>
@@ -57,7 +57,7 @@
     <div class="topbar-actions">
       <span class="status-pill completed" id="autosave-indicator">
         <span class="status-dot"></span>
-        <span>已保存</span>
+        <span>已就绪</span>
       </span>
     </div>
   </header>
@@ -88,15 +88,15 @@
     <!-- 右侧一体化主控台画布 -->
     <div class="studio-main">
 
-      <!-- ROW 1: 任务主命令工具栏 (Identity + Handoff Actions + Demo State Switcher) -->
+      <!-- ROW 1: 任务主命令工具栏 (Identity + Handoff Actions) -->
       <div class="task-command-bar">
         <div class="task-identity">
-          <h1 class="task-heading" id="detail-task-title">Destiny2_Attrition_Orbs_Guide.mp4</h1>
-          <span class="status-pill completed" id="detail-task-badge">
+          <h1 class="task-heading" id="detail-task-title">未选择任务</h1>
+          <span class="status-pill" id="detail-task-badge">
             <span class="status-dot"></span>
-            <span>字幕就绪</span>
+            <span>等待导入</span>
           </span>
-          <span class="status-pill mono" id="detail-domain-pill">destiny2</span>
+          <span class="status-pill mono" id="detail-domain-pill">无领域</span>
         </div>
 
         <div class="toolbar-group">
@@ -120,35 +120,35 @@
         </div>
       </div>
 
-      <!-- ROW 2: 五阶段流水线静态进度指示 -->
+      <!-- ROW 2: 五阶段流水线进度指示 -->
       <div class="pipeline-ribbon">
         <div class="pipeline-steps" role="list" aria-label="流水线五阶段进度">
-          <div class="pipe-node done" role="listitem">
+          <div class="pipe-node" id="pill-stage-1" role="listitem">
             <span class="pipe-dot"></span>
             <span class="pipe-num">01</span>
             <span>语音识别</span>
-            <span class="pipe-stat">2,340词</span>
+            <span class="pipe-stat" id="pill-badge-1">未开始</span>
           </div>
-          <span class="pipe-line done"></span>
-          <div class="pipe-node done" role="listitem">
+          <span class="pipe-line" id="pipe-line-1"></span>
+          <div class="pipe-node" id="pill-stage-2" role="listitem">
             <span class="pipe-dot"></span>
             <span class="pipe-num">02</span>
             <span>断句</span>
-            <span class="pipe-stat">189句</span>
+            <span class="pipe-stat" id="pill-badge-2">0句</span>
           </div>
-          <span class="pipe-line done"></span>
-          <div class="pipe-node done" id="pill-stage-3" role="listitem">
+          <span class="pipe-line" id="pipe-line-2"></span>
+          <div class="pipe-node" id="pill-stage-3" role="listitem">
             <span class="pipe-dot"></span>
             <span class="pipe-num">03</span>
             <span>术语</span>
-            <span class="pipe-stat" id="pill-badge-3">8条</span>
+            <span class="pipe-stat" id="pill-badge-3">0条</span>
           </div>
-          <span class="pipe-line done" id="pipe-line-3"></span>
-          <div class="pipe-node active" id="pill-stage-4" role="listitem">
+          <span class="pipe-line" id="pipe-line-3"></span>
+          <div class="pipe-node" id="pill-stage-4" role="listitem">
             <span class="pipe-dot"></span>
             <span class="pipe-num">04</span>
             <span>翻译</span>
-            <span class="pipe-stat" id="pill-badge-4">13/13批</span>
+            <span class="pipe-stat" id="pill-badge-4">0批</span>
           </div>
           <span class="pipe-line" id="pipe-line-4"></span>
           <div class="pipe-node" id="pill-stage-5" role="listitem">
@@ -157,11 +157,6 @@
             <span>合成</span>
             <span class="pipe-stat" id="pill-badge-5">待合成</span>
           </div>
-        </div>
-
-        <div class="segmented-track ribbon-demo" title="切换演示状态">
-          <button type="button" class="seg-btn active" id="btn-sim-srt-ready">字幕就绪</button>
-          <button type="button" class="seg-btn" id="btn-sim-checkpoint-terms">待审术语</button>
         </div>
       </div>
 
@@ -182,13 +177,13 @@
           <div class="subtitle-stage" id="subtitle-detail-pane">
             <div class="subpane-bar">
               <div class="row" style="gap:8px;">
-                <span class="subpane-title" id="active-batch-heading">全部字幕 (189 句)</span>
-                <span class="field-key" id="active-batch-tag">48.2s</span>
+                <span class="subpane-title" id="active-batch-heading">全部字幕 (0 句)</span>
+                <span class="field-key" id="active-batch-tag"></span>
               </div>
 
               <div class="row" style="gap:8px;">
                 <input id="subtitle-stream-search" type="text" placeholder="搜索字幕或术语…" style="inline-size:240px;">
-                <span class="field-hint mono" id="stream-row-counter">共 11 句</span>
+                <span class="field-hint mono" id="stream-row-counter">共 0 句</span>
               </div>
             </div>
 
@@ -212,7 +207,7 @@
             <div class="subpane-bar">
               <div class="row" style="gap:10px;">
                 <span class="subpane-title">术语审校</span>
-                <span class="field-hint mono" id="task-terms-counter">8 条</span>
+                <span class="field-hint mono" id="task-terms-counter">0 条</span>
               </div>
               <div class="row" style="gap:8px;">
                 <input id="task-terms-search" type="text" placeholder="搜索术语…" style="inline-size:160px;">
@@ -230,14 +225,13 @@
                 <span class="field-label">
                   <span>内容摘要</span>
                 </span>
-                <input id="terms-theme-input" type="text" value="该视频探讨《命运2》中“羸弱能量球”（Attrition Orbs）perk在各武器类型上生成光球的速度，对比了死从天降（D.F.A.）、无名之秋、多机系统CCX等武器的触发效率与弹匣计算公式。">
+                <input id="terms-theme-input" type="text" value="" placeholder="提取术语后自动生成内容摘要，也可手动补充背景说明…">
               </label>
               <label class="field">
                 <span class="field-label"><span>领域词表</span></span>
                 <select id="detail-domain-select">
                   <option value="">不挂载</option>
                   <option value="destiny2" selected>destiny2</option>
-                  <option value="ai_ml">ai_ml</option>
                 </select>
               </label>
             </div>
@@ -270,10 +264,10 @@
               <span>运行日志</span>
             </span>
             <span class="field-key">runtime.log</span>
-            <span class="console-preview" id="console-latest-preview">14:21:22 · Paused at checkpoint [pause_after_translate]: Edit trans.srt in Subtitle Edit, then click Burn Video or Dubbing.</span>
+            <span class="console-preview" id="console-latest-preview">等待任务运行…</span>
           </div>
           <div class="row" style="gap:6px; flex-shrink:0;">
-            <button type="button" class="xs" id="btn-filter-warn-log">仅看告警 (2)</button>
+            <button type="button" class="xs" id="btn-filter-warn-log">仅看告警 (0)</button>
             <button type="button" class="xs" id="btn-copy-log">复制</button>
             <button type="button" class="ghost xs" id="btn-toggle-console">展开 ▴</button>
           </div>
@@ -301,7 +295,7 @@
         </div>
         <div class="nt-drop" id="upload-dropzone">
           <svg class="icon nt-drop-icon" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <input id="input-source-path" type="text" autofocus value="/Users/eliver/Videos/Destiny2_Attrition_Orbs_Guide.mp4" placeholder="粘贴本地路径或 YouTube 链接">
+          <input id="input-source-path" type="text" autofocus value="" placeholder="粘贴本地路径或 YouTube 链接">
           <button type="button" class="nt-browse" id="btn-pick-local">浏览…</button>
         </div>
         <div class="nt-affix">
@@ -386,24 +380,12 @@
             </button>
             <div class="nt-menu" role="listbox" aria-label="领域词表">
               <div class="nt-menu-list" id="nt-domain-menu-list">
-                <button type="button" class="nt-menu-item active" role="option" aria-selected="true" data-value="destiny2" data-sub="命运2">
+                <button type="button" class="nt-menu-item active" role="option" aria-selected="true" data-value="destiny2" data-sub="0 词">
                   <span class="nt-item-main mono">destiny2</span>
-                  <span class="nt-item-sub">命运2</span>
-                </button>
-                <button type="button" class="nt-menu-item" role="option" data-value="ai_ml" data-sub="机器学习">
-                  <span class="nt-item-main mono">ai_ml</span>
-                  <span class="nt-item-sub">机器学习</span>
-                </button>
-                <button type="button" class="nt-menu-item" role="option" data-value="poe2" data-sub="流放之路2">
-                  <span class="nt-item-main mono">poe2</span>
-                  <span class="nt-item-sub">流放之路2</span>
-                </button>
-                <button type="button" class="nt-menu-item" role="option" data-value="unreal5" data-sub="虚幻引擎5">
-                  <span class="nt-item-main mono">unreal5</span>
-                  <span class="nt-item-sub">虚幻引擎5</span>
+                  <span class="nt-item-sub">0 词</span>
                 </button>
                 <div class="nt-menu-sep" role="separator"></div>
-                <button type="button" class="nt-menu-item" role="option" data-value="" data-sub="通用">
+                <button type="button" class="nt-menu-item" role="option" aria-selected="false" data-value="" data-sub="通用">
                   <span class="nt-item-main">不挂载词表</span>
                   <span class="nt-item-sub">通用</span>
                 </button>
@@ -463,22 +445,7 @@
         <span class="rail-title">领域词表</span>
       </div>
 
-      <div class="rail-list" id="domain-list-box">
-        <div class="domain-item active" data-domain="destiny2">
-          <div style="min-inline-size:0;">
-            <strong class="mono" style="font-size:var(--fs-sm); display:block;">destiny2</strong>
-            <div class="field-hint" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">8 条术语 · 4.2万词典</div>
-          </div>
-          <span class="status-pill completed">默认</span>
-        </div>
-        <div class="domain-item" data-domain="ai_ml">
-          <div style="min-inline-size:0;">
-            <strong class="mono" style="font-size:var(--fs-sm); display:block;">ai_ml</strong>
-            <div class="field-hint" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">8 条术语</div>
-          </div>
-          <span class="status-pill">可用</span>
-        </div>
-      </div>
+      <div class="rail-list" id="domain-list-box"></div>
 
       <div style="padding:12px 4px 8px; display:flex; flex-direction:column; gap:12px;">
         <label class="field">
@@ -499,7 +466,7 @@
       <section class="glossary-pane">
         <div class="subpane-bar">
           <div class="row">
-            <strong id="glossary-active-title" style="font-size:var(--fs-sm); font-weight:600;">destiny2 · 自定义术语</strong>
+            <strong id="glossary-active-title" style="font-size:var(--fs-sm); font-weight:600;">未选择领域 · 自定义术语</strong>
             <span class="field-key">terms.csv</span>
           </div>
           <div class="row">
@@ -532,13 +499,13 @@
           <div class="row">
             <strong style="font-size:var(--fs-sm); font-weight:600;">内置词典</strong>
             <span class="field-key">dict.json</span>
-            <span class="status-pill completed" id="dict-count-pill">
+            <span class="status-pill" id="dict-count-pill">
               <span class="status-dot"></span>
-              <span>42,810 词</span>
+              <span>未挂载词典</span>
             </span>
           </div>
           <div class="row">
-            <input id="dict-search-input" type="text" value="Attrition" placeholder="搜索词典…" style="inline-size:240px;">
+            <input id="dict-search-input" type="text" value="" placeholder="搜索词典…" style="inline-size:240px;">
             <button type="button" class="xs" id="btn-import-dict">导入词典</button>
           </div>
         </div>
@@ -602,9 +569,9 @@
           <div class="row">
             <button type="button" class="xs" id="btn-fetch-models">获取模型列表</button>
             <button type="button" class="primary xs" id="btn-check-llm">测试连接</button>
-            <span class="status-pill completed" id="llm-check-status">
+            <span class="status-pill" id="llm-check-status">
               <span class="status-dot"></span>
-              <span>连接正常 · 182ms</span>
+              <span>未测试</span>
             </span>
           </div>
         </div>
@@ -613,7 +580,7 @@
           <div class="grid-4">
             <label class="field">
               <span class="field-label"><span>API Key</span><span class="field-key">api.key</span></span>
-              <input type="password" class="mono" value="sk-openlux-demo-key-9921" data-cfg="api.key">
+              <input type="password" class="mono" value="" placeholder="输入 API Key" data-cfg="api.key">
             </label>
             <label class="field">
               <span class="field-label"><span>接口地址</span><span class="field-key">api.base_url</span></span>
@@ -642,14 +609,13 @@
             </label>
             <label class="field">
               <span class="field-label"><span>翻译风格</span><span class="field-key">translation_style</span></span>
-              <input type="text" value="口语化、简短自然，保留游戏玩家黑话习惯" placeholder="选填，如口语化、简短自然" data-cfg="translation_style">
+              <input type="text" value="" placeholder="选填，如口语化、简短自然" data-cfg="translation_style">
             </label>
             <label class="field">
               <span class="field-label"><span>默认词表</span><span class="field-key">glossary_domain</span></span>
               <select data-cfg="glossary_domain">
                 <option value="">不挂载</option>
                 <option value="destiny2" selected>destiny2</option>
-                <option value="ai_ml">ai_ml</option>
               </select>
             </label>
             <label class="field">
@@ -990,10 +956,10 @@
                 </div>
                 <div class="ass-caption-stack" id="ass-preview-box" style="margin-block-end: 18px;">
                   <div id="ass-preview-tr" style="color:#ffff00; font-size:21px; font-weight:700; text-shadow: 0 0 4px #000, 1px 1px 2px #000;">
-                    首先，你可能注意到排在榜首的是带有高爆载荷和羸弱能量球的死从天降
+                    示例译文字幕样式预览，可实时调整字号、颜色与边距
                   </div>
                   <div id="ass-preview-src" style="color:#ffffff; font-size:16px; text-shadow: 0 0 3px #000, 1px 1px 2px #000;">
-                    So, starting off, you might notice at the top here, we have DFA with explosive payload and attrition orbs.
+                    Sample bilingual subtitle style preview for live adjustment.
                   </div>
                 </div>
               </div>
@@ -1044,7 +1010,7 @@
             <div data-tts-panel="fish_audio" class="grid-4">
               <label class="field">
                 <span class="field-label"><span>API Key</span><span class="field-key">fish_audio.api_key</span></span>
-                <input type="password" class="mono" value="fish_demo_key_8812" data-cfg="fish_audio.api_key">
+                <input type="password" class="mono" value="" placeholder="输入 Fish Audio Key" data-cfg="fish_audio.api_key">
               </label>
               <label class="field">
                 <span class="field-label"><span>配音模式</span><span class="field-key">fish_audio.mode</span></span>
@@ -1197,19 +1163,16 @@
       </div>
       <button type="button" class="xs" id="btn-close-preview-modal">关闭</button>
     </div>
-    <div class="cfg-body">
+    <div class="cfg-body" id="video-preview-body">
       <div class="ass-monitor" style="aspect-ratio:16/9;">
         <div class="ass-safe-frame"></div>
         <div class="ass-hud-top">
-          <span class="ass-hud-tag">output_sub.mp4 · 1920×1080</span>
-          <span class="ass-hud-tag">23.976 fps</span>
+          <span class="ass-hud-tag" id="preview-video-tag">未生成视频</span>
+          <span class="ass-hud-tag">1920×1080</span>
         </div>
         <div class="ass-caption-stack" style="margin-block-end:22px;">
-          <div style="color:#ffff00; font-size:21px; font-weight:700; text-shadow: 0 0 4px #000, 1px 1px 2px #000;">
-            首先，你可能注意到排在榜首的是带有高爆载荷和羸弱能量球的死从天降
-          </div>
-          <div style="color:#ffffff; font-size:16px; text-shadow: 0 0 3px #000, 1px 1px 2px #000;">
-            So, starting off, you might notice at the top here, we have DFA with explosive payload and attrition orbs.
+          <div id="preview-modal-status" style="color:#cbd5e1; font-size:14px;">
+            当前任务尚未生成成片视频（output_sub.mp4 / output_dub.mp4）
           </div>
         </div>
       </div>

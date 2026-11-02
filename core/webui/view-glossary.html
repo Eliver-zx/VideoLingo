@@ -9,22 +9,7 @@
         <span class="rail-title">领域词表</span>
       </div>
 
-      <div class="rail-list" id="domain-list-box">
-        <div class="domain-item active" data-domain="destiny2">
-          <div style="min-inline-size:0;">
-            <strong class="mono" style="font-size:var(--fs-sm); display:block;">destiny2</strong>
-            <div class="field-hint" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">8 条术语 · 4.2万词典</div>
-          </div>
-          <span class="status-pill completed">默认</span>
-        </div>
-        <div class="domain-item" data-domain="ai_ml">
-          <div style="min-inline-size:0;">
-            <strong class="mono" style="font-size:var(--fs-sm); display:block;">ai_ml</strong>
-            <div class="field-hint" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">8 条术语</div>
-          </div>
-          <span class="status-pill">可用</span>
-        </div>
-      </div>
+      <div class="rail-list" id="domain-list-box"></div>
 
       <div style="padding:12px 4px 8px; display:flex; flex-direction:column; gap:12px;">
         <label class="field">
@@ -45,7 +30,7 @@
       <section class="glossary-pane">
         <div class="subpane-bar">
           <div class="row">
-            <strong id="glossary-active-title" style="font-size:var(--fs-sm); font-weight:600;">destiny2 · 自定义术语</strong>
+            <strong id="glossary-active-title" style="font-size:var(--fs-sm); font-weight:600;">未选择领域 · 自定义术语</strong>
             <span class="field-key">terms.csv</span>
           </div>
           <div class="row">
@@ -78,13 +63,13 @@
           <div class="row">
             <strong style="font-size:var(--fs-sm); font-weight:600;">内置词典</strong>
             <span class="field-key">dict.json</span>
-            <span class="status-pill completed" id="dict-count-pill">
+            <span class="status-pill" id="dict-count-pill">
               <span class="status-dot"></span>
-              <span>42,810 词</span>
+              <span>未挂载词典</span>
             </span>
           </div>
           <div class="row">
-            <input id="dict-search-input" type="text" value="Attrition" placeholder="搜索词典…" style="inline-size:240px;">
+            <input id="dict-search-input" type="text" value="" placeholder="搜索词典…" style="inline-size:240px;">
             <button type="button" class="xs" id="btn-import-dict">导入词典</button>
           </div>
         </div>
