@@ -354,11 +354,7 @@ def combine_chunks() -> str:
     meaning_path = resolve_task_path(_3_2_SPLIT_BY_MEANING)
     with open(meaning_path, "r", encoding="utf-8") as file:
         sentences = [line.strip() for line in file if line.strip()]
-    combined_text = " ".join(sentences)
-    limit = load_key_or("summary_length", None)
-    if isinstance(limit, int) and limit > 0:
-        return combined_text[:limit]
-    return combined_text
+    return " ".join(sentences)
 
 
 def _normalize_aliases(raw_aliases: Any, src: str = "") -> list[str]:

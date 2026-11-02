@@ -57,12 +57,16 @@ def run(cmd: list[str], retries: int = 0, env: dict[str, str] | None = None) -> 
             return
         if attempt < retries:
             delay = min(20, 3 * (attempt + 1))
-            print(f"  Command failed, retrying in {delay}s ({attempt + 1}/{retries})...")
+            print(
+                f"  Command failed, retrying in {delay}s ({attempt + 1}/{retries})..."
+            )
             time.sleep(delay)
     raise subprocess.CalledProcessError(returncode, cmd)
 
 
-def pip_install(packages: list[str], retries: int = 2, extra_args: list[str] | None = None) -> None:
+def pip_install(
+    packages: list[str], retries: int = 2, extra_args: list[str] | None = None
+) -> None:
     if not packages:
         return
     cmd = [
@@ -85,7 +89,9 @@ def pip_install(packages: list[str], retries: int = 2, extra_args: list[str] | N
     run(cmd, retries=retries, env=env)
 
 
-def soft_pip_install(packages: list[str], retries: int = 1, extra_args: list[str] | None = None) -> bool:
+def soft_pip_install(
+    packages: list[str], retries: int = 1, extra_args: list[str] | None = None
+) -> bool:
     try:
         pip_install(packages, retries=retries, extra_args=extra_args)
         return True
@@ -201,8 +207,10 @@ def unsupported_platform() -> str | None:
     except ValueError:
         return None
     if major < 14:
-        return (f"Apple Silicon needs macOS 14 or newer: mlx (used by the default Qwen3-ASR engine) "
-                f"only ships macOS 14+ wheels, and this Mac runs macOS {release}.")
+        return (
+            f"Apple Silicon needs macOS 14 or newer: mlx (used by the default Qwen3-ASR engine) "
+            f"only ships macOS 14+ wheels, and this Mac runs macOS {release}."
+        )
     return None
 
 
@@ -213,9 +221,16 @@ def unsupported_platform() -> str | None:
 # This is conflict cleanup, not an install option. Windows and Linux never uninstall them.
 # Generic libraries it also pulled in (matplotlib, lightning, ...) stay installed.
 WHISPERX_ONLY_PACKAGES = (
-    "whisperx", "torchcodec", "faster-whisper", "ctranslate2",
-    "pyannote-audio", "pyannote-core", "pyannote-database", "pyannote-metrics",
-    "pyannote-pipeline", "pyannoteai-sdk",
+    "whisperx",
+    "torchcodec",
+    "faster-whisper",
+    "ctranslate2",
+    "pyannote-audio",
+    "pyannote-core",
+    "pyannote-database",
+    "pyannote-metrics",
+    "pyannote-pipeline",
+    "pyannoteai-sdk",
 )
 
 
@@ -226,6 +241,7 @@ def canonical_name(name: str) -> str:
 def required_by_other_packages(names: list[str]) -> set[str]:
     """Candidates reachable from other installed packages, including transitive dependencies."""
     from packaging.requirements import InvalidRequirement, Requirement
+
     candidates = {canonical_name(name) for name in names}
     dependencies: dict[str, set[str]] = {}
     for dist in metadata.distributions():
@@ -256,17 +272,27 @@ def required_by_other_packages(names: list[str]) -> set[str]:
 def remove_whisperx_for_mlx() -> None:
     if not apple_silicon():
         return
-    installed = [name for name in WHISPERX_ONLY_PACKAGES if package_version(name) is not None]
+    installed = [
+        name for name in WHISPERX_ONLY_PACKAGES if package_version(name) is not None
+    ]
     if not installed:
         return
     kept = required_by_other_packages(installed)
     removable = [name for name in installed if name not in kept]
-    print("  WhisperX cannot share an environment with the default MLX ASR on Apple Silicon "
-          "(huggingface-hub <1 vs >=1). Removing the WhisperX stack: " + ", ".join(removable))
+    print(
+        "  WhisperX cannot share an environment with the default MLX ASR on Apple Silicon "
+        "(huggingface-hub <1 vs >=1). Removing the WhisperX stack: "
+        + ", ".join(removable)
+    )
     if kept:
-        print("  Keeping (required by other installed packages): " + ", ".join(sorted(kept)))
-    print("  To keep using WhisperX on this Mac, create a separate environment and follow "
-          "docs/pages/docs/whisperx-manual.en-US.md. This installer will not install WhisperX again.")
+        print(
+            "  Keeping (required by other installed packages): "
+            + ", ".join(sorted(kept))
+        )
+    print(
+        "  To keep using WhisperX on this Mac, create a separate environment and follow "
+        "docs/pages/docs/whisperx-manual.en-US.md. This installer will not install WhisperX again."
+    )
     if removable:
         run([sys.executable, "-m", "pip", "uninstall", "-y", *removable])
 
@@ -275,7 +301,9 @@ def detect_nvidia_gpu() -> bool:
     if platform.system() == "Darwin":
         return False
     try:
-        result = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=10)
+        result = subprocess.run(
+            ["nvidia-smi"], capture_output=True, text=True, timeout=10
+        )
         return result.returncode == 0
     except Exception:
         return False
@@ -283,7 +311,9 @@ def detect_nvidia_gpu() -> bool:
 
 def detect_cuda_version_from_smi() -> tuple[int, int] | None:
     try:
-        result = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=10)
+        result = subprocess.run(
+            ["nvidia-smi"], capture_output=True, text=True, timeout=10
+        )
         match = re.search(r"CUDA(?: UMD)? Version:\s*(\d+)\.(\d+)", result.stdout)
         if match:
             return int(match.group(1)), int(match.group(2))
@@ -330,21 +360,50 @@ def maybe_configure_mirror(auto_mirror: bool) -> None:
 def install_torch(force: bool = False, backend: str = "auto") -> None:
     print("\n[3/6] Install PyTorch / torchaudio")
     torch_version, vision_version = torch_versions()
-    gpu = (platform.system() != "Darwin" and detect_nvidia_gpu()) if backend == "auto" else backend != "cpu"
-    builds = {(package_version(name) or "").partition("+")[2] or "cpu" for name in ("torch", "torchaudio", "torchvision")}
-    expected = {backend} if backend != "auto" else ({"cu126", "cu128"} if gpu else {"cpu"})
+    gpu = (
+        (platform.system() != "Darwin" and detect_nvidia_gpu())
+        if backend == "auto"
+        else backend != "cpu"
+    )
+    builds = {
+        (package_version(name) or "").partition("+")[2] or "cpu"
+        for name in ("torch", "torchaudio", "torchvision")
+    }
+    expected = (
+        {backend} if backend != "auto" else ({"cu126", "cu128"} if gpu else {"cpu"})
+    )
     gpu_build = len(builds) == 1 and builds <= expected
-    if not force and gpu_build and package_ok("torch", torch_version) and package_ok("torchaudio", torch_version) and package_ok("torchvision", vision_version):
-        print(f"  torch {package_version('torch')} and torchaudio {package_version('torchaudio')} already installed.")
+    if (
+        not force
+        and gpu_build
+        and package_ok("torch", torch_version)
+        and package_ok("torchaudio", torch_version)
+        and package_ok("torchvision", vision_version)
+    ):
+        print(
+            f"  torch {package_version('torch')} and torchaudio {package_version('torchaudio')} already installed."
+        )
         return
-    packages = [f"torch=={torch_version}", f"torchaudio=={torch_version}", f"torchvision=={vision_version}"]
+    packages = [
+        f"torch=={torch_version}",
+        f"torchaudio=={torch_version}",
+        f"torchvision=={vision_version}",
+    ]
     if gpu:
-        index = detect_torch_index() if backend == "auto" else f"{TORCH_INDEX}/{backend}"
+        index = (
+            detect_torch_index() if backend == "auto" else f"{TORCH_INDEX}/{backend}"
+        )
         print(f"  Using CUDA PyTorch index: {index}")
-        pip_install(packages, retries=3, extra_args=["--index-url", index, "--force-reinstall"])
+        pip_install(
+            packages, retries=3, extra_args=["--index-url", index, "--force-reinstall"]
+        )
     else:
         print("  No NVIDIA GPU detected. Installing CPU PyTorch wheels.")
-        extra = ["--index-url", f"{TORCH_INDEX}/cpu"] if platform.system() != "Darwin" else []
+        extra = (
+            ["--index-url", f"{TORCH_INDEX}/cpu"]
+            if platform.system() != "Darwin"
+            else []
+        )
         pip_install(packages, retries=3, extra_args=[*extra, "--force-reinstall"])
 
 
@@ -354,19 +413,24 @@ def install_base_requirements(force: bool = False, upgrade: bool = False) -> Non
     state = load_state()
     current_hash = requirements_hash()
     previous_hash = state.get("requirements_hash")
-    if not force and not upgrade and previous_hash == current_hash and health_check(quiet=True, require_demucs=False, check_state=False) == 0:
+    if (
+        not force
+        and not upgrade
+        and previous_hash == current_hash
+        and health_check(quiet=True, require_demucs=False, check_state=False) == 0
+    ):
         print("  Environment already matches requirements hash; skipping base install.")
         return
-    if not force and not upgrade and previous_hash is None and health_check(quiet=True, require_demucs=False, check_state=False) == 0:
+    if (
+        not force
+        and not upgrade
+        and previous_hash is None
+        and health_check(quiet=True, require_demucs=False, check_state=False) == 0
+    ):
         print("  Packages are already healthy; writing fresh install state later.")
         return
     if previous_hash and previous_hash != current_hash:
         print("  requirements.txt changed; syncing base requirements.")
-        if package_version("videolingo") is not None:
-            # The installed project metadata still lists the previous requirements
-            # (e.g. whisperx, transformers<5); pip would print a resolver ERROR against
-            # it while syncing. Re-register it first (--no-deps skips pip's conflict check).
-            refresh_project_metadata()
     pip_install(read_base_requirements(), retries=3, extra_args=["--upgrade"])
 
 
@@ -383,8 +447,14 @@ def install_spacy(force: bool = False) -> None:
 def install_demucs(force: bool = False, require: bool = False) -> None:
     print("\n[6/6] Install Demucs (optional)")
     from packaging.version import Version
+
     demucs_ver = package_version("demucs")
-    if not force and demucs_ver is not None and Version("4.1.0") <= Version(demucs_ver) < Version("5") and import_ok("demucs.api"):
+    if (
+        not force
+        and demucs_ver is not None
+        and Version("4.1.0") <= Version(demucs_ver) < Version("5")
+        and import_ok("demucs.api")
+    ):
         print(f"  demucs {demucs_ver} already installed.")
         return
     if intel_mac():
@@ -400,22 +470,15 @@ def install_demucs(force: bool = False, require: bool = False) -> None:
         raise RuntimeError("Demucs installation failed")
 
 
-def refresh_project_metadata() -> bool:
-    return soft_pip_install(["-e", str(ROOT)], retries=1, extra_args=["--no-deps"])
-
-
-def install_project_metadata() -> None:
-    print("\n[post] Register project metadata (no dependency resolution)")
-    refresh_project_metadata()
-
-
 def check_ffmpeg() -> bool:
     print("\n[post] Prepare FFmpeg and ffprobe automatically")
     try:
         configure_ffmpeg(download=True, required=True)
         print("  " + validate_ffmpeg())
     except Exception as exc:
-        print(f"  ERROR: Automatic FFmpeg setup failed: {exc}. Check your connection and rerun installer.py.")
+        print(
+            f"  ERROR: Automatic FFmpeg setup failed: {exc}. Check your connection and rerun installer.py."
+        )
         return False
     return True
 
@@ -423,9 +486,13 @@ def check_ffmpeg() -> bool:
 def whisperx_selected() -> bool:
     """A leftover optional package must not block the default Qwen install."""
     from ruamel.yaml import YAML
+
     config = YAML(typ="safe").load((ROOT / "config.yaml").read_text(encoding="utf-8"))
     whisper = config.get("whisper", {})
-    return whisper.get("runtime", "local") == "local" and whisper.get("backend", "qwen") == "whisperx"
+    return (
+        whisper.get("runtime", "local") == "local"
+        and whisper.get("backend", "qwen") == "whisperx"
+    )
 
 
 def noto_cjk_font_available() -> bool:
@@ -465,7 +532,9 @@ def install_linux_noto_fonts() -> None:
     elif shutil.which("pacman"):
         cmd = ["pacman", "-S", "--noconfirm", "noto-fonts-cjk"]
     else:
-        print("  Warning: unsupported Linux distribution; please install Noto CJK fonts manually.")
+        print(
+            "  Warning: unsupported Linux distribution; please install Noto CJK fonts manually."
+        )
         return
 
     cmd = _privileged_command(cmd)
@@ -482,8 +551,13 @@ def install_linux_noto_fonts() -> None:
         print(f"  Warning: failed to install Noto CJK fonts automatically: {exc}")
 
 
-def health_check(quiet: bool = False, require_demucs: bool = False, check_state: bool = True,
-                 torch_backend: str = "auto", quick: bool = False) -> int:
+def health_check(
+    quiet: bool = False,
+    require_demucs: bool = False,
+    check_state: bool = True,
+    torch_backend: str = "auto",
+    quick: bool = False,
+) -> int:
     errors: list[str] = []
     warnings: list[str] = []
     if sys.version_info[:2] not in ((3, 12), (3, 13)):
@@ -491,6 +565,7 @@ def health_check(quiet: bool = False, require_demucs: bool = False, check_state:
     torch_version, vision_version = torch_versions()
     try:
         from packaging.requirements import Requirement
+
         for raw in REQUIREMENTS.read_text(encoding="utf-8").splitlines():
             if not requirement_name(raw):
                 continue
@@ -499,17 +574,27 @@ def health_check(quiet: bool = False, require_demucs: bool = False, check_state:
                 continue
             installed = package_version(req.name)
             if installed is None or not req.specifier.contains(installed):
-                errors.append(f"unsatisfied requirement: {req} (installed: {installed})")
+                errors.append(
+                    f"unsatisfied requirement: {req} (installed: {installed})"
+                )
     except ImportError:
         errors.append("missing package: packaging")
     state = load_state()
     if check_state:
-        if state.get("requirements_hash") and state.get("requirements_hash") != requirements_hash():
-            errors.append("requirements changed since the last install; rerun installer.py")
+        if (
+            state.get("requirements_hash")
+            and state.get("requirements_hash") != requirements_hash()
+        ):
+            errors.append(
+                "requirements changed since the last install; rerun installer.py"
+            )
         elif not state.get("requirements_hash"):
-            errors.append("install state file is missing; rerun installer.py once to enable change detection")
+            errors.append(
+                "install state file is missing; rerun installer.py once to enable change detection"
+            )
     required = {
-        "streamlit": None,
+        "fastapi": None,
+        "uvicorn": None,
         "openai": None,
         "pandas": None,
         "torch": torch_version,
@@ -523,54 +608,92 @@ def health_check(quiet: bool = False, require_demucs: bool = False, check_state:
         if version is None:
             errors.append(f"missing package: {package}")
         elif prefix and not version.split("+")[0].startswith(prefix):
-            errors.append(f"{package} version {version} does not match expected {prefix}*")
+            errors.append(
+                f"{package} version {version} does not match expected {prefix}*"
+            )
     if require_demucs and package_version("demucs") is None:
         errors.append("missing optional package required by flag: demucs")
     elif package_version("demucs") is None:
         warnings.append("demucs is not installed; vocal separation will be unavailable")
     if platform.system() == "Linux" and not noto_cjk_font_available():
-        warnings.append("Noto CJK fonts are not installed; CJK subtitle burn-in may fail")
+        warnings.append(
+            "Noto CJK fonts are not installed; CJK subtitle burn-in may fail"
+        )
     try:
         configure_ffmpeg(required=True)
         if not errors and not quick:
             validate_ffmpeg()
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         errors.append(f"FFmpeg runtime check failed: {exc}")
-    builds = {(package_version(name) or "").partition("+")[2] or "cpu" for name in ("torch", "torchaudio", "torchvision")}
+    builds = {
+        (package_version(name) or "").partition("+")[2] or "cpu"
+        for name in ("torch", "torchaudio", "torchvision")
+    }
     if len(builds) != 1:
-        errors.append("torch, torchaudio and torchvision must use the same CPU/CUDA build")
+        errors.append(
+            "torch, torchaudio and torchvision must use the same CPU/CUDA build"
+        )
     if torch_backend == "auto":
-        if not quick and platform.system() != "Darwin" and detect_nvidia_gpu() and not builds <= {"cu126", "cu128"}:
-            errors.append("NVIDIA GPU detected: auto accepts only cu126/cu128 PyTorch builds; "
-                          f"detected builds: {', '.join(sorted(builds))}. Rerun installer.py")
+        if (
+            not quick
+            and platform.system() != "Darwin"
+            and detect_nvidia_gpu()
+            and not builds <= {"cu126", "cu128"}
+        ):
+            errors.append(
+                "NVIDIA GPU detected: auto accepts only cu126/cu128 PyTorch builds; "
+                f"detected builds: {', '.join(sorted(builds))}. Rerun installer.py"
+            )
     elif builds != {torch_backend}:
         errors.append(f"PyTorch build does not match requested {torch_backend}")
     if apple_silicon() and package_version("whisperx") is not None:
-        errors.append("whisperx is installed next to the MLX ASR stack (huggingface-hub <1 vs >=1); "
-                      "rerun installer.py to remove it and use a separate environment for WhisperX. "
-                      "The installer will not install WhisperX again; see "
-                      "docs/pages/docs/whisperx-manual.en-US.md")
+        errors.append(
+            "whisperx is installed next to the MLX ASR stack (huggingface-hub <1 vs >=1); "
+            "rerun installer.py to remove it and use a separate environment for WhisperX. "
+            "The installer will not install WhisperX again; see "
+            "docs/pages/docs/whisperx-manual.en-US.md"
+        )
     # Our WhisperX path uses CLI decoding and passes waveforms to pyannote.
     # TorchCodec's optional filename decoder need not load for this to work.
     if not errors and not quick and whisperx_selected():
         try:
             probe = subprocess.run(
-                [sys.executable, "-c", "from runtime_libraries import check_whisperx_runtime; "
-                 "check_whisperx_runtime()"],
-                cwd=ROOT, capture_output=True, text=True, timeout=60,
+                [
+                    sys.executable,
+                    "-c",
+                    "from runtime_libraries import check_whisperx_runtime; "
+                    "check_whisperx_runtime()",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=60,
             )
             if probe.returncode:
-                errors.append("WhisperX audio runtime check failed. Check the optional packages and "
-                              "managed FFmpeg installation; see docs/pages/docs/whisperx-manual.en-US.md.\n" + probe.stderr)
+                errors.append(
+                    "WhisperX audio runtime check failed. Check the optional packages and "
+                    "managed FFmpeg installation; see docs/pages/docs/whisperx-manual.en-US.md.\n"
+                    + probe.stderr
+                )
         except (OSError, subprocess.TimeoutExpired) as exc:
             errors.append(f"WhisperX audio runtime check failed: {exc}")
     if not quiet:
         print("\nEnvironment check")
-        for package in ["streamlit", "torch", "torchaudio", "spacy", qwen_asr_package(), "demucs"]:
+        for package in [
+            "fastapi",
+            "uvicorn",
+            "torch",
+            "torchaudio",
+            "spacy",
+            qwen_asr_package(),
+            "demucs",
+        ]:
             print(f"  {package}: {package_version(package) or 'missing'}")
         # WhisperX is not part of this install. Mention it only when a manual install is present.
         if package_version("whisperx"):
-            print(f"  whisperx: {package_version('whisperx')} (not part of this install)")
+            print(
+                f"  whisperx: {package_version('whisperx')} (not part of this install)"
+            )
         for warning in warnings:
             print(f"  WARN: {warning}")
         for error in errors:
@@ -584,22 +707,31 @@ def print_asr_summary() -> None:
     from ruamel.yaml.error import YAMLError
 
     try:
-        config = YAML(typ="safe").load((ROOT / "config.yaml").read_text(encoding="utf-8"))
+        config = YAML(typ="safe").load(
+            (ROOT / "config.yaml").read_text(encoding="utf-8")
+        )
         config = config if isinstance(config, dict) else {}
     except (OSError, ValueError, YAMLError):
         config = {}
     whisper = config.get("whisper") or {}
-    size = str(whisper.get("qwen_model", "1.7b")).lower() if isinstance(whisper, dict) else "1.7b"
-    model = f"Qwen3-ASR-{size.upper()}" if size in ("0.6b", "1.7b") else "Qwen3-ASR-1.7B"
+    size = (
+        str(whisper.get("qwen_model", "1.7b")).lower()
+        if isinstance(whisper, dict)
+        else "1.7b"
+    )
+    model = (
+        f"Qwen3-ASR-{size.upper()}" if size in ("0.6b", "1.7b") else "Qwen3-ASR-1.7B"
+    )
     device, precision, note = "Device information unavailable", None, None
     try:
         if apple_silicon():
             device, precision = "Apple Silicon / MLX", "8-bit"
         else:
             import torch
+
             if torch.cuda.is_available():
                 properties = torch.cuda.get_device_properties(0)
-                memory = properties.total_memory / (1024 ** 3)
+                memory = properties.total_memory / (1024**3)
                 device = f"{properties.name} ({memory:.1f} GiB)"
                 precision = "BF16" if torch.cuda.is_bf16_supported() else "FP16"
                 if round(memory) < 8:
@@ -618,11 +750,10 @@ def print_asr_summary() -> None:
         print("  " + note)
 
 
-
-def launch_streamlit() -> int:
+def launch_webui() -> int:
     env = os.environ.copy()
     env["PYTHONWARNINGS"] = "ignore"
-    return subprocess.run([sys.executable, "-m", "streamlit", "run", "st.py"], cwd=ROOT, env=env).returncode
+    return subprocess.run([sys.executable, "api.py"], cwd=ROOT, env=env).returncode
 
 
 def install_all(args: argparse.Namespace) -> int:
@@ -643,37 +774,78 @@ def install_all(args: argparse.Namespace) -> int:
     install_spacy(force=args.force)
     if not args.skip_demucs:
         install_demucs(force=args.force or args.upgrade, require=args.require_demucs)
-    install_project_metadata()
     install_linux_noto_fonts()
     ffmpeg_ok = check_ffmpeg()
-    status = health_check(require_demucs=args.require_demucs, check_state=False,
-                          torch_backend=args.torch_backend)
+    status = health_check(
+        require_demucs=args.require_demucs,
+        check_state=False,
+        torch_backend=args.torch_backend,
+    )
     if not ffmpeg_ok or status != 0:
         return 1
     save_state()
     print_asr_summary()
     if args.launch:
-        return launch_streamlit()
-    print("\nInstall complete. Start with OneKeyStart.bat or: uv run start.py")
+        return launch_webui()
+    print(
+        "\nInstall complete. Double-click Start.command (macOS) or Start.bat (Windows) to launch."
+    )
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Install or check VideoLingo dependencies")
-    parser.add_argument("--check", action="store_true", help="check environment health only")
-    parser.add_argument("--quick-check", action="store_true",
-                        help="check installed package versions, install state and FFmpeg files without runtime probes")
-    parser.add_argument("--torch-backend", choices=("auto", "cpu", "cu126", "cu128"), default="auto",
-                        help="auto-detect on hosts; select explicitly for GPU-less image builds")
+    parser = argparse.ArgumentParser(
+        description="Install or check VideoLingo dependencies"
+    )
+    parser.add_argument(
+        "--check", action="store_true", help="check environment health only"
+    )
+    parser.add_argument(
+        "--quick-check",
+        action="store_true",
+        help="check installed package versions, install state and FFmpeg files without runtime probes",
+    )
+    parser.add_argument(
+        "--torch-backend",
+        choices=("auto", "cpu", "cu126", "cu128"),
+        default="auto",
+        help="auto-detect on hosts; select explicitly for GPU-less image builds",
+    )
     parser.add_argument("--quiet", action="store_true", help="quiet check output")
-    parser.add_argument("--force", action="store_true", help="force reinstall staged packages")
-    parser.add_argument("--upgrade", action="store_true", help="refresh dependencies within requirements.txt compatibility bounds")
-    parser.add_argument("--auto-mirror", action="store_true", help="auto-select and configure a PyPI mirror")
-    parser.add_argument("--skip-demucs", action="store_true", help="skip optional Demucs install")
-    parser.add_argument("--require-demucs", action="store_true", help="fail if Demucs cannot be installed")
-    parser.add_argument("--launch", action="store_true", help="launch Streamlit after a successful install")
-    parser.add_argument("--yes", action="store_true", help="accepted for non-interactive wrappers")
-    parser.add_argument("--no-launch", action="store_true", help="compatibility alias; launching is opt-in")
+    parser.add_argument(
+        "--force", action="store_true", help="force reinstall staged packages"
+    )
+    parser.add_argument(
+        "--upgrade",
+        action="store_true",
+        help="refresh dependencies within requirements.txt compatibility bounds",
+    )
+    parser.add_argument(
+        "--auto-mirror",
+        action="store_true",
+        help="auto-select and configure a PyPI mirror",
+    )
+    parser.add_argument(
+        "--skip-demucs", action="store_true", help="skip optional Demucs install"
+    )
+    parser.add_argument(
+        "--require-demucs",
+        action="store_true",
+        help="fail if Demucs cannot be installed",
+    )
+    parser.add_argument(
+        "--launch",
+        action="store_true",
+        help="launch Streamlit after a successful install",
+    )
+    parser.add_argument(
+        "--yes", action="store_true", help="accepted for non-interactive wrappers"
+    )
+    parser.add_argument(
+        "--no-launch",
+        action="store_true",
+        help="compatibility alias; launching is opt-in",
+    )
     return parser
 
 
@@ -683,10 +855,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_launch:
         args.launch = False
     if args.quick_check:
-        return health_check(quiet=args.quiet, require_demucs=args.require_demucs,
-                            torch_backend=args.torch_backend, quick=True)
+        return health_check(
+            quiet=args.quiet,
+            require_demucs=args.require_demucs,
+            torch_backend=args.torch_backend,
+            quick=True,
+        )
     if args.check:
-        return health_check(quiet=args.quiet, require_demucs=args.require_demucs, torch_backend=args.torch_backend)
+        return health_check(
+            quiet=args.quiet,
+            require_demucs=args.require_demucs,
+            torch_backend=args.torch_backend,
+        )
     return install_all(args)
 
 

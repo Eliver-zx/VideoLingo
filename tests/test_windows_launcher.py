@@ -1,4 +1,5 @@
 """Exercise the launcher's version probes through the real Windows batch parser."""
+
 import os
 from pathlib import Path
 import re
@@ -14,8 +15,10 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.skipif(os.name != "nt", reason="Requires the Windows CMD parser")
 @pytest.mark.parametrize("branch", ["shared", "project", "conda"])
 @pytest.mark.parametrize("version,expected", [((3, 10), 1), ((3, 12), 0), ((3, 13), 1)])
-def test_batch_version_probes_with_delayed_expansion(tmp_path, branch, version, expected):
-    source = (ROOT / "OneKeyStart.bat").read_text(encoding="utf-8")
+def test_batch_version_probes_with_delayed_expansion(
+    tmp_path, branch, version, expected
+):
+    source = (ROOT / "Start.bat").read_text(encoding="utf-8")
     probes = re.findall(r'-c "([^"]*sys\.version_info[^\"]*)"', source)
     assert len(probes) == 3
     probe = dict(zip(("shared", "project", "conda"), probes))[branch]
@@ -34,7 +37,9 @@ def test_batch_version_probes_with_delayed_expansion(tmp_path, branch, version, 
     )
     result = subprocess.run(
         [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", str(script)],
-        capture_output=True, text=True, timeout=15,
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert result.returncode == expected, result.stdout + result.stderr
     assert not result.stderr, result.stderr

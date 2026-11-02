@@ -1,4 +1,5 @@
 """The single processing plan used by the Web UI and API."""
+
 from functools import partial
 from importlib import import_module
 import json
@@ -21,23 +22,37 @@ VALID_TTS_METHODS = (
     "openai_tts",
     "sf_fish_tts",
     "fish_audio",
-    "f5tts",
     "edge_tts",
-    "gpt_sovits",
     "custom_tts",
     "sf_cosyvoice2",
 )
 
 # Labels remain translation keys; only the UI translates them.
 SUBTITLE_STEPS = [
-    ("Word-level transcription and alignment", ("_2_import_subtitles.import_subtitles", "_2_asr.transcribe")),
-    ("Sentence segmentation using NLP and LLM", (
-        "_3_1_split_nlp.split_by_spacy", "_3_2_split_meaning.split_sentences_by_meaning")),
-    ("Summarization and multi-step translation", (
-        "_4_1_summarize.get_summary", "pipeline.review_terminology", "_4_2_translate.translate_all",
-        "pipeline.review_translation")),
-    ("Cutting and aligning long subtitles", (
-        "_5_split_sub.split_for_sub_main", "_6_gen_sub.align_timestamp_main")),
+    (
+        "Word-level transcription and alignment",
+        ("_2_import_subtitles.import_subtitles", "_2_asr.transcribe"),
+    ),
+    (
+        "Sentence segmentation using NLP and LLM",
+        (
+            "_3_1_split_nlp.split_by_spacy",
+            "_3_2_split_meaning.split_sentences_by_meaning",
+        ),
+    ),
+    (
+        "Summarization and multi-step translation",
+        (
+            "_4_1_summarize.get_summary",
+            "pipeline.review_terminology",
+            "_4_2_translate.translate_all",
+            "pipeline.review_translation",
+        ),
+    ),
+    (
+        "Cutting and aligning long subtitles",
+        ("_5_split_sub.split_for_sub_main", "_6_gen_sub.align_timestamp_main"),
+    ),
     ("Merging subtitles into the video", ("_7_sub_into_vid.merge_subtitles_to_video",)),
 ]
 # Only the source subtitles: no translation and no video
@@ -45,9 +60,14 @@ TRANSCRIBE_STEPS = SUBTITLE_STEPS[:2] + [
     ("Generate subtitle files", ("_6_gen_sub.gen_source_subtitles",)),
 ]
 DUBBING_STEPS = [
-    ("Generate audio tasks and chunks", (
-        "pipeline.check_tts_method", "_8_1_audio_task.gen_audio_task_main",
-        "_8_2_dub_chunks.gen_dub_chunks")),
+    (
+        "Generate audio tasks and chunks",
+        (
+            "pipeline.check_tts_method",
+            "_8_1_audio_task.gen_audio_task_main",
+            "_8_2_dub_chunks.gen_dub_chunks",
+        ),
+    ),
     ("Extract reference audio", ("_9_refer_audio.extract_refer_audio_main",)),
     ("Generate and merge audio files", ("_10_gen_audio.gen_audio",)),
     ("Merge full audio", ("_11_merge_audio.merge_full_audio",)),
@@ -73,7 +93,9 @@ def terminology_error():
     if not isinstance(terms, list):
         return "`terms` must be a list"
     for term in terms:
-        if not isinstance(term, dict) or not all(isinstance(term.get(key), str) for key in ("src", "tgt", "note")):
+        if not isinstance(term, dict) or not all(
+            isinstance(term.get(key), str) for key in ("src", "tgt", "note")
+        ):
             return f"Each term needs the texts `src`, `tgt` and `note`: {term}"
     return None
 
@@ -98,9 +120,13 @@ def review_terminology():
 def read_translation():
     """The source lines and the translated lines of the translation results, empty cells as ''."""
     import pandas as pd
+
     trans_path = resolve_task_path(_4_2_TRANSLATION)
     df = pd.read_excel(trans_path)
-    return [["" if pd.isna(value) else str(value).strip() for value in df[column]] for column in ("Source", "Translation")]
+    return [
+        ["" if pd.isna(value) else str(value).strip() for value in df[column]]
+        for column in ("Source", "Translation")
+    ]
 
 
 def translation_error(source, translation):
@@ -121,7 +147,11 @@ def review_translation():
     """Optional checkpoint `pause_after_translate`: the task waits until the user resumes it."""
     runner = TaskRunner._current
     split_sub_path = Path(resolve_task_path(_5_SPLIT_SUB))
-    if runner is None or not load_key_or("pause_after_translate", False) or split_sub_path.exists():
+    if (
+        runner is None
+        or not load_key_or("pause_after_translate", False)
+        or split_sub_path.exists()
+    ):
         return
     source, translation = read_translation()
     message = REVIEW_TRANSLATION
@@ -139,8 +169,10 @@ def check_tts_method():
     """The method of an older config.yaml may be gone, such as azure_tts."""
     method = load_key("tts_method")
     if method not in VALID_TTS_METHODS:
-        raise ValueError(f"The dubbing method `{method}` is not available any more. "
-                         "Select another one in the dubbing settings and retry.")
+        raise ValueError(
+            f"The dubbing method `{method}` is not available any more. "
+            "Select another one in the dubbing settings and retry."
+        )
 
 
 def truncated_dubbing_lines():
@@ -157,7 +189,7 @@ def _execute(calls, clear_marker=None):
         Path(resolve_task_path(clear_marker)).unlink(missing_ok=True)
     for call in calls:
         TaskRunner.check_cancel()
-        module, function = call.split('.')
+        module, function = call.split(".")
         getattr(import_module(f"core.{module}"), function)()
 
 
@@ -181,7 +213,9 @@ def get_steps(stage="subtitles", dubbing=False):
         stages.append((DUBBING_STEPS, _AUDIO_DONE_MARKER, "Finalize dubbing outputs"))
     steps = []
     for definitions, marker, final_label in stages:
-        steps.extend((label, partial(_execute, calls, marker if i == 0 else None))
-                     for i, (label, calls) in enumerate(definitions))
+        steps.extend(
+            (label, partial(_execute, calls, marker if i == 0 else None))
+            for i, (label, calls) in enumerate(definitions)
+        )
         steps.append((final_label, partial(_finish, marker)))
     return steps

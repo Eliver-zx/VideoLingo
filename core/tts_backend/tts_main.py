@@ -3,7 +3,6 @@ import re
 from pydub import AudioSegment
 
 from core.asr_backend.audio_preprocess import get_audio_duration
-from core.tts_backend.gpt_sovits_tts import gpt_sovits_tts_for_videolingo
 from core.tts_backend.sf_fishtts import siliconflow_fish_tts_for_videolingo
 from core.tts_backend.openai_tts import openai_tts
 from core.tts_backend.fish_audio_tts import fish_audio_tts
@@ -11,7 +10,6 @@ from core.tts_backend.edge_tts import edge_tts
 from core.tts_backend.sf_cosyvoice2 import cosyvoice_tts_for_videolingo
 from core.tts_backend.custom_tts import custom_tts
 from core.prompts import get_correct_text_prompt
-from core.tts_backend._302_f5tts import f5_tts_for_videolingo
 from core.utils import ask_gpt, load_key, rprint
 
 
@@ -74,8 +72,6 @@ def tts_main(text, save_as, number, task_df):
                     text = correct_text["text"].strip()
             if TTS_METHOD == "openai_tts":
                 openai_tts(text, save_as)
-            elif TTS_METHOD == "gpt_sovits":
-                gpt_sovits_tts_for_videolingo(text, save_as, number, task_df)
             elif TTS_METHOD == "fish_audio":
                 fish_audio_tts(text, save_as, number, task_df)
             elif TTS_METHOD == "sf_fish_tts":
@@ -86,8 +82,6 @@ def tts_main(text, save_as, number, task_df):
                 custom_tts(text, save_as)
             elif TTS_METHOD == "sf_cosyvoice2":
                 cosyvoice_tts_for_videolingo(text, save_as, number, task_df)
-            elif TTS_METHOD == "f5tts":
-                f5_tts_for_videolingo(text, save_as, number, task_df)
 
             # Check generated audio duration
             duration = get_audio_duration(save_as)

@@ -149,6 +149,7 @@ def _translation_cache_fingerprint() -> str:
     h = hashlib.sha256()
     for key in (
         "api.model",
+        "api.reasoning_effort",
         "target_language",
         "translation_style",
         "reflect_translate",

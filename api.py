@@ -775,6 +775,7 @@ class LLMProbeRequest(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     model: str | None = None
+    reasoning_effort: str | None = None
 
 
 class DetectMaiRegionRequest(BaseModel):
@@ -868,6 +869,8 @@ def check_llm_api(request: LLMProbeRequest):
         overrides["api.key"] = request.api_key.strip()
     if request.model is not None and request.model.strip():
         overrides["api.model"] = request.model.strip()
+    if request.reasoning_effort is not None and request.reasoning_effort.strip():
+        overrides["api.reasoning_effort"] = request.reasoning_effort.strip()
 
     try:
         fn = getattr(ask_gpt, "__wrapped__", ask_gpt)

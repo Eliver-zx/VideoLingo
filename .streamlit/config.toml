@@ -1,6 +1,0 @@
-[server]
-maxUploadSize = 4096
-fileWatcherType = "none"
-
-[client]
-toolbarMode = "viewer"

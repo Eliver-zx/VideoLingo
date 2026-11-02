@@ -6,14 +6,13 @@
 
 ## ======================== Basic Settings ======================== ##
 
-display_language: "zh-CN"
-
 # API settings
 api:
   key: 'YOUR_API_KEY'
   base_url: 'https://api.openlux.ai/v1'
   model: 'gpt-6-luna'
   llm_support_json: false
+  reasoning_effort: 'none'
 # *Number of LLM multi-threaded accesses, set to 1 if using local LLM
 max_workers: 4
 
@@ -23,7 +22,7 @@ target_language: '简体中文'
 # Whether to use vocal separation before transcription
 demucs: false
 # Vocal separation model [htdemucs, mdx, scnet, mel_band_roformer]
-vocal_separation_model: 'htdemucs'
+vocal_separation_model: 'scnet'
 
 whisper:
   # Recognition language ISO 639-1, or "auto"
@@ -85,7 +84,7 @@ subtitle:
   # *Translated subtitles are slightly larger than source subtitles, affecting the reference length for subtitle splitting
   target_multiplier: 1.3
   # *Subtitles burned into the subtitle video and into the dubbed video [bilingual, translation, source]
-  sub_video_subtitles: 'bilingual'
+  sub_video_subtitles: 'translation'
   dub_video_subtitles: 'translation'
   # *Style of the burned-in subtitles. Colors are &HBBGGRR, &HAABBGGRR (AA is the transparency) or #RRGGBB. An empty font_name uses the default font of the system
   style:
@@ -114,13 +113,13 @@ translation_style: ''
 glossary_domain: 'destiny2'
 
 # *Whether to pause after extracting professional terms and before translation, allowing users to manually adjust the terminology table output\log\terminology.json
-pause_before_translate: false
+pause_before_translate: true
 
 # *Whether to pause after the translation and before the subtitles are generated, allowing users to manually adjust the Translation column of output\log\translation_results.xlsx
 pause_after_translate: false
 
 ## ======================== Dubbing Settings ======================== ##
-# TTS selection [edge_tts, openai_tts, fish_audio, f5tts, sf_fish_tts, sf_cosyvoice2, gpt_sovits, custom_tts]
+# TTS selection [edge_tts, openai_tts, fish_audio, sf_fish_tts, sf_cosyvoice2, custom_tts]
 tts_method: 'edge_tts'
 
 # SiliconFlow FishTTS
@@ -137,7 +136,7 @@ sf_fish_tts:
 
 # OpenAI TTS: the speech endpoint of OpenLux, or of another service with the API of OpenAI
 openai_tts:
-  api_key: 'YOUR_302_API_KEY'
+  api_key: 'YOUR_API_KEY'
   voice: 'alloy'
   # *Base URL and model of the speech endpoint
   base_url: 'https://api.openlux.ai/v1'
@@ -164,15 +163,6 @@ sf_cosyvoice2:
 # Edge TTS configuration
 edge_tts:
   voice: 'zh-CN-XiaoxiaoNeural'
-
-# SoVITS configuration
-gpt_sovits:
-  character: 'Huanyuv2'
-  refer_mode: 3
-
-# F5-TTS, 302.ai API only: the voice of the video is cloned
-f5tts:
-  302_api: 'YOUR_302_API_KEY'
 
 # *Audio speed range
 speed_factor:
@@ -229,3 +219,9 @@ language_split_with_space:
 language_split_without_space:
 - 'zh'
 - 'ja'
+display_language: zh-CN
+gpt_sovits:
+  character: Huanyuv2
+  refer_mode: 3
+f5tts:
+  302_api: ''

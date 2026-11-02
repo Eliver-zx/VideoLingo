@@ -90,8 +90,13 @@
               </select>
             </label>
             <label class="field">
-              <span class="field-label"><span>上下文长度</span><span class="field-key">summary_length</span></span>
-              <input type="number" class="mono" step="500" value="8000" data-cfg="summary_length">
+              <span class="field-label"><span>思考强度</span><span class="field-key">api.reasoning_effort</span></span>
+              <select data-cfg="api.reasoning_effort">
+                <option value="none" selected>关 (不思考)</option>
+                <option value="low">低 (Low)</option>
+                <option value="medium">中 (Medium)</option>
+                <option value="high">高 (High)</option>
+              </select>
             </label>
           </div>
 

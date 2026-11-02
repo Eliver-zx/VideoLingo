@@ -94,12 +94,36 @@ MODELS = {
 
 # ISO 639-1 (whisper.language / detected_language) <-> Qwen3-ASR language names.
 ISO_TO_QWEN = {
-    "zh": "Chinese", "en": "English", "yue": "Cantonese", "ar": "Arabic", "de": "German",
-    "fr": "French", "es": "Spanish", "pt": "Portuguese", "id": "Indonesian", "it": "Italian",
-    "ko": "Korean", "ru": "Russian", "th": "Thai", "vi": "Vietnamese", "ja": "Japanese",
-    "tr": "Turkish", "hi": "Hindi", "ms": "Malay", "nl": "Dutch", "sv": "Swedish",
-    "da": "Danish", "fi": "Finnish", "pl": "Polish", "cs": "Czech", "fil": "Filipino",
-    "fa": "Persian", "el": "Greek", "ro": "Romanian", "hu": "Hungarian", "mk": "Macedonian",
+    "zh": "Chinese",
+    "en": "English",
+    "yue": "Cantonese",
+    "ar": "Arabic",
+    "de": "German",
+    "fr": "French",
+    "es": "Spanish",
+    "pt": "Portuguese",
+    "id": "Indonesian",
+    "it": "Italian",
+    "ko": "Korean",
+    "ru": "Russian",
+    "th": "Thai",
+    "vi": "Vietnamese",
+    "ja": "Japanese",
+    "tr": "Turkish",
+    "hi": "Hindi",
+    "ms": "Malay",
+    "nl": "Dutch",
+    "sv": "Swedish",
+    "da": "Danish",
+    "fi": "Finnish",
+    "pl": "Polish",
+    "cs": "Czech",
+    "fil": "Filipino",
+    "fa": "Persian",
+    "el": "Greek",
+    "ro": "Romanian",
+    "hu": "Hungarian",
+    "mk": "Macedonian",
 }
 QWEN_TO_ISO = {name: code for code, name in ISO_TO_QWEN.items()}
 # Downstream splitting/joining only knows "zh"; Cantonese is written in Chinese characters.
@@ -109,6 +133,7 @@ QWEN_TO_ISO["Cantonese"] = "zh"
 # ------------------------------------------------------------------
 # Configuration
 # ------------------------------------------------------------------
+
 
 def _apple_silicon():
     return platform.system() == "Darwin" and platform.machine() == "arm64"
@@ -129,10 +154,14 @@ def resolve_engine(requested=None):
     """auto -> MLX on Apple Silicon (qwen-asr only if it is what this environment has), else transformers."""
     engine = str(requested or load_key_or("whisper.qwen_engine", "auto")).lower()
     if engine not in ("auto", "mlx", "transformers"):
-        raise ValueError(f"whisper.qwen_engine must be 'auto', 'mlx' or 'transformers', got {engine!r}")
+        raise ValueError(
+            f"whisper.qwen_engine must be 'auto', 'mlx' or 'transformers', got {engine!r}"
+        )
     if engine == "auto":
         # Apple Silicon requirements install mlx-audio, not qwen-asr; point a broken install back to it.
-        mlx = _apple_silicon() and (_installed("mlx_audio") or not _installed("qwen_asr"))
+        mlx = _apple_silicon() and (
+            _installed("mlx_audio") or not _installed("qwen_asr")
+        )
         engine = "mlx" if mlx else "transformers"
     module = "mlx_audio" if engine == "mlx" else "qwen_asr"
     if not _installed(module):
@@ -147,12 +176,19 @@ def resolve_engine(requested=None):
 
 
 def _model_source(repo_id):
-    """Prefer a complete local copy in model_dir (e.g. _model_cache/Qwen3-ASR-1.7B); else the HF cache/Hub."""
+    """Ensure a complete local copy in model_dir (e.g. _model_cache/Qwen3-ASR-1.7B), downloading into it if missing."""
     local = Path(load_key("model_dir")) / repo_id.split("/")[-1]
     if (local / "config.json").is_file():
         rprint(f"[green]Using local Qwen model: {local.resolve()}[/green]")
         return str(local.resolve())
-    return repo_id
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        return repo_id
+    local.mkdir(parents=True, exist_ok=True)
+    rprint(f"[cyan]⬇️ Downloading {repo_id} into {local.resolve()} ...[/cyan]")
+    snapshot_download(repo_id=repo_id, local_dir=str(local.resolve()))
+    return str(local.resolve())
 
 
 def qwen_language(language):
@@ -160,7 +196,9 @@ def qwen_language(language):
     if not language or language == "auto":
         return None
     if language not in ISO_TO_QWEN:
-        raise ValueError(f"Qwen3-ASR does not support language '{language}'. Supported: {sorted(ISO_TO_QWEN)}")
+        raise ValueError(
+            f"Qwen3-ASR does not support language '{language}'. Supported: {sorted(ISO_TO_QWEN)}"
+        )
     return ISO_TO_QWEN[language]
 
 
@@ -183,17 +221,37 @@ def iso_language(name):
 # Audio
 # ------------------------------------------------------------------
 
+
 def load_audio_segment(path, start, end):
     """Decode [start, end) to 16 kHz mono float32 with the FFmpeg CLI.
 
     librosa.load deadlocks inside Streamlit's ScriptRunner thread (see whisperX_local).
     """
-    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-ss", str(start), "-i", str(path),
-           "-t", str(end - start), "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "f32le", "pipe:1"]
+    cmd = [
+        "ffmpeg",
+        "-nostdin",
+        "-v",
+        "error",
+        "-ss",
+        str(start),
+        "-i",
+        str(path),
+        "-t",
+        str(end - start),
+        "-ac",
+        "1",
+        "-ar",
+        str(SAMPLE_RATE),
+        "-f",
+        "f32le",
+        "pipe:1",
+    ]
     proc = subprocess.run(cmd, capture_output=True)
     if proc.returncode:
         stderr = proc.stderr.decode("utf-8", "replace").strip()
-        raise RuntimeError(f"FFmpeg could not decode {path} ({start}-{end}s): {stderr or f'exit code {proc.returncode}'}")
+        raise RuntimeError(
+            f"FFmpeg could not decode {path} ({start}-{end}s): {stderr or f'exit code {proc.returncode}'}"
+        )
     return np.frombuffer(proc.stdout, dtype=np.float32).copy()
 
 
@@ -208,7 +266,12 @@ def match_length(wav, length):
     return np.concatenate([wav, np.zeros(length - len(wav), dtype=wav.dtype)])
 
 
-def split_windows(wav, sr=SAMPLE_RATE, window_seconds=WINDOW_SECONDS, search_seconds=CUT_SEARCH_SECONDS):
+def split_windows(
+    wav,
+    sr=SAMPLE_RATE,
+    window_seconds=WINDOW_SECONDS,
+    search_seconds=CUT_SEARCH_SECONDS,
+):
     """Split samples into contiguous (start, end) windows of at most window_seconds, cut at low energy."""
     total, max_len = len(wav), int(window_seconds * sr)
     search, frame = int(search_seconds * sr), max(1, int(0.1 * sr))
@@ -216,7 +279,9 @@ def split_windows(wav, sr=SAMPLE_RATE, window_seconds=WINDOW_SECONDS, search_sec
     while total - start > max_len:
         right = start + max_len
         left = max(start + 1, right - search)
-        energy = np.convolve(np.abs(wav[left:right]), np.ones(frame, dtype=np.float32), mode="valid")
+        energy = np.convolve(
+            np.abs(wav[left:right]), np.ones(frame, dtype=np.float32), mode="valid"
+        )
         cut = left + int(np.argmin(energy)) + frame // 2 if len(energy) else right
         windows.append((start, cut))
         start = cut
@@ -228,7 +293,10 @@ def split_windows(wav, sr=SAMPLE_RATE, window_seconds=WINDOW_SECONDS, search_sec
 # Language probes and degenerate output
 # ------------------------------------------------------------------
 
-def probe_ranges(length, sr=SAMPLE_RATE, probe_seconds=PROBE_SECONDS, count=PROBES_PER_WINDOW):
+
+def probe_ranges(
+    length, sr=SAMPLE_RATE, probe_seconds=PROBE_SECONDS, count=PROBES_PER_WINDOW
+):
     """Up to `count` probe clips of probe_seconds spread evenly over a window of `length` samples."""
     probe = int(probe_seconds * sr)
     if length <= probe * 3 // 2:
@@ -251,7 +319,9 @@ def is_repetitive(text):
     norm = _normalized(text)
     if len(norm) < REPEAT_MIN_CHARS:
         return False
-    longest = max((m.end() - m.start() for m in _REPEATED_UNIT.finditer(norm)), default=0)
+    longest = max(
+        (m.end() - m.start() for m in _REPEATED_UNIT.finditer(norm)), default=0
+    )
     return longest >= REPEAT_COVERAGE * len(norm)
 
 
@@ -287,14 +357,19 @@ def token_budget(seconds):
 
 
 def probe_token_budget(seconds):
-    return min(token_budget(seconds), PROBE_TOKEN_MARGIN + math.ceil(seconds * PROBE_TOKENS_PER_SECOND))
+    return min(
+        token_budget(seconds),
+        PROBE_TOKEN_MARGIN + math.ceil(seconds * PROBE_TOKENS_PER_SECOND),
+    )
 
 
 def probe_window(run, raw, a, b, seconds=PROBE_SECONDS, count=PROBES_PER_WINDOW):
     """Auto-language probe clips of raw[a:b] -> ([(language, text)] usable for voting, rejected count)."""
     probes, rejected = [], 0
     for pa, pb in probe_ranges(b - a, probe_seconds=seconds, count=count):
-        lang, text = run(raw[a + pa:a + pb], None, probe_token_budget((pb - pa) / SAMPLE_RATE))
+        lang, text = run(
+            raw[a + pa : a + pb], None, probe_token_budget((pb - pa) / SAMPLE_RATE)
+        )
         name = primary_language(lang)
         if not text:
             continue
@@ -317,19 +392,33 @@ def plan_languages(run, raw, windows):
     if overall is None and rejected:
         # Speech was heard but every probe looped or had no supported language: listening
         # without a language would repeat the failure, so try more, shorter clips first.
-        rprint(f"[yellow]⚠️ All {rejected} language probe(s) were unusable; probing again with "
-               f"{REPROBE_SECONDS} s clips...[/yellow]")
-        per_window = [probe_window(run, raw, a, b, REPROBE_SECONDS, REPROBES_PER_WINDOW)[0] for a, b in windows]
+        rprint(
+            f"[yellow]⚠️ All {rejected} language probe(s) were unusable; probing again with "
+            f"{REPROBE_SECONDS} s clips...[/yellow]"
+        )
+        per_window = [
+            probe_window(run, raw, a, b, REPROBE_SECONDS, REPROBES_PER_WINDOW)[0]
+            for a, b in windows
+        ]
         overall = _vote([probe for probes in per_window for probe in probes])
         if overall is None:
-            raise ValueError("Qwen3-ASR could not determine the language: every probe clip looped or "
-                             "returned an unsupported language. Set the recognition language explicitly.")
+            raise ValueError(
+                "Qwen3-ASR could not determine the language: every probe clip looped or "
+                "returned an unsupported language. Set the recognition language explicitly."
+            )
     plan = []
     for (a, b), probes in zip(windows, per_window):
         # A window whose probes heard nothing (e.g. music) follows the rest of the segment.
         language = _vote(probes) or overall
-        votes = ", ".join(f"{name}×{n}" for name, n in Counter(name for name, _ in probes).items()) or "none"
-        rprint(f"[cyan]🌐 {a / SAMPLE_RATE:.1f}-{b / SAMPLE_RATE:.1f}s language: {language or 'auto'} (probes: {votes})[/cyan]")
+        votes = (
+            ", ".join(
+                f"{name}×{n}" for name, n in Counter(name for name, _ in probes).items()
+            )
+            or "none"
+        )
+        rprint(
+            f"[cyan]🌐 {a / SAMPLE_RATE:.1f}-{b / SAMPLE_RATE:.1f}s language: {language or 'auto'} (probes: {votes})[/cyan]"
+        )
         plan.append((language, probes))
     return plan
 
@@ -345,26 +434,51 @@ def missed_speech(text, spoken):
 
 # Scripts a transcript in each language is written in. Other languages Qwen3-ASR knows use Latin.
 EXPECTED_SCRIPTS = {
-    "zh": {"Han"}, "yue": {"Han"}, "ja": {"Han", "Kana"}, "ko": {"Hangul"},
-    "ru": {"Cyrillic"}, "mk": {"Cyrillic"}, "el": {"Greek"}, "ar": {"Arabic"}, "fa": {"Arabic"},
-    "hi": {"Devanagari"}, "th": {"Thai"},
+    "zh": {"Han"},
+    "yue": {"Han"},
+    "ja": {"Han", "Kana"},
+    "ko": {"Hangul"},
+    "ru": {"Cyrillic"},
+    "mk": {"Cyrillic"},
+    "el": {"Greek"},
+    "ar": {"Arabic"},
+    "fa": {"Arabic"},
+    "hi": {"Devanagari"},
+    "th": {"Thai"},
 }
-_SCRIPT_PREFIXES = (("CJK", "Han"), ("IDEOGRAPHIC", "Han"), ("HIRAGANA", "Kana"), ("KATAKANA", "Kana"),
-                    ("HALFWIDTH KATAKANA", "Kana"), ("HANGUL", "Hangul"), ("HALFWIDTH HANGUL", "Hangul"),
-                    ("LATIN", "Latin"), ("FULLWIDTH LATIN", "Latin"), ("CYRILLIC", "Cyrillic"), ("GREEK", "Greek"),
-                    ("ARABIC", "Arabic"), ("DEVANAGARI", "Devanagari"), ("THAI", "Thai"))
+_SCRIPT_PREFIXES = (
+    ("CJK", "Han"),
+    ("IDEOGRAPHIC", "Han"),
+    ("HIRAGANA", "Kana"),
+    ("KATAKANA", "Kana"),
+    ("HALFWIDTH KATAKANA", "Kana"),
+    ("HANGUL", "Hangul"),
+    ("HALFWIDTH HANGUL", "Hangul"),
+    ("LATIN", "Latin"),
+    ("FULLWIDTH LATIN", "Latin"),
+    ("CYRILLIC", "Cyrillic"),
+    ("GREEK", "Greek"),
+    ("ARABIC", "Arabic"),
+    ("DEVANAGARI", "Devanagari"),
+    ("THAI", "Thai"),
+)
 # One CJK character is about a syllable, roughly three Latin letters.
 _SCRIPT_WEIGHT = {"Han": 3, "Kana": 3, "Hangul": 3}
 # Conservative: only near-total mismatches, on enough text. zh with plenty of English words,
 # en with a few CJK names, or ja written with many kanji stay well inside these limits.
 SCRIPT_MIN_WEIGHT = 100
-SCRIPT_MIN_SHARE = 0.2      # expected scripts must be at least 20% of the weighted letters
-JA_MIN_KANA_SHARE = 0.05    # Japanese without kana (<5% of CJK letters) is Chinese
-ZH_MAX_KANA_SHARE = 0.2     # "Chinese" with over 20% kana is Japanese
+SCRIPT_MIN_SHARE = 0.2  # expected scripts must be at least 20% of the weighted letters
+JA_MIN_KANA_SHARE = 0.05  # Japanese without kana (<5% of CJK letters) is Chinese
+ZH_MAX_KANA_SHARE = 0.2  # "Chinese" with over 20% kana is Japanese
 # Per-window check right after each forced window (fail on the first window instead of after
 # the whole segment). A single window can legitimately be mostly another script (an English
 # clip inside a Chinese video), so it only fails on near-total mismatches with plenty of text.
-WINDOW_SCRIPT_LIMITS = {"min_weight": 300, "min_share": 0.05, "ja_min_kana": 0.02, "zh_max_kana": 0.5}
+WINDOW_SCRIPT_LIMITS = {
+    "min_weight": 300,
+    "min_share": 0.05,
+    "ja_min_kana": 0.02,
+    "zh_max_kana": 0.5,
+}
 
 
 def script_counts(text):
@@ -385,11 +499,19 @@ def script_counts(text):
     return counts
 
 
-def script_mismatch(text, iso, min_weight=SCRIPT_MIN_WEIGHT, min_share=SCRIPT_MIN_SHARE,
-                    ja_min_kana=JA_MIN_KANA_SHARE, zh_max_kana=ZH_MAX_KANA_SHARE):
+def script_mismatch(
+    text,
+    iso,
+    min_weight=SCRIPT_MIN_WEIGHT,
+    min_share=SCRIPT_MIN_SHARE,
+    ja_min_kana=JA_MIN_KANA_SHARE,
+    zh_max_kana=ZH_MAX_KANA_SHARE,
+):
     """Why a transcript's writing system does not fit the selected language, or None (text only)."""
     counts = script_counts(text)
-    weighted = {script: n * _SCRIPT_WEIGHT.get(script, 1) for script, n in counts.items()}
+    weighted = {
+        script: n * _SCRIPT_WEIGHT.get(script, 1) for script, n in counts.items()
+    }
     total = sum(weighted.values())
     if total < min_weight:
         return None
@@ -411,7 +533,9 @@ def script_mismatch(text, iso, min_weight=SCRIPT_MIN_WEIGHT, min_share=SCRIPT_MI
 def probe_mismatch(probes, language):
     """The language auto-detected probes heard instead of the selected one, or None."""
     reference = sum(len(_normalized(text)) for _, text in probes)
-    if reference < PROBE_MIN_CHARS or any(iso_language(name) == iso_language(language) for name, _ in probes):
+    if reference < PROBE_MIN_CHARS or any(
+        iso_language(name) == iso_language(language) for name, _ in probes
+    ):
         return None
     return _vote(probes)
 
@@ -419,7 +543,8 @@ def probe_mismatch(probes, language):
 def language_mismatch_error(span, language, reason):
     return ValueError(
         f"Qwen3-ASR output for {span}: the selected recognition language ({language}) may not match the audio "
-        f"({reason}). Use auto, or switch the Qwen3-ASR model size.")
+        f"({reason}). Use auto, or switch the Qwen3-ASR model size."
+    )
 
 
 def transcribe_window(run, raw, a, b, language, probes=None, offset=0.0, forced=False):
@@ -456,31 +581,46 @@ def transcribe_window(run, raw, a, b, language, probes=None, offset=0.0, forced=
         heard_instead = probe_mismatch(listen(), language)
         if heard_instead:
             raise language_mismatch_error(
-                span, language, f"{reason}; the probe clips sound like {heard_instead}")
-    rprint(f"[yellow]⚠️ Qwen3-ASR output for {span} looks degenerate ({reason}); "
-           f"retrying in {RETRY_WINDOW_SECONDS} s windows...[/yellow]")
+                span, language, f"{reason}; the probe clips sound like {heard_instead}"
+            )
+    rprint(
+        f"[yellow]⚠️ Qwen3-ASR output for {span} looks degenerate ({reason}); "
+        f"retrying in {RETRY_WINDOW_SECONDS} s windows...[/yellow]"
+    )
     pieces = []
-    parts = split_windows(raw[a:b], window_seconds=RETRY_WINDOW_SECONDS, search_seconds=RETRY_SEARCH_SECONDS)
+    parts = split_windows(
+        raw[a:b],
+        window_seconds=RETRY_WINDOW_SECONDS,
+        search_seconds=RETRY_SEARCH_SECONDS,
+    )
     for sa, sb in parts:
         if sb - sa >= int(MIN_WINDOW_SECONDS * SAMPLE_RATE):
-            sub_lang, sub_text = run(raw[a + sa:a + sb], language)
+            sub_lang, sub_text = run(raw[a + sa : a + sb], language)
             pieces.append((a + sa, a + sb, sub_lang, sub_text))
-    reason = next((degeneration(t) for *_, t in pieces if degeneration(t)), None) \
-        or check(" ".join(t for *_, t in pieces))
+    reason = next(
+        (degeneration(t) for *_, t in pieces if degeneration(t)), None
+    ) or check(" ".join(t for *_, t in pieces))
     if reason:
         if forced:
-            advice = (f"The selected recognition language ({language}) may not match the audio: "
-                      "try auto, or the other Qwen3-ASR model size.")
+            advice = (
+                f"The selected recognition language ({language}) may not match the audio: "
+                "try auto, or the other Qwen3-ASR model size."
+            )
         else:
-            advice = ("Set the recognition language explicitly instead of auto, try the other "
-                      "Qwen3-ASR model size, or check the audio.")
-        raise ValueError(f"Qwen3-ASR output for {span} is still degenerate after retrying ({reason}). {advice}")
+            advice = (
+                "Set the recognition language explicitly instead of auto, try the other "
+                "Qwen3-ASR model size, or check the audio."
+            )
+        raise ValueError(
+            f"Qwen3-ASR output for {span} is still degenerate after retrying ({reason}). {advice}"
+        )
     return pieces
 
 
 # ------------------------------------------------------------------
 # Words: restore punctuation that the aligner strips
 # ------------------------------------------------------------------
+
 
 def _is_token_char(ch):
     # Qwen3ForceAlignProcessor keeps letters, numbers and apostrophes only.
@@ -496,6 +636,7 @@ def attach_words(text, items, offset=0.0, limit=None):
     Times are clamped to [0, limit] (the clip length): text longer than the audio, e.g. a
     window the model translated, made the aligner return times past the end of the audio.
     """
+
     def clamp(value):
         value = max(0.0, float(value))
         return min(value, limit) if limit is not None else value
@@ -536,12 +677,23 @@ def attach_words(text, items, offset=0.0, limit=None):
             if len(surface) > MAX_WORD_LENGTH:
                 surface = token
             start, end = clamp(start), clamp(end)
-            words.append({"word": surface, "start": round(offset + start, 3),
-                          "end": round(offset + max(start, end), 3)})
+            words.append(
+                {
+                    "word": surface,
+                    "start": round(offset + start, 3),
+                    "end": round(offset + max(start, end), 3),
+                }
+            )
             continue
         # Token not found in order (should not happen); keep its bare text without consuming the transcript.
         start, end = clamp(start), clamp(end)
-        words.append({"word": token, "start": round(offset + start, 3), "end": round(offset + max(start, end), 3)})
+        words.append(
+            {
+                "word": token,
+                "start": round(offset + start, 3),
+                "end": round(offset + max(start, end), 3),
+            }
+        )
     if words and pos < n:
         # Trailing punctuation left after the last token (e.g. closing quotes).
         tail = text[pos:].strip()
@@ -554,14 +706,17 @@ def attach_words(text, items, offset=0.0, limit=None):
 # Engines
 # ------------------------------------------------------------------
 
+
 def _free(engine):
     gc.collect()
     try:
         if engine == "mlx":
             import mlx.core as mx  # type: ignore[import-not-found]
+
             mx.clear_cache()
         else:
             import torch  # type: ignore[import-not-found]
+
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
     except ImportError:
@@ -570,10 +725,35 @@ def _free(engine):
 
 def _torch_device():
     import torch  # type: ignore[import-not-found]
+
     if torch.cuda.is_available():
-        dtype = getattr(torch, "bfloat16") if torch.cuda.is_bf16_supported() else getattr(torch, "float16")
+        dtype = (
+            getattr(torch, "bfloat16")
+            if torch.cuda.is_bf16_supported()
+            else getattr(torch, "float16")
+        )
         return "cuda:0", dtype
     return "cpu", getattr(torch, "float32")
+
+
+def _torch_attn_implementation(device: str) -> str | None:
+    """Select the fastest supported attention backend for CUDA GPUs (e.g. 'sdpa' on RTX 2070 SM 7.5)."""
+    if not str(device).startswith("cuda"):
+        return None
+    try:
+        import torch  # type: ignore[import-not-found]
+
+        if hasattr(torch.backends, "cudnn"):
+            torch.backends.cudnn.benchmark = True
+        if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+            torch.backends.cuda.matmul.allow_tf32 = True
+        if _installed("flash_attn") and hasattr(torch.cuda, "get_device_capability"):
+            major, _ = torch.cuda.get_device_capability(0)
+            if major >= 8:
+                return "flash_attention_2"
+    except Exception:
+        pass
+    return "sdpa"
 
 
 @contextmanager
@@ -584,30 +764,52 @@ def asr_session(engine, repo_id):
     try:
         if engine == "mlx":
             from mlx_audio.stt.utils import load_model  # type: ignore[import-not-found]
+
             model = load_model(source)
 
             def _run_mlx(clip, language, max_tokens=None):
                 check_cancel()
                 assert model is not None
-                out = model.generate(clip, language=language,
-                                     max_tokens=max_tokens or token_budget(len(clip) / SAMPLE_RATE),
-                                     chunk_duration=WINDOW_SECONDS + 1, min_chunk_duration=MIN_WINDOW_SECONDS)
-                detected = language or ",".join(dict.fromkeys(lang_item for lang_item in (out.language or []) if lang_item))
+                out = model.generate(
+                    clip,
+                    language=language,
+                    max_tokens=max_tokens or token_budget(len(clip) / SAMPLE_RATE),
+                    chunk_duration=WINDOW_SECONDS + 1,
+                    min_chunk_duration=MIN_WINDOW_SECONDS,
+                )
+                detected = language or ",".join(
+                    dict.fromkeys(
+                        lang_item for lang_item in (out.language or []) if lang_item
+                    )
+                )
                 return detected, out.text.strip()
 
             run = _run_mlx
         else:
             from qwen_asr import Qwen3ASRModel  # type: ignore[import-not-found]
+
             device, dtype = _torch_device()
-            rprint(f"[cyan]🎮 Qwen3-ASR device:[/cyan] {device}, [cyan]dtype:[/cyan] {dtype}")
-            model = Qwen3ASRModel.from_pretrained(source, dtype=dtype, device_map=device,
-                                                  max_inference_batch_size=1, max_new_tokens=MAX_NEW_TOKENS)
+            attn = _torch_attn_implementation(device)
+            load_kwargs = {
+                "dtype": dtype,
+                "device_map": device,
+                "max_inference_batch_size": 1,
+                "max_new_tokens": MAX_NEW_TOKENS,
+            }
+            if attn:
+                load_kwargs["attn_implementation"] = attn
+            rprint(
+                f"[cyan]🎮 Qwen3-ASR device:[/cyan] {device}, [cyan]dtype:[/cyan] {dtype}, [cyan]attn:[/cyan] {attn or 'default'}"
+            )
+            model = Qwen3ASRModel.from_pretrained(source, **load_kwargs)
 
             def _run_tf(clip, language, max_tokens=None):
                 check_cancel()
                 assert model is not None
                 # qwen-asr reads this attribute for every generate() call.
-                model.max_new_tokens = max_tokens or token_budget(len(clip) / SAMPLE_RATE)
+                model.max_new_tokens = max_tokens or token_budget(
+                    len(clip) / SAMPLE_RATE
+                )
                 out = model.transcribe(audio=(clip, SAMPLE_RATE), language=language)[0]
                 return language or out.language, out.text.strip()
 
@@ -632,6 +834,7 @@ def _align(engine, repo_id, jobs):
     try:
         if engine == "mlx":
             from mlx_audio.stt.utils import load_model  # type: ignore[import-not-found]
+
             aligner = load_model(source)
 
             def _align_mlx(clip, text, lang):
@@ -641,18 +844,27 @@ def _align(engine, repo_id, jobs):
             align = _align_mlx
         else:
             from qwen_asr import Qwen3ForcedAligner  # type: ignore[import-not-found]
+
             device, dtype = _torch_device()
-            aligner = Qwen3ForcedAligner.from_pretrained(source, dtype=dtype, device_map=device)
+            attn = _torch_attn_implementation(device)
+            load_kwargs = {"dtype": dtype, "device_map": device}
+            if attn:
+                load_kwargs["attn_implementation"] = attn
+            aligner = Qwen3ForcedAligner.from_pretrained(source, **load_kwargs)
 
             def _align_tf(clip, text, lang):
                 assert aligner is not None
-                return aligner.align(audio=(clip, SAMPLE_RATE), text=text, language=lang)[0]
+                return aligner.align(
+                    audio=(clip, SAMPLE_RATE), text=text, language=lang
+                )[0]
 
             align = _align_tf
         for clip, text, lang in jobs:
             check_cancel()
             result = align(clip, text, lang)
-            results.append([(item.text, item.start_time, item.end_time) for item in result])
+            results.append(
+                [(item.text, item.start_time, item.end_time) for item in result]
+            )
     finally:
         align = None  # the closure holds a reference to the aligner
         aligner = None
@@ -664,6 +876,7 @@ def _align(engine, repo_id, jobs):
 # Entry point (same signature as whisperX_local.transcribe_audio)
 # ------------------------------------------------------------------
 
+
 @except_handler("Qwen ASR processing error:")
 def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     engine = resolve_engine()
@@ -671,7 +884,9 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     models = MODELS[engine]
     configured = load_key("whisper.language")
     forced = qwen_language(configured)
-    rprint(f"[green]▶️ Qwen3-ASR {size} + ForcedAligner ({engine}) for segment {start:.2f}s to {end:.2f}s...[/green]")
+    rprint(
+        f"[green]▶️ Qwen3-ASR {size} + ForcedAligner ({engine}) for segment {start:.2f}s to {end:.2f}s...[/green]"
+    )
 
     raw = load_audio_segment(raw_audio_file, start, end)
     if vocal_audio_file == raw_audio_file:
@@ -680,7 +895,11 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
         # Windows are cut on the raw track, so the vocal track must use the same sample indices.
         vocal = match_length(load_audio_segment(vocal_audio_file, start, end), len(raw))
     # Drop slivers (< 0.1 s) left by segment boundaries; they carry no speech.
-    windows = [(a, b) for a, b in split_windows(raw) if b - a >= int(MIN_WINDOW_SECONDS * SAMPLE_RATE)]
+    windows = [
+        (a, b)
+        for a, b in split_windows(raw)
+        if b - a >= int(MIN_WINDOW_SECONDS * SAMPLE_RATE)
+    ]
     # Aligners can attach opening words to intro music. Bound ASR and alignment
     # to the same conservatively padded speech window, preserving all offsets.
     windows = trim_speech_windows(raw, windows)
@@ -689,15 +908,28 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     t0 = time.time()
     pieces = []
     with asr_session(engine, models[size]) as run:
-        plan = [(forced, None)] * len(windows) if forced else plan_languages(run, raw, windows)
+        plan = (
+            [(forced, None)] * len(windows)
+            if forced
+            else plan_languages(run, raw, windows)
+        )
         for (a, b), (language, probes) in zip(windows, plan):
-            window = transcribe_window(run, raw, a, b, language, probes, start, forced=bool(forced))
+            window = transcribe_window(
+                run, raw, a, b, language, probes, start, forced=bool(forced)
+            )
             if forced:
                 # Text only, no inference: a clearly wrong language fails on its first window.
-                mismatch = script_mismatch(" ".join(text for *_, text in window), configured, **WINDOW_SCRIPT_LIMITS)
+                mismatch = script_mismatch(
+                    " ".join(text for *_, text in window),
+                    configured,
+                    **WINDOW_SCRIPT_LIMITS,
+                )
                 if mismatch:
                     raise language_mismatch_error(
-                        f"{start + a / SAMPLE_RATE:.1f}-{start + b / SAMPLE_RATE:.1f}s", forced, mismatch)
+                        f"{start + a / SAMPLE_RATE:.1f}-{start + b / SAMPLE_RATE:.1f}s",
+                        forced,
+                        mismatch,
+                    )
             pieces.extend(window)
     rprint(f"[cyan]⏱️ time transcribe:[/cyan] {time.time() - t0:.2f}s")
 
@@ -717,13 +949,18 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
                 votes[iso_language(lang)] += b - a
         detected = max(votes, key=lambda k: votes[k]) if votes else None
         if not detected and any(text for *_, text in pieces):
-            raise ValueError("Qwen3-ASR could not detect the language; set the recognition language and retry.")
+            raise ValueError(
+                "Qwen3-ASR could not detect the language; set the recognition language and retry."
+            )
 
     # 2. align by vocal audio
     t0 = time.time()
     default_qwen_lang = ISO_TO_QWEN.get(detected or "") or "English"
-    todo = [(a, b, text, (primary_language(lang) or default_qwen_lang))
-            for a, b, lang, text in pieces if text]
+    todo = [
+        (a, b, text, (primary_language(lang) or default_qwen_lang))
+        for a, b, lang, text in pieces
+        if text
+    ]
     jobs = [(vocal[a:b], text, lang) for a, b, text, lang in todo]
     aligned = _align(engine, models["aligner"], jobs) if jobs else []
     rprint(f"[cyan]⏱️ time align:[/cyan] {time.time() - t0:.2f}s")
@@ -731,8 +968,16 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     segments = []
     for (a, b, text, _), items in zip(todo, aligned):
         # Windows lie inside the decoded segment, so start + b / SAMPLE_RATE never passes the audio end.
-        words = attach_words(text, items, start + a / SAMPLE_RATE, limit=(b - a) / SAMPLE_RATE)
+        words = attach_words(
+            text, items, start + a / SAMPLE_RATE, limit=(b - a) / SAMPLE_RATE
+        )
         if words:
-            segments.append({"text": text, "start": words[0]["start"],
-                             "end": words[-1]["end"], "words": words})
+            segments.append(
+                {
+                    "text": text,
+                    "start": words[0]["start"],
+                    "end": words[-1]["end"],
+                    "words": words,
+                }
+            )
     return {"language": detected, "segments": segments}

@@ -34,14 +34,28 @@ def is_uv_installed() -> bool:
 def install_uv() -> None:
     print("\n[1/3] Checking uv")
     if is_uv_installed():
-        ver = subprocess.run(["uv", "--version"], capture_output=True, text=True).stdout.strip()
+        ver = subprocess.run(
+            ["uv", "--version"], capture_output=True, text=True
+        ).stdout.strip()
         print(f"  uv is already installed: {ver}")
         return
 
     if platform.system() == "Windows":
         methods = [
-            ["winget", "install", "astral-sh.uv", "--accept-package-agreements", "--accept-source-agreements"],
-            ["powershell", "-ExecutionPolicy", "ByPass", "-c", "irm https://astral.sh/uv/install.ps1 | iex"],
+            [
+                "winget",
+                "install",
+                "astral-sh.uv",
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+            ],
+            [
+                "powershell",
+                "-ExecutionPolicy",
+                "ByPass",
+                "-c",
+                "irm https://astral.sh/uv/install.ps1 | iex",
+            ],
             [sys.executable, "-m", "pip", "install", "uv"],
         ]
     else:
@@ -60,7 +74,9 @@ def install_uv() -> None:
         except (subprocess.CalledProcessError, FileNotFoundError):
             print("  install method failed, trying next method...")
 
-    raise SystemExit("ERROR: uv could not be installed. Install it manually: https://docs.astral.sh/uv/")
+    raise SystemExit(
+        "ERROR: uv could not be installed. Install it manually: https://docs.astral.sh/uv/"
+    )
 
 
 def add_uv_to_path() -> None:
@@ -93,7 +109,9 @@ def venv_bin(venv_path: Path) -> Path:
 def python_version_ok(python_exe: Path) -> bool:
     if not python_exe.is_file():
         return False
-    result = subprocess.run([str(python_exe), "--version"], capture_output=True, text=True)
+    result = subprocess.run(
+        [str(python_exe), "--version"], capture_output=True, text=True
+    )
     return f"Python {PYTHON_VERSION}." in (result.stdout or result.stderr)
 
 
@@ -101,13 +119,23 @@ def create_venv(path: Path, yes: bool = False) -> Path:
     print(f"\n[2/3] Creating/reusing virtual environment: {path}")
     python_exe = venv_python(path)
     if python_version_ok(python_exe):
-        result = subprocess.run([str(python_exe), "--version"], capture_output=True, text=True)
-        print(f"  Reusing existing venv: {result.stdout.strip() or result.stderr.strip()}")
+        result = subprocess.run(
+            [str(python_exe), "--version"], capture_output=True, text=True
+        )
+        print(
+            f"  Reusing existing venv: {result.stdout.strip() or result.stderr.strip()}"
+        )
         return python_exe
 
     if path.exists():
         if not yes:
-            answer = input(f"  Existing venv at {path} is not Python {PYTHON_VERSION}. Remove and recreate it? [y/N] ").strip().lower()
+            answer = (
+                input(
+                    f"  Existing venv at {path} is not Python {PYTHON_VERSION}. Remove and recreate it? [y/N] "
+                )
+                .strip()
+                .lower()
+            )
             if answer != "y":
                 raise SystemExit("Cancelled.")
         shutil.rmtree(path, ignore_errors=True)
@@ -115,14 +143,18 @@ def create_venv(path: Path, yes: bool = False) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     run(["uv", "venv", "--seed", "--python", PYTHON_VERSION, str(path)], cwd=SCRIPT_DIR)
     if not python_version_ok(python_exe):
-        raise SystemExit(f"ERROR: failed to create a Python {PYTHON_VERSION} virtual environment")
+        raise SystemExit(
+            f"ERROR: failed to create a Python {PYTHON_VERSION} virtual environment"
+        )
     return python_exe
 
 
 def run_installer(python_exe: Path, args: argparse.Namespace) -> None:
     print("\n[3/3] Installing VideoLingo dependencies")
     env = os.environ.copy()
-    env["PATH"] = str(venv_bin(python_exe.parent.parent)) + os.pathsep + env.get("PATH", "")
+    env["PATH"] = (
+        str(venv_bin(python_exe.parent.parent)) + os.pathsep + env.get("PATH", "")
+    )
     cmd = [str(python_exe), str(SCRIPT_DIR / "installer.py"), "--yes"]
     cmd.extend(["--torch-backend", args.torch_backend])
     if args.auto_mirror:
@@ -141,25 +173,63 @@ def run_installer(python_exe: Path, args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Create and install a VideoLingo environment")
-    parser.add_argument("--shared", action="store_true", help=f"use shared venv at {SHARED_VENV}")
-    parser.add_argument("--torch-backend", choices=("auto", "cpu", "cu126", "cu128"), default="auto",
-                        help="PyTorch build selection passed to installer.py")
-    parser.add_argument("--path", help="custom venv path; implies --shared-style external venv")
-    parser.add_argument("--skip-install", action="store_true", help="only create/reuse the venv")
-    parser.add_argument("--auto-mirror", action="store_true", help="auto-select a PyPI mirror before install")
-    parser.add_argument("--skip-demucs", action="store_true", help="skip optional Demucs install")
-    parser.add_argument("--require-demucs", action="store_true", help="fail if Demucs cannot be installed")
-    parser.add_argument("--launch", action="store_true", help="start VideoLingo after installation")
-    parser.add_argument("--force", action="store_true", help="force reinstall staged packages")
-    parser.add_argument("--upgrade", action="store_true", help="refresh dependencies within compatibility bounds")
-    parser.add_argument("--yes", action="store_true", help="non-interactive; recreate wrong-version venvs")
+    parser = argparse.ArgumentParser(
+        description="Create and install a VideoLingo environment"
+    )
+    parser.add_argument(
+        "--shared", action="store_true", help=f"use shared venv at {SHARED_VENV}"
+    )
+    parser.add_argument(
+        "--torch-backend",
+        choices=("auto", "cpu", "cu126", "cu128"),
+        default="auto",
+        help="PyTorch build selection passed to installer.py",
+    )
+    parser.add_argument(
+        "--path", help="custom venv path; implies --shared-style external venv"
+    )
+    parser.add_argument(
+        "--skip-install", action="store_true", help="only create/reuse the venv"
+    )
+    parser.add_argument(
+        "--auto-mirror",
+        action="store_true",
+        help="auto-select a PyPI mirror before install",
+    )
+    parser.add_argument(
+        "--skip-demucs", action="store_true", help="skip optional Demucs install"
+    )
+    parser.add_argument(
+        "--require-demucs",
+        action="store_true",
+        help="fail if Demucs cannot be installed",
+    )
+    parser.add_argument(
+        "--launch", action="store_true", help="start VideoLingo after installation"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="force reinstall staged packages"
+    )
+    parser.add_argument(
+        "--upgrade",
+        action="store_true",
+        help="refresh dependencies within compatibility bounds",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="non-interactive; recreate wrong-version venvs",
+    )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    target = Path(args.path).expanduser() if args.path else (SHARED_VENV if args.shared else LOCAL_VENV)
+    target = (
+        Path(args.path).expanduser()
+        if args.path
+        else (SHARED_VENV if args.shared else LOCAL_VENV)
+    )
 
     print("=" * 60)
     print("  VideoLingo Environment Setup")
@@ -181,9 +251,9 @@ def main() -> None:
     print("  Setup complete")
     print("=" * 60)
     if target in (LOCAL_VENV, SHARED_VENV):
-        print("  Start with: uv run start.py")
+        print("  Start with: Start.command (macOS) or Start.bat (Windows)")
     else:
-        print(f"  Start with: {python_exe} -m streamlit run st.py")
+        print(f"  Start with: {python_exe} api.py")
 
 
 if __name__ == "__main__":

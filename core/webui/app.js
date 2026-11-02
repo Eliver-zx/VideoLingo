@@ -1784,7 +1784,7 @@
       const defaults = {
         max_workers: 4,
         target_language: '简体中文',
-        summary_length: 8000,
+        'api.reasoning_effort': 'none',
         reflect_translate: false,
         pause_before_translate: true,
         pause_after_translate: true,
@@ -1857,12 +1857,13 @@
       const baseUrl = document.querySelector('[data-cfg="api.base_url"]')?.value || '';
       const apiKey = document.querySelector('[data-cfg="api.key"]')?.value || '';
       const model = document.querySelector('[data-cfg="api.model"]')?.value || '';
+      const reasoningEffort = document.querySelector('[data-cfg="api.reasoning_effort"]')?.value || 'none';
       const statusEl = document.getElementById('llm-check-status');
       if (statusEl) statusEl.textContent = '正在检测连通性…';
       try {
         const res = await apiFetch('/api/llm/check', {
           method: 'POST',
-          body: JSON.stringify({ base_url: baseUrl, api_key: apiKey, model }),
+          body: JSON.stringify({ base_url: baseUrl, api_key: apiKey, model, reasoning_effort: reasoningEffort }),
         });
         const ok = Boolean(res.valid ?? res.ok);
         if (statusEl) {
@@ -1928,7 +1929,6 @@
     const PLACEHOLDER_API_KEYS = new Set([
       'YOUR_API_KEY',
       'your_elevenlabs_api_key',
-      'YOUR_302_API_KEY',
       'YOUR_FISH_AUDIO_KEY',
       'YOUR_SF_KEY',
     ]);

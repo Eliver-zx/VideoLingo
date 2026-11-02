@@ -35,12 +35,12 @@ _OPAQUE_DICT_KEYS = frozenset({"fish_audio.voices"})
 PLACEHOLDER_KEY_PREFIXES = ("your_", "YOUR_")
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "display_language": "zh-CN",
     "api": {
         "key": "",
         "base_url": "https://api.openlux.ai/v1",
         "model": "gpt-6-luna",
         "llm_support_json": False,
+        "reasoning_effort": "none",
     },
     "max_workers": 4,
     "target_language": "简体中文",
@@ -132,13 +132,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "edge_tts": {
         "voice": "zh-CN-XiaoxiaoNeural",
-    },
-    "gpt_sovits": {
-        "character": "Huanyuv2",
-        "refer_mode": 3,
-    },
-    "f5tts": {
-        "302_api": "",
     },
     "speed_factor": {
         "min": 1.0,
