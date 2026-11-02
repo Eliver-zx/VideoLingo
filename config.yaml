@@ -219,9 +219,3 @@ language_split_with_space:
 language_split_without_space:
 - 'zh'
 - 'ja'
-display_language: zh-CN
-gpt_sovits:
-  character: Huanyuv2
-  refer_mode: 3
-f5tts:
-  302_api: ''

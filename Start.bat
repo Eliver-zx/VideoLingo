@@ -3,10 +3,18 @@ setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
 set "PYTHONUTF8=1"
 set "PYTHONWARNINGS=ignore"
+if exist "%USERPROFILE%\.local\bin" set "PATH=%USERPROFILE%\.local\bin;%PATH%"
+if exist "%USERPROFILE%\.cargo\bin" set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 cd /D "%~dp0"
 
 if "%VIDEOLINGO_API_PORT%"=="" set "VIDEOLINGO_API_PORT=8501"
 set "URL=http://127.0.0.1:%VIDEOLINGO_API_PORT%"
+
+where uv >nul 2>nul
+if errorlevel 1 (
+    echo ERROR: uv is not installed or not in PATH. Install it from https://docs.astral.sh/uv/
+    goto failed
+)
 
 if exist "%USERPROFILE%\.venvs\videolingo\Scripts\python.exe" (
     set "VENV_DIR=%USERPROFILE%\.venvs\videolingo"

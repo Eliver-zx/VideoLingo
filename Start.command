@@ -2,10 +2,16 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 export PYTHONUTF8=1
 export PYTHONWARNINGS="ignore"
 PORT="${VIDEOLINGO_API_PORT:-8501}"
 URL="http://127.0.0.1:${PORT}"
+
+if ! command -v uv >/dev/null 2>&1; then
+    echo "ERROR: uv is not installed or not in PATH. Install it from https://docs.astral.sh/uv/"
+    exit 1
+fi
 
 if [ -x "$HOME/.venvs/videolingo/bin/python" ]; then
     VENV_DIR="$HOME/.venvs/videolingo"

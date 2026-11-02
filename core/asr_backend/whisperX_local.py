@@ -32,10 +32,10 @@ torch.load = _patched_torch_load
 # Now safe to import whisperx and the rest of the application
 # =============================================================================
 import whisperx  # noqa: E402  # type: ignore[import-not-found]
-from whisperx.audio import (
+from whisperx.audio import (  # noqa: E402  # type: ignore[import-not-found]
     load_audio as _whisperx_load_audio,
     SAMPLE_RATE as _WHISPERX_SR,
-)  # noqa: E402  # type: ignore[import-not-found]
+)
 from rich import print as rprint  # noqa: E402
 from core.utils import except_handler, load_key, update_key  # noqa: E402
 

@@ -247,13 +247,25 @@ def test_model_source_prefers_complete_local_copy(monkeypatch, tmp_path):
         )
     )
     monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hf)
-    expected_path = str((tmp_path / "Qwen3-ASR-1.7B").resolve())
+    model_dir = tmp_path / "Qwen3-ASR-1.7B"
+    expected_path = str(model_dir.resolve())
     assert qwen._model_source("Qwen/Qwen3-ASR-1.7B") == expected_path
     assert downloads == [("Qwen/Qwen3-ASR-1.7B", expected_path)]
-    (tmp_path / "Qwen3-ASR-1.7B" / "config.json").write_text("{}")
+    # Only config.json without weights is still incomplete -> continues downloading
+    (model_dir / "config.json").write_text("{}")
+    downloads.clear()
+    assert qwen._model_source("Qwen/Qwen3-ASR-1.7B") == expected_path
+    assert downloads == [("Qwen/Qwen3-ASR-1.7B", expected_path)]
+    # With weights present and no .incomplete files -> uses local copy offline
+    (model_dir / "model.safetensors").write_bytes(b"weights")
     downloads.clear()
     assert qwen._model_source("Qwen/Qwen3-ASR-1.7B") == expected_path
     assert downloads == []
+    # An interrupted .incomplete file forces snapshot_download to resume
+    inc = model_dir / "shard.incomplete"
+    inc.write_bytes(b"partial")
+    assert qwen._model_source("Qwen/Qwen3-ASR-1.7B") == expected_path
+    assert downloads == [("Qwen/Qwen3-ASR-1.7B", expected_path)]
 
 
 def test_model_table():
@@ -670,7 +682,9 @@ def engines(monkeypatch):
     monkeypatch.setattr(qwen, "_torch_device", lambda: ("cuda:0", "bf16"))
     monkeypatch.setattr(qwen, "_free", calls["free"])
     monkeypatch.setattr(qwen, "check_cancel", lambda: None)
-    item = lambda text, a, b: SimpleNamespace(text=text, start_time=a, end_time=b)
+
+    def item(text, a, b):
+        return SimpleNamespace(text=text, start_time=a, end_time=b)
 
     class ASRModel:
         @classmethod

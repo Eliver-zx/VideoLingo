@@ -175,10 +175,22 @@ def resolve_engine(requested=None):
     return engine
 
 
+def _has_complete_weights(local: Path) -> bool:
+    if not (local / "config.json").is_file():
+        return False
+    if any(local.rglob("*.incomplete")):
+        return False
+    return (
+        any(local.glob("*.safetensors"))
+        or any(local.glob("*.bin"))
+        or any(local.glob("*.npz"))
+    )
+
+
 def _model_source(repo_id):
     """Ensure a complete local copy in model_dir (e.g. _model_cache/Qwen3-ASR-1.7B), downloading into it if missing."""
     local = Path(load_key("model_dir")) / repo_id.split("/")[-1]
-    if (local / "config.json").is_file():
+    if _has_complete_weights(local):
         rprint(f"[green]Using local Qwen model: {local.resolve()}[/green]")
         return str(local.resolve())
     try:
