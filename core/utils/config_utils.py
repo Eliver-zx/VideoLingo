@@ -45,7 +45,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "max_workers": 4,
     "target_language": "简体中文",
     "demucs": False,
-    "vocal_separation_model": "htdemucs",
+    "vocal_separation_model": "scnet",
     "whisper": {
         "language": "en",
         "detected_language": "en",

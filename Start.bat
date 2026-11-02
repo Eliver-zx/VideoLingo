@@ -8,6 +8,7 @@ if exist "%USERPROFILE%\.cargo\bin" set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
 cd /D "%~dp0"
 
 if "%VIDEOLINGO_API_PORT%"=="" set "VIDEOLINGO_API_PORT=8501"
+set "URL=http://127.0.0.1:%VIDEOLINGO_API_PORT%"
 
 where uv >nul 2>nul
 if errorlevel 1 (
@@ -21,7 +22,6 @@ if exist "%USERPROFILE%\.venvs\videolingo\Scripts\python.exe" (
     set "VENV_DIR=%CD%\.venv"
 )
 set "VENV_PY=%VENV_DIR%\Scripts\python.exe"
-set "VENV_PYW=%VENV_DIR%\Scripts\pythonw.exe"
 
 if not exist "%VENV_PY%" (
     echo [1/2] Creating Python 3.12 virtual environment at "%VENV_DIR%" ...
@@ -29,22 +29,23 @@ if not exist "%VENV_PY%" (
     if errorlevel 1 goto failed
 )
 
-"%VENV_PY%" -c "import fastapi, uvicorn, openai, ruamel.yaml, spacy, demucs, qwen_asr, torch, pystray, PIL" >nul 2>nul
+"%VENV_PY%" -c "import fastapi, multipart, uvicorn, openai, ruamel.yaml, demucs, rapidfuzz, qwen_asr, torch" >nul 2>nul
 if errorlevel 1 (
-    echo [2/2] Installing dependencies ^(CUDA PyTorch + Qwen3-ASR + System Tray^) via uv ...
+    echo [2/2] Installing dependencies ^(CUDA PyTorch + Qwen3-ASR^) via uv ...
     uv pip install --python "%VENV_PY%" --extra-index-url https://download.pytorch.org/whl/cu126 --index-strategy unsafe-best-match -r requirements.txt
     if errorlevel 1 goto failed
 )
 
-if exist "%VENV_PYW%" (
-    start "" "%VENV_PYW%" -m core.tray
-    exit /b 0
-)
-
-start "" /B "%VENV_PY%" -m core.tray
-exit /b 0
+echo Using Python: "%VENV_PY%"
+echo Starting VideoLingo WebUI at %URL% ...
+start "" powershell -NoProfile -WindowStyle Hidden -Command "for ($i=0; $i -lt 50; $i++) { try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1', %VIDEOLINGO_API_PORT%); $c.Close(); Start-Process '%URL%'; exit } catch { Start-Sleep -Milliseconds 200 } }"
+"%VENV_PY%" api.py
+goto end
 
 :failed
 echo Installation or launch failed.
 pause
 exit /b 1
+
+:end
+pause

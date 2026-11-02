@@ -435,6 +435,16 @@
       box-shadow: 0 0 0 4px var(--brand-soft);
     }
 
+    .nt-drop.has-file {
+      border-style: solid;
+      border-color: var(--emerald);
+      background: var(--bg-pane);
+    }
+
+    .nt-drop.has-file .nt-drop-icon {
+      color: var(--emerald-bright);
+    }
+
     .nt-drop-icon {
       inline-size: 18px;
       block-size: 18px;

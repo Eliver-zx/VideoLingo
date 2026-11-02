@@ -216,8 +216,7 @@ def test_missing_engine_package_explains_fix(
     with pytest.raises(ImportError, match=package) as error:
         qwen.resolve_engine(requested)
     message = str(error.value)
-    assert "installer.py" in message
-    assert "whisperx-manual.en-US.md" in message
+    assert "requirements.txt" in message
     assert "--local-whisperx" not in message
     assert "optional" not in message.lower()
 

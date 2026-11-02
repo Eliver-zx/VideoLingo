@@ -3,7 +3,14 @@ _import_error = None
 try:
     from .ask_gpt import ask_gpt
     from .decorator import except_handler, check_file_exists
-    from .config_utils import load_key, load_key_or, update_key, get_joiner, join_words, get_source_language
+    from .config_utils import (
+        load_key,
+        load_key_or,
+        update_key,
+        get_joiner,
+        join_words,
+        get_source_language,
+    )
     from rich import print as rprint
 except ImportError as e:
     _import_error = e
@@ -14,7 +21,7 @@ def __getattr__(name):
     if _import_error is not None and name in __all__:
         raise ImportError(
             f"core.utils could not be loaded: {_import_error}. "
-            "Some dependencies are missing, please run the installer again."
+            "Some dependencies are missing; run Start.command / Start.bat or `uv pip install -r requirements.txt`."
         ) from _import_error
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -25,6 +32,7 @@ def check_cancel():
     Uses the shared runner when a pipeline is active; otherwise a no-op.
     """
     from core.task_runner import TaskRunner
+
     TaskRunner.check_cancel()
 
 

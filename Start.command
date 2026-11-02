@@ -25,8 +25,8 @@ if [ ! -x "$PY_CMD" ]; then
     uv venv "$VENV_DIR" --python 3.12
 fi
 
-if ! "$PY_CMD" -c "import fastapi, uvicorn, openai, ruamel.yaml, spacy, demucs; import mlx_audio" >/dev/null 2>&1 && \
-   ! "$PY_CMD" -c "import fastapi, uvicorn, openai, ruamel.yaml, spacy, demucs; import qwen_asr" >/dev/null 2>&1; then
+if ! "$PY_CMD" -c "import fastapi, multipart, uvicorn, openai, ruamel.yaml, demucs, rapidfuzz; import mlx_audio" >/dev/null 2>&1 && \
+   ! "$PY_CMD" -c "import fastapi, multipart, uvicorn, openai, ruamel.yaml, demucs, rapidfuzz; import qwen_asr" >/dev/null 2>&1; then
     echo "[2/2] Installing dependencies via uv ..."
     uv pip install --python "$PY_CMD" -r requirements.txt
 fi

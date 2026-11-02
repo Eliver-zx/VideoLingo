@@ -353,7 +353,8 @@ async def sse_events():
 @app.post("/api/dialogs/pick-files")
 def pick_local_files():
     """Open native OS file picker for zero-copy local video selection."""
-    if platform.system() == "Darwin":
+    sys_name = platform.system()
+    if sys_name == "Darwin":
         script = (
             'set chosenFiles to choose file with prompt "Select video/audio files for VideoLingo" '
             "with multiple selections allowed\n"
@@ -366,6 +367,38 @@ def pick_local_files():
         )
         proc = subprocess.run(
             ["osascript", "-e", script], capture_output=True, text=True, check=False
+        )
+        if proc.returncode != 0:
+            return {"paths": []}
+        paths = [p.strip() for p in (proc.stdout or "").splitlines() if p.strip()]
+        return {"paths": paths}
+    if sys_name == "Windows":
+        ps_script = (
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+            "Add-Type -AssemblyName System.Windows.Forms; "
+            "$f = New-Object System.Windows.Forms.OpenFileDialog; "
+            "$f.Title = '选择视频或音频文件 - VideoLingo'; "
+            "$f.Filter = '媒体与字幕文件 (*.mp4;*.mov;*.mkv;*.avi;*.flv;*.wmv;*.webm;*.wav;*.mp3;*.flac;*.m4a;*.srt)|*.mp4;*.mov;*.mkv;*.avi;*.flv;*.wmv;*.webm;*.wav;*.mp3;*.flac;*.m4a;*.srt|所有文件 (*.*)|*.*'; "
+            "$f.Multiselect = $false; "
+            "$top = New-Object System.Windows.Forms.Form; "
+            "$top.TopMost = $true; "
+            "if ($f.ShowDialog($top) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.FileName }"
+        )
+        proc = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-STA",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                ps_script,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
         )
         if proc.returncode != 0:
             return {"paths": []}
@@ -476,6 +509,8 @@ def create_task(request: CreateTaskRequest):
 @app.post("/api/tasks/upload", status_code=202)
 def upload_task(
     file: UploadFile = File(...),
+    subtitles: UploadFile | None = File(None),
+    subtitles_path: str | None = Form(None),
     source_language: str = Form("en"),
     target_language: str = Form("简体中文"),
     glossary_domain: str | None = Form(None),
@@ -498,6 +533,19 @@ def upload_task(
             read_cues(payload_bytes)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+
+    sub_bytes: bytes | None = None
+    sub_local_path: Path | None = None
+    if subtitles is not None and subtitles.filename:
+        from core._2_import_subtitles import read_cues
+
+        sub_bytes = subtitles.file.read()
+        try:
+            read_cues(sub_bytes)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    elif subtitles_path and subtitles_path.strip():
+        sub_local_path = subtitle_file(subtitles_path.strip())
 
     ws = create_task_workspace(stem, base_dir=OUTPUT)
     dst_name = "source.srt" if ext == ".srt" else f"source{ext}"
@@ -523,7 +571,21 @@ def upload_task(
     }
     if source_language != "auto":
         overrides["whisper.detected_language"] = source_language
-    ws.init_from_local_file(dst_path, title=stem, config_override=overrides)
+    ws.init_from_local_file(
+        dst_path,
+        subtitle_path=sub_local_path,
+        title=stem,
+        config_override=overrides,
+    )
+    if sub_bytes is not None:
+        (ws.root / "source.srt").write_bytes(sub_bytes)
+        ws.update_manifest(
+            subtitles={
+                "source_type": "uploaded_srt",
+                "original_path": subtitles.filename if subtitles else "source.srt",
+                "filename": "source.srt",
+            }
+        )
     if autorun:
         needs_dub = stage in ("all", "dubbing")
         steps = _wrap_workspace_steps(ws, get_steps(stage, needs_dub), overrides)

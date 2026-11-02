@@ -523,31 +523,144 @@
     });
 
     let droppedFile = null;
-    ['dragenter', 'dragover'].forEach(ev => {
-      dropWell.addEventListener(ev, e => {
-        e.preventDefault();
-        dropWell.classList.add('dragover');
-      });
+    let droppedSubFile = null;
+    const localVideoFileInput = document.createElement('input');
+    localVideoFileInput.type = 'file';
+    localVideoFileInput.accept = '.mp4,.mov,.mkv,.avi,.flv,.wmv,.webm,.wav,.mp3,.flac,.m4a,.srt';
+    localVideoFileInput.style.display = 'none';
+    document.body.appendChild(localVideoFileInput);
+
+    function formatFileSize(bytes) {
+      const b = Number(bytes || 0);
+      if (b >= 1024 * 1024 * 1024) return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+      if (b >= 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+      if (b >= 1024) return `${(b / 1024).toFixed(0)} KB`;
+      return `${b} B`;
+    }
+
+    function selectBrowserFile(file) {
+      if (!file) return;
+      droppedFile = file;
+      const label = `${file.name} (${formatFileSize(file.size)})`;
+      const inputEl = document.getElementById('input-source-path');
+      inputEl.value = label;
+      inputEl.dataset.droppedLabel = label;
+      dropWell.classList.add('has-file');
+    }
+
+    function selectSubtitleFile(file) {
+      if (!file) return;
+      droppedSubFile = file;
+      const label = `${file.name} (${formatFileSize(file.size)})`;
+      const subEl = document.getElementById('input-sub-path');
+      if (subEl) {
+        subEl.value = label;
+        subEl.dataset.droppedLabel = label;
+      }
+    }
+
+    function handleDroppedFiles(fileList) {
+      const files = Array.from(fileList || []);
+      if (!files.length) return;
+      if (files.length >= 2) {
+        const srt = files.find(f => f.name.toLowerCase().endsWith('.srt'));
+        const media = files.find(f => !f.name.toLowerCase().endsWith('.srt')) || files[0];
+        selectBrowserFile(media);
+        if (srt && srt !== media) selectSubtitleFile(srt);
+        return;
+      }
+      const single = files[0];
+      const sourceInput = document.getElementById('input-source-path');
+      if (single.name.toLowerCase().endsWith('.srt') && (droppedFile || sourceInput.value.trim())) {
+        selectSubtitleFile(single);
+      } else {
+        selectBrowserFile(single);
+      }
+    }
+
+    document.getElementById('input-source-path')?.addEventListener('input', e => {
+      const el = e.currentTarget;
+      if (droppedFile && el.value.trim() !== el.dataset.droppedLabel && el.value.trim() !== droppedFile.name) {
+        droppedFile = null;
+        delete el.dataset.droppedLabel;
+        dropWell.classList.remove('has-file');
+      }
     });
-    ['dragleave', 'drop'].forEach(ev => {
-      dropWell.addEventListener(ev, e => {
+
+    document.getElementById('input-sub-path')?.addEventListener('input', e => {
+      const el = e.currentTarget;
+      if (droppedSubFile && el.value.trim() !== el.dataset.droppedLabel && el.value.trim() !== droppedSubFile.name) {
+        droppedSubFile = null;
+        delete el.dataset.droppedLabel;
+      }
+    });
+
+    localVideoFileInput.addEventListener('change', () => {
+      if (localVideoFileInput.files?.length) {
+        selectBrowserFile(localVideoFileInput.files[0]);
+      }
+      localVideoFileInput.value = '';
+    });
+
+    // Prevent browser from navigating away if a file is dropped anywhere on the page or modal
+    window.addEventListener('dragover', e => {
+      if (e.dataTransfer?.types?.includes('Files')) {
         e.preventDefault();
-        dropWell.classList.remove('dragover');
-        if (ev === 'drop' && e.dataTransfer?.files?.length) {
-          droppedFile = e.dataTransfer.files[0];
-          document.getElementById('input-source-path').value = droppedFile.name;
+      }
+    });
+    window.addEventListener('drop', e => {
+      if (!e.dataTransfer?.files?.length) return;
+      e.preventDefault();
+      dropWell.classList.remove('dragover');
+      if (!newTaskDialog.open) {
+        closeAllNtDropdowns();
+        newTaskDialog.showModal();
+      }
+      handleDroppedFiles(e.dataTransfer.files);
+    });
+
+    ['dragenter', 'dragover'].forEach(ev => {
+      newTaskDialog.addEventListener(ev, e => {
+        if (e.dataTransfer?.types?.includes('Files')) {
+          e.preventDefault();
+          dropWell.classList.add('dragover');
         }
       });
+    });
+    newTaskDialog.addEventListener('dragleave', e => {
+      if (!newTaskDialog.contains(e.relatedTarget)) {
+        dropWell.classList.remove('dragover');
+      }
+    });
+    newTaskDialog.addEventListener('drop', e => {
+      if (!e.dataTransfer?.files?.length) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dropWell.classList.remove('dragover');
+      if (e.target.closest('.nt-affix')) {
+        selectSubtitleFile(e.dataTransfer.files[0]);
+      } else {
+        handleDroppedFiles(e.dataTransfer.files);
+      }
     });
 
     document.getElementById('btn-pick-local')?.addEventListener('click', async () => {
-      try {
-        const res = await apiFetch('/api/dialogs/pick-files', { method: 'POST' });
-        if (res.paths && res.paths.length > 0) {
-          droppedFile = null;
-          document.getElementById('input-source-path').value = res.paths[0];
-        }
-      } catch (_) {}
+      if (isBackendConnected) {
+        try {
+          const res = await apiFetch('/api/dialogs/pick-files', { method: 'POST' });
+          if (res.paths && res.paths.length > 0) {
+            droppedFile = null;
+            const inputEl = document.getElementById('input-source-path');
+            delete inputEl.dataset.droppedLabel;
+            dropWell.classList.remove('has-file');
+            inputEl.value = res.paths[0];
+            return;
+          }
+          // User canceled native dialog or native dialog returned empty: do not pop a second dialog if native succeeded
+          if (Array.isArray(res.paths)) return;
+        } catch (_) {}
+      }
+      localVideoFileInput.click();
     });
 
     document.getElementById('btn-toggle-new-task').addEventListener('click', () => {
@@ -566,15 +679,18 @@
       document.getElementById('tab-glossary').click();
     });
 
-    document.getElementById('btn-create-task').addEventListener('click', async () => {
+    document.getElementById('btn-create-task').addEventListener('click', async e => {
+      const createBtn = e.currentTarget;
+      const origBtnText = createBtn.textContent;
       const sourceInput = document.getElementById('input-source-path');
+      const subInput = document.getElementById('input-sub-path');
       const rawPath = sourceInput.value.trim();
       if (!rawPath && !droppedFile) {
         sourceInput.focus();
         appendLog('warn', 'WARN', '请先选择本地媒体文件或输入有效的视频路径 / YouTube 链接', true);
         return;
       }
-      const subPath = document.getElementById('input-sub-path').value.trim() || null;
+      const subPath = subInput.value.trim() || null;
       const srcLang = document.getElementById('task-src-lang').value || 'en';
       const tgtLang = document.getElementById('task-tgt-lang').value.trim() || '简体中文';
       const domain = document.getElementById('task-domain').value;
@@ -583,15 +699,22 @@
       const pauseBefore = document.getElementById('task-pause-terms-chk').checked;
 
       if (isBackendConnected) {
+        createBtn.disabled = true;
         try {
           await apiFetch('/api/config', {
             method: 'PUT',
             body: JSON.stringify({ updates: { pause_before_translate: pauseBefore } }),
           });
           let created = null;
-          if (droppedFile && droppedFile.name === rawPath) {
+          if (droppedFile) {
+            createBtn.textContent = '正在上传…';
             const form = new FormData();
             form.append('file', droppedFile);
+            if (droppedSubFile) {
+              form.append('subtitles', droppedSubFile);
+            } else if (subPath) {
+              form.append('subtitles_path', subPath);
+            }
             form.append('source_language', srcLang);
             form.append('target_language', tgtLang);
             form.append('glossary_domain', domain);
@@ -599,7 +722,12 @@
             form.append('autorun', 'true');
             created = await apiFetch('/api/tasks/upload', { method: 'POST', body: form });
             droppedFile = null;
+            droppedSubFile = null;
+            delete sourceInput.dataset.droppedLabel;
+            delete subInput.dataset.droppedLabel;
+            dropWell.classList.remove('has-file');
           } else {
+            createBtn.textContent = '创建中…';
             created = await apiFetch('/api/tasks', {
               method: 'POST',
               body: JSON.stringify({
@@ -617,6 +745,7 @@
           if (created && created.task_id) {
             activeTaskId = created.task_id;
             sourceInput.value = '';
+            subInput.value = '';
             closeTopLayer(newTaskDialog);
             appendLog('asr', 'ASR', `Created workspace output/${created.task_id}/ and started pipeline...`, false);
             await loadBackendTasks();
@@ -625,6 +754,9 @@
         } catch (err) {
           appendLog('warn', 'WARN', `任务创建失败: ${err.message}`, true);
           return;
+        } finally {
+          createBtn.disabled = false;
+          createBtn.textContent = origBtnText;
         }
       }
 
@@ -1786,8 +1918,9 @@
         target_language: '简体中文',
         'api.reasoning_effort': 'none',
         reflect_translate: false,
-        pause_before_translate: true,
-        pause_after_translate: true,
+        pause_before_translate: false,
+        pause_after_translate: false,
+        vocal_separation_model: 'scnet',
         'whisper.language': 'en',
         'whisper.runtime': 'local',
         'whisper.backend': 'qwen',
@@ -1797,7 +1930,7 @@
         ffmpeg_gpu: true,
         'subtitle.max_length': 75,
         'subtitle.target_multiplier': 1.3,
-        'subtitle.sub_video_subtitles': 'bilingual',
+        'subtitle.sub_video_subtitles': 'translation',
         'subtitle.dub_video_subtitles': 'translation',
         'speed_factor.min': 1.0,
         'speed_factor.accept': 1.15,

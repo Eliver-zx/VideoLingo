@@ -167,10 +167,8 @@ def resolve_engine(requested=None):
     if not _installed(module):
         package = "mlx-audio" if engine == "mlx" else "qwen-asr"
         raise ImportError(
-            f"Qwen ASR engine '{engine}' needs the '{package}' package. Rerun `python installer.py`. "
-            "To use WhisperX instead, follow docs/pages/docs/whisperx-manual.en-US.md "
-            "and install the extra packages yourself, then set whisper.backend to whisperx. "
-            "The installer does not install WhisperX."
+            f"Qwen ASR engine '{engine}' needs the '{package}' package. "
+            "Run Start.command / Start.bat or `uv pip install -r requirements.txt` to install it."
         )
     return engine
 
