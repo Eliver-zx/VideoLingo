@@ -7,27 +7,22 @@ export PYTHONWARNINGS="ignore"
 PORT="${VIDEOLINGO_API_PORT:-8501}"
 URL="http://127.0.0.1:${PORT}"
 
-PY_CMD=""
-for candidate in \
-    "$HOME/.venvs/videolingo/bin/python" \
-    "$PWD/.venv/bin/python" \
-    "$HOME/miniconda3/bin/python3" \
-    "$HOME/anaconda3/bin/python3" \
-    "/opt/homebrew/anaconda3/bin/python3" \
-    "/opt/homebrew/Caskroom/miniconda/base/bin/python3" \
-    "$(command -v python3 2>/dev/null || true)"; do
-    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-        if "$candidate" -c "import fastapi, uvicorn, openai, ruamel.yaml" >/dev/null 2>&1; then
-            PY_CMD="$candidate"
-            break
-        fi
-    fi
-done
+if [ -x "$HOME/.venvs/videolingo/bin/python" ]; then
+    VENV_DIR="$HOME/.venvs/videolingo"
+else
+    VENV_DIR="$PWD/.venv"
+fi
+PY_CMD="$VENV_DIR/bin/python"
 
-if [ -z "$PY_CMD" ]; then
-    echo "Installing VideoLingo environment..."
-    python3 setup_env.py --yes
-    PY_CMD="$PWD/.venv/bin/python"
+if [ ! -x "$PY_CMD" ]; then
+    echo "[1/2] Creating Python 3.12 virtual environment at $VENV_DIR ..."
+    uv venv "$VENV_DIR" --python 3.12
+fi
+
+if ! "$PY_CMD" -c "import fastapi, uvicorn, openai, ruamel.yaml, spacy, demucs; import mlx_audio" >/dev/null 2>&1 && \
+   ! "$PY_CMD" -c "import fastapi, uvicorn, openai, ruamel.yaml, spacy, demucs; import qwen_asr" >/dev/null 2>&1; then
+    echo "[2/2] Installing dependencies via uv ..."
+    uv pip install --python "$PY_CMD" -r requirements.txt
 fi
 
 echo "Using Python: $PY_CMD"

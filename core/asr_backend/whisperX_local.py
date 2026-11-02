@@ -1,9 +1,5 @@
 import warnings
 import time
-from runtime_libraries import configure_ffmpeg_dlls
-
-configure_ffmpeg_dlls()
-
 import torch  # noqa: E402  # type: ignore[import-not-found]
 import functools  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -21,26 +17,35 @@ warnings.filterwarnings("ignore")
 # behavior).  This is safe here because all model files come from trusted
 # sources (HuggingFace / pyannote).
 _original_torch_load = torch.load
+
+
 @functools.wraps(_original_torch_load)
 def _patched_torch_load(*args, **kwargs):
     if kwargs.get("weights_only") is None:
         kwargs["weights_only"] = False
     return _original_torch_load(*args, **kwargs)
+
+
 torch.load = _patched_torch_load
 
 # =============================================================================
 # Now safe to import whisperx and the rest of the application
 # =============================================================================
 import whisperx  # noqa: E402  # type: ignore[import-not-found]
-from whisperx.audio import load_audio as _whisperx_load_audio, SAMPLE_RATE as _WHISPERX_SR  # noqa: E402  # type: ignore[import-not-found]
+from whisperx.audio import (
+    load_audio as _whisperx_load_audio,
+    SAMPLE_RATE as _WHISPERX_SR,
+)  # noqa: E402  # type: ignore[import-not-found]
 from rich import print as rprint  # noqa: E402
 from core.utils import except_handler, load_key, update_key  # noqa: E402
 
 
 def _complete_model_directory(path):
-    required = ('config.json', 'model.bin', 'tokenizer.json')
-    return all((Path(path) / name).is_file() and (Path(path) / name).stat().st_size > 0
-               for name in required)
+    required = ("config.json", "model.bin", "tokenizer.json")
+    return all(
+        (Path(path) / name).is_file() and (Path(path) / name).stat().st_size > 0
+        for name in required
+    )
 
 
 def resolve_whisper_model(model_name, model_dir=None):
@@ -56,50 +61,65 @@ def resolve_whisper_model(model_name, model_dir=None):
         if directory.is_dir():
             if not _complete_model_directory(directory):
                 raise ValueError(
-                    f'Local model directory is incomplete: {directory}. '
-                    'Expected non-empty config.json, model.bin and tokenizer.json.'
+                    f"Local model directory is incomplete: {directory}. "
+                    "Expected non-empty config.json, model.bin and tokenizer.json."
                 )
-            rprint(f'[green]Using local Whisper model (no Hub lookup): {directory.resolve()}[/green]')
+            rprint(
+                f"[green]Using local Whisper model (no Hub lookup): {directory.resolve()}[/green]"
+            )
             return str(directory.resolve())
 
     # The installed loader owns aliases (large/turbo/distil) and HF cache locations.
     # local_files_only resolves the cached revision without checking the network.
     for cache_dir in (str(model_dir), None):
         try:
-            snapshot = download_model(model_name, cache_dir=cache_dir, local_files_only=True)
+            snapshot = download_model(
+                model_name, cache_dir=cache_dir, local_files_only=True
+            )
         except LocalEntryNotFoundError:
             continue
         if _complete_model_directory(snapshot):
-            rprint(f'[green]Using cached Whisper model (no Hub lookup): {snapshot}[/green]')
+            rprint(
+                f"[green]Using cached Whisper model (no Hub lookup): {snapshot}[/green]"
+            )
             return snapshot
 
-    rprint('[yellow]No complete Whisper model found locally. Fetching missing files '
-           'from the configured HuggingFace endpoint into the global cache.[/yellow]')
+    rprint(
+        "[yellow]No complete Whisper model found locally. Fetching missing files "
+        "from the configured HuggingFace endpoint into the global cache.[/yellow]"
+    )
     snapshot = download_model(model_name)
     if not _complete_model_directory(snapshot):
-        raise RuntimeError('Downloaded Whisper model is incomplete')
-    rprint(f'[green]Whisper model files ready: {snapshot}[/green]')
+        raise RuntimeError("Downloaded Whisper model is incomplete")
+    rprint(f"[green]Whisper model files ready: {snapshot}[/green]")
     return snapshot
+
 
 @except_handler("WhisperX processing error:")
 def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     WHISPER_LANGUAGE = load_key("whisper.language")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     rprint(f"🚀 Starting WhisperX using device: {device} ...")
-    
+
     if device == "cuda":
         gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         batch_size = 16 if gpu_mem > 8 else 2
         compute_type = "float16" if torch.cuda.is_bf16_supported() else "int8"
-        rprint(f"[cyan]🎮 GPU memory:[/cyan] {gpu_mem:.2f} GB, [cyan]📦 Batch size:[/cyan] {batch_size}, [cyan]⚙️ Compute type:[/cyan] {compute_type}")
+        rprint(
+            f"[cyan]🎮 GPU memory:[/cyan] {gpu_mem:.2f} GB, [cyan]📦 Batch size:[/cyan] {batch_size}, [cyan]⚙️ Compute type:[/cyan] {compute_type}"
+        )
     else:
         batch_size = 1
         compute_type = "int8"
-        rprint(f"[cyan]📦 Batch size:[/cyan] {batch_size}, [cyan]⚙️ Compute type:[/cyan] {compute_type}")
-    rprint(f"[green]▶️ Starting WhisperX for segment {start:.2f}s to {end:.2f}s...[/green]")
-    
+        rprint(
+            f"[cyan]📦 Batch size:[/cyan] {batch_size}, [cyan]⚙️ Compute type:[/cyan] {compute_type}"
+        )
+    rprint(
+        f"[green]▶️ Starting WhisperX for segment {start:.2f}s to {end:.2f}s...[/green]"
+    )
+
     model_dir = load_key("model_dir")
-    if WHISPER_LANGUAGE == 'zh':
+    if WHISPER_LANGUAGE == "zh":
         model_name = "Huan69/Belle-whisper-large-v3-zh-punct-fasterwhisper"
         local_model = Path(model_dir) / "Belle-whisper-large-v3-zh-punct-fasterwhisper"
         if local_model.is_dir():
@@ -108,13 +128,18 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
         model_name = load_key("whisper.model")
         if "turbo" in str(model_name).lower():
             # turbo loops on repeated words in this pipeline, so it is rewritten.
-            rprint("[yellow]large-v3-turbo repeats itself in this pipeline; using large-v3 instead.[/yellow]")
+            rprint(
+                "[yellow]large-v3-turbo repeats itself in this pipeline; using large-v3 instead.[/yellow]"
+            )
             model_name = "large-v3"
     model_name = resolve_whisper_model(model_name, model_dir)
 
-    vad_options = {"vad_onset": 0.500,"vad_offset": 0.363}
-    asr_options = {"temperatures": [0],"initial_prompt": "",}
-    whisper_language = None if 'auto' in WHISPER_LANGUAGE else WHISPER_LANGUAGE
+    vad_options = {"vad_onset": 0.500, "vad_offset": 0.363}
+    asr_options = {
+        "temperatures": [0],
+        "initial_prompt": "",
+    }
+    whisper_language = None if "auto" in WHISPER_LANGUAGE else WHISPER_LANGUAGE
     load_kwargs = dict(
         device=device,
         compute_type=compute_type,
@@ -135,13 +160,17 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
 
     raw_audio_segment = load_audio_segment(raw_audio_file, start, end)
     vocal_audio_segment = load_audio_segment(vocal_audio_file, start, end)
-    
+
     # -------------------------
     # 1. transcribe raw audio
     # -------------------------
     transcribe_start_time = time.time()
-    rprint("[bold green]Note: You will see Progress if working correctly ↓[/bold green]")
-    result = model.transcribe(raw_audio_segment, batch_size=batch_size, print_progress=True)
+    rprint(
+        "[bold green]Note: You will see Progress if working correctly ↓[/bold green]"
+    )
+    result = model.transcribe(
+        raw_audio_segment, batch_size=batch_size, print_progress=True
+    )
     transcribe_time = time.time() - transcribe_start_time
     rprint(f"[cyan]⏱️ time transcribe:[/cyan] {transcribe_time:.2f}s")
 
@@ -150,18 +179,29 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     torch.cuda.empty_cache()
 
     # Save language
-    detected_language = result['language']
+    detected_language = result["language"]
     update_key("whisper.detected_language", detected_language)
-    if result['language'] == 'zh' and WHISPER_LANGUAGE != 'zh':
-        raise ValueError("Please specify the transcription language as zh and try again!")
+    if result["language"] == "zh" and WHISPER_LANGUAGE != "zh":
+        raise ValueError(
+            "Please specify the transcription language as zh and try again!"
+        )
 
     # -------------------------
     # 2. align by vocal audio
     # -------------------------
     align_start_time = time.time()
     # Align timestamps using vocal audio
-    model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
-    result = whisperx.align(result["segments"], model_a, metadata, vocal_audio_segment, device, return_char_alignments=False)
+    model_a, metadata = whisperx.load_align_model(
+        language_code=result["language"], device=device
+    )
+    result = whisperx.align(
+        result["segments"],
+        model_a,
+        metadata,
+        vocal_audio_segment,
+        device,
+        return_char_alignments=False,
+    )
     result["language"] = detected_language
     align_time = time.time() - align_start_time
     rprint(f"[cyan]⏱️ time align:[/cyan] {align_time:.2f}s")
@@ -171,12 +211,12 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     del model_a
 
     # Adjust timestamps
-    for segment in result['segments']:
-        segment['start'] += start
-        segment['end'] += start
-        for word in segment['words']:
-            if 'start' in word:
-                word['start'] += start
-            if 'end' in word:
-                word['end'] += start
+    for segment in result["segments"]:
+        segment["start"] += start
+        segment["end"] += start
+        for word in segment["words"]:
+            if "start" in word:
+                word["start"] += start
+            if "end" in word:
+                word["end"] += start
     return result
