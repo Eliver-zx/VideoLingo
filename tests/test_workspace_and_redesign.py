@@ -234,9 +234,6 @@ def test_proportional_subtitle_split_reruns_on_max_length_increase(
         }
     ]
     ws.save_utterances(utterances)
-    pd.DataFrame(
-        [{"Source": utterances[0]["src"], "Translation": utterances[0]["tgt"]}]
-    ).to_excel(ws.log_dir / "translation_results.xlsx", index=False)
 
     with (
         workspace_context(ws),
@@ -814,9 +811,9 @@ def test_multi_task_isolation_fix_source_and_inline_tts_text_flow(
             wf.writeframes(np.zeros(sr * 3, dtype=np.int16).tobytes())
         _8_1_audio_task.gen_audio_task_main()
         _8_2_dub_chunks.gen_dub_chunks()
-        df_tasks_a = pd.read_excel(ws_a.audio_dir / "tts_tasks.xlsx")
+        df_tasks_a = ws_a.load_dub_tasks_df()
         assert "我们使用派托奇二点零，非常快。" in str(df_tasks_a.loc[0, "lines"])
-        assert not (ws_b.audio_dir / "tts_tasks.xlsx").exists()
+        assert not ws_b.has_dub_tasks()
 
     # Global glossary GET/PUT, nested audio/dub.wav file download, and DELETE task_b
     (ws_a.audio_dir / "dub.wav").write_bytes(b"RIFF-dub-wav")
@@ -1202,7 +1199,6 @@ def test_review_fixes_large_dict_fix_source_paused_invalidate_domain_mtime_and_h
     4. Headerless .xlsx import preserves the first data row instead of swallowing it as header.
     """
     import io
-    import os
     import time
     from core import _4_1_summarize, _4_2_translate
 
@@ -1295,7 +1291,7 @@ def test_review_fixes_large_dict_fix_source_paused_invalidate_domain_mtime_and_h
         kb_idx_toggled = _4_1_summarize._get_kb_index(toggled_custom)
         assert kb_idx_toggled["entries"]["kubernetes"]["fix_source"] is False
 
-    # Finding 4: Switching stage3 glossary_domain without passing terms must NOT bump terms.json mtime
+    # Finding 4: Switching stage3 glossary_domain without passing terms must NOT bump terms mtime
     ws.save_terms(
         "Old summary",
         [
@@ -1309,16 +1305,14 @@ def test_review_fixes_large_dict_fix_source_paused_invalidate_domain_mtime_and_h
         ],
     )
     old_mtime = 1_700_000_000.0
-    os.utime(ws.terms_path, (old_mtime, old_mtime))
-    os.utime(ws.log_dir / "terminology.json", (old_mtime, old_mtime))
+    ws.set_terms_mtime(old_mtime)
 
     res_dom_only = client.put(
         "/api/tasks/task_rev/terms",
         json={"glossary_domain": "excel_dom"},
     )
     assert res_dom_only.status_code == 200
-    assert os.stat(ws.terms_path).st_mtime == old_mtime
-    assert os.stat(ws.log_dir / "terminology.json").st_mtime == old_mtime
+    assert ws.get_terms_mtime() == old_mtime
     # Because terms.json mtime was NOT bumped above excel_dom/terms.csv mtime, domain CSV ("K8s容器编排") wins!
     with (
         workspace_context(ws),
@@ -1874,3 +1868,163 @@ def test_config_stat_cache_zero_latency_sync_and_bidirectional_overrides(
             assert config_utils.load_key("subtitle.max_length") == 36
         # Exiting inner context restores outer override without pollution
         assert config_utils.load_key("subtitle.max_length") == 50
+
+
+def test_stage_04_utterance_editor_sqlite_persistence_and_webui_controls(
+    tmp_path: Path, monkeypatch
+):
+    """WebUI exposes Stage 04 interactive utterance controls and PUT /api/tasks/{id}/utterances persists into project.sqlite and syncs SRT/ASS."""
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    monkeypatch.setattr("core.workspace.OUTPUT_ROOT", output_root)
+    monkeypatch.setattr(api, "OUTPUT", output_root)
+
+    ws = TaskWorkspace(output_root / "task_edit")
+    ws.ensure_dirs()
+    ws.save_words(
+        [
+            {"idx": 0, "text": "Hello", "punct_after": "", "start": 0.0, "end": 0.8},
+            {"idx": 1, "text": "world", "punct_after": ".", "start": 0.8, "end": 1.6},
+        ]
+    )
+    ws.save_utterances(
+        [
+            {
+                "id": "u_0000",
+                "index": 0,
+                "word_span": [0, 2],
+                "start": 0.0,
+                "end": 1.6,
+                "gap_after": 0.0,
+                "src": "Hello world.",
+                "tgt": "你好世界。",
+                "tts_text": "你好世界。",
+                "sub_cues": [
+                    {
+                        "src": "Hello world.",
+                        "tgt": "你好世界。",
+                        "trans": "你好世界。",
+                        "word_span": [0, 2],
+                        "start": 0.0,
+                        "end": 1.6,
+                    }
+                ],
+            }
+        ]
+    )
+    ws.src_srt_path.write_text(
+        "1\n00:00:00,000 --> 00:00:01,600\nHello world.\n\n", encoding="utf-8"
+    )
+    ws.trans_srt_path.write_text(
+        "1\n00:00:00,000 --> 00:00:01,600\n你好世界。\n\n", encoding="utf-8"
+    )
+
+    client = TestClient(api.app)
+    html_res = client.get("/")
+    assert html_res.status_code == 200
+    assert 'id="btn-save-utterances"' in html_res.text
+    assert 'id="btn-save-utterances-and-continue"' in html_res.text
+
+    put_res = client.put(
+        "/api/tasks/task_edit/utterances",
+        json={
+            "utterances": [
+                {
+                    "id": "u_0000",
+                    "index": 0,
+                    "word_span": [0, 2],
+                    "start": 0.0,
+                    "end": 1.6,
+                    "gap_after": 0.0,
+                    "src": "Hello edited world.",
+                    "tgt": "你好，修订后的世界。",
+                    "tts_text": "大家注意，这是配音专享词。",
+                    "sub_cues": [
+                        {
+                            "src": "Hello world.",
+                            "tgt": "你好世界。",
+                            "trans": "你好世界。",
+                            "word_span": [0, 2],
+                            "start": 0.0,
+                            "end": 1.6,
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+    assert put_res.status_code == 200
+    assert put_res.json()["saved"] == 1
+
+    loaded = ws.load_utterances()
+    assert len(loaded) == 1
+    assert loaded[0]["src"] == "Hello edited world."
+    assert loaded[0]["tgt"] == "你好，修订后的世界。"
+    assert loaded[0]["tts_text"] == "大家注意，这是配音专享词。"
+    assert loaded[0]["sub_cues"][0]["tgt"] == "你好，修订后的世界。"
+    assert "修订后的世界" in ws.trans_srt_path.read_text(encoding="utf-8")
+    assert "这是配音专享词" in (ws.audio_dir / "trans_subs_for_audio.srt").read_text(
+        encoding="utf-8"
+    )
+    assert not (ws.log_dir / "utterances.json").exists()
+    assert ws.db_path.is_file()
+
+
+def test_sqlite_only_step11_and_dubbing_chunk_invalidation(tmp_path: Path):
+    """Step 11 loads dub_tasks directly from project.sqlite without tts_tasks.xlsx; editing utterances invalidates stale dubbing."""
+    ws = TaskWorkspace(tmp_path / "task_dub_sqlite")
+    ws.ensure_dirs()
+    seg_wav = ws.segs_dir / "1_0.wav"
+    AudioSegment.silent(duration=500, frame_rate=32000).export(
+        str(seg_wav), format="wav"
+    )
+
+    # 1. Step 8.1 writes initial dub_tasks without 'lines' / 'cut_off' -> is_step_done(tts_tasks.xlsx) must be False
+    ws.save_dub_tasks(
+        [
+            {
+                "number": 1,
+                "start_time": "00:00:00.000",
+                "end_time": "00:00:01.000",
+                "duration": 1.0,
+                "text": "你好世界",
+                "origin": "Hello world",
+            }
+        ]
+    )
+    assert ws.has_dub_tasks() is True
+    assert ws.has_dub_chunks() is False
+    assert ws.is_step_done(ws.audio_dir / "tts_tasks.xlsx") is False
+
+    # 2. Step 8.2 / Step 10 writes full dub_tasks with 'lines', 'cut_off', and 'new_sub_times'
+    ws.save_dub_tasks(
+        [
+            {
+                "number": 1,
+                "start_time": "00:00:00.000",
+                "end_time": "00:00:01.000",
+                "duration": 1.0,
+                "text": "你好世界",
+                "origin": "Hello world",
+                "cut_off": 1,
+                "lines": ["你好世界"],
+                "src_lines": ["Hello world"],
+                "new_sub_times": [[0.0, 0.5]],
+            }
+        ]
+    )
+    assert ws.has_dub_chunks() is True
+    assert ws.is_step_done(ws.audio_dir / "tts_tasks.xlsx") is True
+    assert not (ws.audio_dir / "tts_tasks.xlsx").exists()
+
+    # 3. Step 11 load_and_flatten_data and create_srt_subtitle work purely from project.sqlite
+    with workspace_context(ws):
+        df, lines, new_sub_times = _11_merge_audio.load_and_flatten_data(
+            str(ws.audio_dir / "tts_tasks.xlsx")
+        )
+        assert len(df) == 1
+        assert lines == ["你好世界"]
+        assert new_sub_times == [[0.0, 0.5]]
+        _11_merge_audio.create_srt_subtitle()
+    assert ws.dub_srt_path.is_file()
+    assert "你好世界" in ws.dub_srt_path.read_text(encoding="utf-8")

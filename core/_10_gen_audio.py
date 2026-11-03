@@ -22,6 +22,7 @@ from core.utils.models import (
 )
 from core.asr_backend.audio_preprocess import get_audio_duration
 from core.tts_backend.tts_main import tts_main
+from core.workspace import workspace_for_path
 
 console = Console()
 
@@ -133,8 +134,10 @@ def trim_edge_silence(
         end_ms = min(len(audio), len(audio) - max(0, trail_ms - guard_ms))
         if end_ms - start_ms >= 50 and (start_ms > 0 or end_ms < len(audio)):
             audio[start_ms:end_ms].export(audio_file, format="wav")
-    except Exception:
-        pass
+    except (OSError, ValueError) as exc:
+        rprint(
+            f"[yellow]⚠️ Silence trim skipped for {os.path.basename(audio_file)}: {exc}[/yellow]"
+        )
 
 
 def process_row(row: pd.Series, tasks_df: pd.DataFrame) -> Tuple[int, float]:
@@ -373,10 +376,13 @@ def gen_audio() -> None:
     os.makedirs(resolve_task_path(_AUDIO_TMP_DIR), exist_ok=True)
     os.makedirs(resolve_task_path(_AUDIO_SEGS_DIR), exist_ok=True)
 
-    # 📝 Step2: Load task file
+    # 📝 Step2: Load task records
     audio_task_path = resolve_task_path(_8_1_AUDIO_TASK)
-    tasks_df = pd.read_excel(audio_task_path)
-    rprint("[green]📊 Loaded task file successfully[/green]")
+    ws = workspace_for_path(audio_task_path)
+    tasks_df = ws.load_dub_tasks_df()
+    if tasks_df.empty and os.path.exists(audio_task_path):
+        tasks_df = pd.read_excel(audio_task_path)
+    rprint("[green]📊 Loaded task records successfully[/green]")
 
     # 🔊 Step3: Generate TTS audio
     tasks_df = generate_tts_audio(tasks_df)
@@ -385,7 +391,7 @@ def gen_audio() -> None:
     tasks_df = merge_chunks(tasks_df)
 
     # 💾 Step5: Save results
-    tasks_df.to_excel(audio_task_path, index=False)
+    ws.save_dub_tasks(tasks_df)
     rprint("[bold green]🎉 Audio generation completed successfully![/bold green]")
 
 

@@ -14,7 +14,7 @@ from core.utils.models import (
     resolve_task_path,
 )
 from core.utils.subtitle_style import build_ass_from_srt_pair, get_burn_mode
-from core.workspace import get_active_workspace
+from core.workspace import get_active_workspace, workspace_for_path
 
 console = Console()
 
@@ -70,7 +70,10 @@ def show_difference(str1, str2):
     print(f"Actual match: {str2}")
     print(
         "Position markers: "
-        + "".join("^" if i in diff_positions else " " for i in range(max(len(str1), len(str2))))
+        + "".join(
+            "^" if i in diff_positions else " "
+            for i in range(max(len(str1), len(str2)))
+        )
     )
     print(f"Difference indices: {diff_positions}")
 
@@ -103,10 +106,12 @@ def format_subtitle_text(x):
     return text.strip()
 
 
-def _try_direct_utterance_timestamps(df_words, sentences_list: list[str]) -> list[tuple[float, float]] | None:
-    """Read (start, end) in O(1) from utterances.json word_span / sub_cues when matching."""
+def _try_direct_utterance_timestamps(
+    df_words, sentences_list: list[str]
+) -> list[tuple[float, float]] | None:
+    """Read (start, end) in O(1) from workspace utterances word_span / sub_cues when matching."""
     ws = get_active_workspace()
-    if not ws.utterances_path.is_file():
+    if not ws.has_utterances():
         return None
     try:
         utterances = ws.load_utterances()
@@ -127,14 +132,25 @@ def _try_direct_utterance_timestamps(df_words, sentences_list: list[str]) -> lis
             if not (0 <= w_a < w_b <= n_words):
                 return None
             if not all_spans_cover_df:
-                w_a_text = remove_punctuation(str(df_words["text"].iloc[w_a]).lower()).replace(" ", "")
-                u_clean = remove_punctuation(str(u.get("src_raw") or u.get("src", "")).lower()).replace(" ", "")
+                w_a_text = remove_punctuation(
+                    str(df_words["text"].iloc[w_a]).lower()
+                ).replace(" ", "")
+                u_clean = remove_punctuation(
+                    str(u.get("src_raw") or u.get("src", "")).lower()
+                ).replace(" ", "")
                 if w_a_text and u_clean and not u_clean.startswith(w_a_text[:1]):
                     return None
-            stamps.append((float(df_words["start"].iloc[w_a]), float(df_words["end"].iloc[w_b - 1])))
+            stamps.append(
+                (
+                    float(df_words["start"].iloc[w_a]),
+                    float(df_words["end"].iloc[w_b - 1]),
+                )
+            )
         return stamps
 
-    sub_cues = [c for u in utterances for c in (u.get("sub_cues") or []) if isinstance(c, dict)]
+    sub_cues = [
+        c for u in utterances for c in (u.get("sub_cues") or []) if isinstance(c, dict)
+    ]
     if sub_cues and [str(c.get("src", "")).strip() for c in sub_cues] == sentences_list:
         stamps = []
         for c in sub_cues:
@@ -145,11 +161,20 @@ def _try_direct_utterance_timestamps(df_words, sentences_list: list[str]) -> lis
             if not (0 <= w_a < w_b <= n_words):
                 return None
             if not all_spans_cover_df:
-                w_a_text = remove_punctuation(str(df_words["text"].iloc[w_a]).lower()).replace(" ", "")
-                c_clean = remove_punctuation(str(c.get("src", "")).lower()).replace(" ", "")
+                w_a_text = remove_punctuation(
+                    str(df_words["text"].iloc[w_a]).lower()
+                ).replace(" ", "")
+                c_clean = remove_punctuation(str(c.get("src", "")).lower()).replace(
+                    " ", ""
+                )
                 if w_a_text and c_clean and not c_clean.startswith(w_a_text[:1]):
                     return None
-            stamps.append((float(df_words["start"].iloc[w_a]), float(df_words["end"].iloc[w_b - 1])))
+            stamps.append(
+                (
+                    float(df_words["start"].iloc[w_a]),
+                    float(df_words["end"].iloc[w_b - 1]),
+                )
+            )
         return stamps
 
     return None
@@ -215,7 +240,11 @@ def get_sentence_timestamps(df_words, df_sentences):
             max_dist = max(2, int(sentence_len * 0.25))
             win_low = max(0, current_pos - 8)
             win_high = min(len(full_words_str), current_pos + sentence_len + 16)
-            cand_starts = [s for s in word_starts if win_low <= s <= min(win_high, current_pos + 12)]
+            cand_starts = [
+                s
+                for s in word_starts
+                if win_low <= s <= min(win_high, current_pos + 12)
+            ]
             cand_ends = [e for e in word_ends if win_low < e <= win_high]
             best_span = None
             best_dist = max_dist + 1
@@ -268,9 +297,19 @@ def get_sentence_timestamps(df_words, df_sentences):
     last_word_end = float(df_words["end"].iloc[-1]) if len(df_words) > 0 else 0.0
     for i, stamp in enumerate(time_stamp_list):
         if stamp is None:
-            start = time_stamp_list[i - 1][1] if i > 0 and time_stamp_list[i - 1] is not None else 0.0
-            following = next((s for s in time_stamp_list[i + 1 :] if s is not None), None)
-            end = max(start, following[0]) if following else max(start, min(last_word_end, start))
+            start = (
+                time_stamp_list[i - 1][1]
+                if i > 0 and time_stamp_list[i - 1] is not None
+                else 0.0
+            )
+            following = next(
+                (s for s in time_stamp_list[i + 1 :] if s is not None), None
+            )
+            end = (
+                max(start, following[0])
+                if following
+                else max(start, min(last_word_end, start))
+            )
             time_stamp_list[i] = (start, end)
 
     return time_stamp_list
@@ -311,13 +350,15 @@ def align_timestamp(
 
     # Polish subtitles: replace punctuation in Translation if for_display
     if for_display and "Translation" in df_trans_time.columns:
-        df_trans_time["Translation"] = df_trans_time["Translation"].apply(format_subtitle_text)
+        df_trans_time["Translation"] = df_trans_time["Translation"].apply(
+            format_subtitle_text
+        )
 
     # Output subtitles 📜
     def generate_subtitle_string(df, columns):
         return "".join(
             [
-                f"{i+1}\n{row['timestamp']}\n{row[columns[0]].strip()}\n{row[columns[1]].strip() if len(columns) > 1 else ''}\n\n"
+                f"{i + 1}\n{row['timestamp']}\n{row[columns[0]].strip()}\n{row[columns[1]].strip() if len(columns) > 1 else ''}\n\n"
                 for i, row in df.iterrows()
             ]
         ).strip()
@@ -340,18 +381,38 @@ def gen_source_subtitles():
     cleaned_path = resolve_task_path(_2_CLEANED_CHUNKS)
     meaning_path = resolve_task_path(_3_2_SPLIT_BY_MEANING)
     out_dir = resolve_task_path(_OUTPUT_DIR)
+    ws = workspace_for_path(cleaned_path)
 
-    df_text = pd.read_excel(cleaned_path)
-    df_text["text"] = df_text["text"].str.strip('"').str.strip()
-    with open(meaning_path, "r", encoding="utf-8") as f:
-        lines = [line.strip() for line in f if line.strip()]
+    words = ws.load_words()
+    if words:
+        df_text = pd.DataFrame(words)
+    else:
+        df_text = pd.read_excel(cleaned_path)
+        df_text["text"] = df_text["text"].str.strip('"').str.strip()
+
+    utts = ws.load_utterances()
+    if utts:
+        lines = [
+            str(u.get("src") or "").strip()
+            for u in utts
+            if str(u.get("src") or "").strip()
+        ]
+    else:
+        with open(meaning_path, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
 
     # The subtitles of the user keep their lines
     df_source = pd.DataFrame(
         {"Source": lines if find_subtitle_file() else split_source_lines(lines)}
     )
-    align_timestamp(df_text, df_source, [("src.srt", ["Source"])], out_dir, for_display=False)
-    console.print(Panel(f"[bold green]🎉📝 Source subtitles are ready: `{out_dir}/src.srt`[/bold green]"))
+    align_timestamp(
+        df_text, df_source, [("src.srt", ["Source"])], out_dir, for_display=False
+    )
+    console.print(
+        Panel(
+            f"[bold green]🎉📝 Source subtitles are ready: `{out_dir}/src.srt`[/bold green]"
+        )
+    )
 
 
 # ✨ Beautify the translation
@@ -367,16 +428,49 @@ def align_timestamp_main():
     remerged_path = resolve_task_path(_5_REMERGED)
     out_dir = resolve_task_path(_OUTPUT_DIR)
     audio_dir = resolve_task_path(_AUDIO_DIR)
+    ws = workspace_for_path(cleaned_path)
 
-    df_text = pd.read_excel(cleaned_path)
-    df_text["text"] = df_text["text"].str.strip('"').str.strip()
-    df_translate = pd.read_excel(split_sub_path)
+    words = ws.load_words()
+    if words:
+        df_text = pd.DataFrame(words)
+    else:
+        df_text = pd.read_excel(cleaned_path)
+        df_text["text"] = df_text["text"].str.strip('"').str.strip()
+
+    utts = ws.load_utterances()
+    if utts:
+        cue_rows = []
+        for u in utts:
+            cues = u.get("sub_cues")
+            if isinstance(cues, list) and cues:
+                for c in cues:
+                    cue_rows.append(
+                        {
+                            "Source": str(c.get("src") or ""),
+                            "Translation": str(
+                                c.get("tgt", c.get("trans", c.get("text", ""))) or ""
+                            ),
+                        }
+                    )
+            else:
+                cue_rows.append(
+                    {
+                        "Source": str(u.get("src") or ""),
+                        "Translation": str(u.get("tgt") or ""),
+                    }
+                )
+        df_translate = pd.DataFrame(cue_rows)
+    else:
+        df_translate = pd.read_excel(split_sub_path)
     df_translate["Translation"] = df_translate["Translation"].apply(clean_translation)
 
-    align_timestamp(df_text, df_translate, SUBTITLE_OUTPUT_CONFIGS, out_dir, for_display=True)
+    align_timestamp(
+        df_text, df_translate, SUBTITLE_OUTPUT_CONFIGS, out_dir, for_display=True
+    )
 
-    ws = get_active_workspace()
-    manifest_media = (ws.load_manifest().get("media") or {}) if ws.manifest_path.is_file() else {}
+    manifest_media = (
+        (ws.load_manifest().get("media") or {}) if ws.manifest_path.is_file() else {}
+    )
     disp_w = int(manifest_media.get("display_width") or 1920)
     disp_h = int(manifest_media.get("display_height") or 1080)
     build_ass_from_srt_pair(
@@ -394,18 +488,21 @@ def align_timestamp_main():
     )
 
     # for audio: keep full punctuation (for_display=False) so TTS preserves natural prosody pauses
-    df_translate_for_audio = pd.read_excel(remerged_path)
-    df_translate_for_audio["Translation"] = (
-        df_translate_for_audio["Translation"].fillna("").astype(str).str.strip()
-    )
-    if ws.utterances_path.is_file():
-        utts = ws.load_utterances()
-        if len(utts) == len(df_translate_for_audio):
-            for idx, u in enumerate(utts):
-                tts_val = str(u.get("tts_text") or "").strip()
-                tgt_val = str(u.get("tgt") or "").strip()
-                if tts_val and tts_val != tgt_val:
-                    df_translate_for_audio.at[idx, "Translation"] = tts_val
+    if utts:
+        df_translate_for_audio = pd.DataFrame(
+            [
+                {
+                    "Source": str(u.get("src") or "").strip(),
+                    "Translation": str(u.get("tts_text") or u.get("tgt") or "").strip(),
+                }
+                for u in utts
+            ]
+        )
+    else:
+        df_translate_for_audio = pd.read_excel(remerged_path)
+        df_translate_for_audio["Translation"] = (
+            df_translate_for_audio["Translation"].fillna("").astype(str).str.strip()
+        )
 
     align_timestamp(
         df_text,

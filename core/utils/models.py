@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from core.workspace import get_active_workspace
 
 # ------------------------------------------
 # 3 Core JSON Contracts (New Architecture)
@@ -52,6 +51,8 @@ _AUDIO_DONE_MARKER = "output/.dubbing_done"
 
 def resolve_task_path(path_str: str | Path) -> str:
     """Resolve a default `output/...` path into the active `TaskWorkspace` while honoring test monkeypatches."""
+    from core.workspace import get_active_workspace
+
     s = str(path_str).replace("\\", "/")
     ws = get_active_workspace()
     ws_root = str(ws.root).replace("\\", "/")
@@ -60,7 +61,7 @@ def resolve_task_path(path_str: str | Path) -> str:
     if s == "output":
         return ws_root
     if s.startswith("output/"):
-        return f"{ws_root}/{s[len('output/'):]}"
+        return f"{ws_root}/{s[len('output/') :]}"
     return s
 
 

@@ -133,16 +133,16 @@ def test_split_by_spacy_writes_both_nlp_and_meaning_files(monkeypatch, tmp_path)
         lambda *args, **kwargs: {"restored": "Hello world. this is a test."},
     )
 
-    # Call split_by_spacy directly (it checks both _3_1_SPLIT_BY_NLP and _3_2_SPLIT_BY_MEANING)
+    # Call split_by_spacy directly (it persists words and utterances into project.sqlite)
     split_nlp.split_by_spacy()
 
-    assert nlp_txt.read_text(encoding="utf-8").splitlines() == [
+    from core.workspace import TaskWorkspace
+
+    ws = TaskWorkspace(tmp_path)
+    assert [u["src"] for u in ws.load_utterances()] == [
         "Hello world.",
         "this is a test.",
     ]
-    assert meaning_txt.read_text(encoding="utf-8") == nlp_txt.read_text(
-        encoding="utf-8"
-    )
 
 
 def test_decimals_abbreviations_and_standalone_punct_do_not_break_sentences(
@@ -381,9 +381,10 @@ def test_get_summary_merges_chunks_and_custom_terms_consistently(monkeypatch, tm
 
     getattr(summarize.get_summary, "__wrapped__")()
 
-    saved = json.loads(term_json.read_text(encoding="utf-8"))
-    assert "Chunk 0 theme." in saved["theme"]
-    assert saved["topic"] == saved["theme"]
+    from core.workspace import TaskWorkspace
+
+    saved = TaskWorkspace(tmp_path).load_terms()
+    assert "Chunk 0 theme." in saved["summary"]
     terms_by_src = {t["src"]: t["tgt"] for t in saved["terms"]}
     assert terms_by_src["Vulkan"] == "Vulkan 接口"
     assert terms_by_src["Nanite"] == "Nanite 虚拟微多边形"
@@ -453,14 +454,15 @@ def test_translate_all_reuses_raw_cache_and_invalidates_on_terminology_change(
 
     getattr(translate.translate_all, "__wrapped__")()
 
-    result = pd.read_excel(out_xlsx)
-    assert result["Source"].tolist() == ["Hello world.", "How are you?"]
-    assert result["Translation"].tolist() == ["你好，世界。", "你好吗？"]
+    from core.workspace import TaskWorkspace
 
-    # Now modify terminology.json -> fingerprint changes -> cache must return None
-    term_json.write_text(
-        '{"theme": "updated", "terms": [{"src": "world", "tgt": "天下", "note": ""}]}',
-        encoding="utf-8",
+    utts = TaskWorkspace(tmp_path).load_utterances()
+    assert [u["src"] for u in utts] == ["Hello world.", "How are you?"]
+    assert [u["tgt"] for u in utts] == ["你好，世界。", "你好吗？"]
+
+    # Now modify terms in workspace -> fingerprint changes -> cache must return None
+    TaskWorkspace(tmp_path).save_terms(
+        "updated", [{"src": "world", "tgt": "天下", "note": ""}]
     )
     new_fp = translate._translation_cache_fingerprint()
     assert new_fp != fp

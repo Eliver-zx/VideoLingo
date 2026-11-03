@@ -386,7 +386,6 @@ def process_transcription(result: Dict) -> pd.DataFrame:
 
 def save_results(df: pd.DataFrame):
     cleaned_path = resolve_task_path(_2_CLEANED_CHUNKS)
-    os.makedirs(os.path.dirname(cleaned_path) or "output/log", exist_ok=True)
 
     # Remove rows where 'text' is empty
     initial_rows = len(df)
@@ -424,10 +423,7 @@ def save_results(df: pd.DataFrame):
         )
     )
     ws.save_words(word_records)
-
-    df["text"] = df["text"].apply(lambda x: f'"{x}"')
-    df.to_excel(cleaned_path, index=False)
-    rprint(f"[green]📊 Excel file saved to {cleaned_path}[/green]")
+    rprint(f"[green]📊 Saved {len(word_records)} words to {ws.db_path}[/green]")
 
 
 def save_language(language: str):

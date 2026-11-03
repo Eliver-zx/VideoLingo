@@ -2,8 +2,16 @@ import os
 import shutil
 
 from core.utils.models import resolve_task_path
+from core.workspace import get_active_workspace
+
 
 def delete_dubbing_files():
+    ws = get_active_workspace()
+    if ws.db_path.is_file():
+        with ws._db(write=True) as conn:
+            if conn is not None:
+                conn.execute("DELETE FROM dub_tasks")
+                conn.execute("DELETE FROM task_kv WHERE key = 'dub_tasks_saved'")
     files_to_delete = [
         resolve_task_path(os.path.join("output", "dub.wav")),
         resolve_task_path(os.path.join("output", "dub.mp3")),
@@ -16,7 +24,7 @@ def delete_dubbing_files():
         resolve_task_path(os.path.join("output", "log", "dub_truncated.json")),
         resolve_task_path(os.path.join("output", ".dubbing_done")),
     ]
-    
+
     for file_path in files_to_delete:
         if os.path.exists(file_path):
             try:
@@ -26,7 +34,7 @@ def delete_dubbing_files():
                 print(f"Error deleting {file_path}: {str(e)}")
         else:
             print(f"File not found: {file_path}")
-    
+
     for folder_name in ("segs", "tmp"):
         folder_path = resolve_task_path(os.path.join("output", "audio", folder_name))
         if os.path.exists(folder_path):
@@ -37,6 +45,7 @@ def delete_dubbing_files():
                 print(f"Error deleting folder {folder_path}: {str(e)}")
         else:
             print(f"Folder not found: {folder_path}")
+
 
 if __name__ == "__main__":
     delete_dubbing_files()

@@ -5,6 +5,7 @@ from rich.console import Console
 from rich.panel import Panel
 from core.utils import check_file_exists, load_key, rprint
 from core.utils.models import _8_1_AUDIO_TASK, resolve_task_path
+from core.workspace import workspace_for_path
 
 console = Console()
 
@@ -156,10 +157,13 @@ def gen_audio_task_main():
     df = process_srt()
     console.print(df)
     out_path = resolve_task_path(_8_1_AUDIO_TASK)
-    df.to_excel(out_path, index=False)
+    ws = workspace_for_path(out_path)
+    ws.save_dub_tasks(df)
     rprint(
         Panel(
-            f"Successfully generated {out_path}", title="Success", border_style="green"
+            f"Successfully saved {len(df)} audio tasks to {ws.db_path}",
+            title="Success",
+            border_style="green",
         )
     )
 

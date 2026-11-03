@@ -16,6 +16,7 @@ from core.utils.models import (
     _AUDIO_DONE_MARKER,
     resolve_task_path,
 )
+from core.workspace import workspace_for_path
 
 
 VALID_TTS_METHODS = (
@@ -85,11 +86,18 @@ INVALID_TRANSLATION = "`output/log/translation_results.xlsx` can not be used aft
 def terminology_error():
     """What is wrong with the terminology file, or None when the translation can use it."""
     term_path = Path(resolve_task_path(_4_1_TERMINOLOGY))
-    try:
-        terminology = json.loads(term_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        return str(e)
-    terms = terminology.get("terms") if isinstance(terminology, dict) else None
+    ws = workspace_for_path(term_path)
+    if term_path.is_file():
+        try:
+            terminology = json.loads(term_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            return str(e)
+        terms = terminology.get("terms") if isinstance(terminology, dict) else None
+    elif ws.has_terms():
+        terminology = ws.load_terms()
+        terms = terminology.get("terms") if isinstance(terminology, dict) else None
+    else:
+        return f"Missing terminology in {ws.db_path}"
     if not isinstance(terms, list):
         return "`terms` must be a list"
     for term in terms:
@@ -104,7 +112,13 @@ def review_terminology():
     """Optional checkpoint `pause_before_translate`: the task waits until the user resumes it."""
     runner = TaskRunner._current
     trans_path = Path(resolve_task_path(_4_2_TRANSLATION))
-    if runner is None or not load_key("pause_before_translate") or trans_path.exists():
+    ws = workspace_for_path(trans_path)
+    if (
+        runner is None
+        or not load_key("pause_before_translate")
+        or trans_path.exists()
+        or ws.has_translations()
+    ):
         return
     message = REVIEW_TERMINOLOGY
     while True:
@@ -119,13 +133,22 @@ def review_terminology():
 
 def read_translation():
     """The source lines and the translated lines of the translation results, empty cells as ''."""
-    import pandas as pd
+    trans_path = Path(resolve_task_path(_4_2_TRANSLATION))
+    ws = workspace_for_path(trans_path)
+    if trans_path.is_file():
+        import pandas as pd
 
-    trans_path = resolve_task_path(_4_2_TRANSLATION)
-    df = pd.read_excel(trans_path)
+        df = pd.read_excel(trans_path)
+        return [
+            ["" if pd.isna(value) else str(value).strip() for value in df[column]]
+            for column in ("Source", "Translation")
+        ]
+    utts = ws.load_utterances()
+    if not utts:
+        raise FileNotFoundError(f"No utterances found in {ws.db_path}")
     return [
-        ["" if pd.isna(value) else str(value).strip() for value in df[column]]
-        for column in ("Source", "Translation")
+        [str(u.get("src") or "").strip() for u in utts],
+        [str(u.get("tgt") or "").strip() for u in utts],
     ]
 
 
@@ -135,11 +158,19 @@ def translation_error(source, translation):
         edited_source, edited_translation = read_translation()
     except Exception as e:  # locked by the spreadsheet program, no longer a spreadsheet, a missing column
         return f"{type(e).__name__}: {e}"
-    if edited_source != source:
+    trans_path = Path(resolve_task_path(_4_2_TRANSLATION))
+    if trans_path.is_file() and edited_source != source:
         return "the rows or the `Source` column have changed"
-    for row, (before, after) in enumerate(zip(translation, edited_translation), 2):
-        if before and not after:
-            return f"the translation in row {row} is empty"
+    if len(edited_translation) == len(translation):
+        for row, (before, after) in enumerate(zip(translation, edited_translation), 2):
+            if before and not after:
+                return f"the translation in row {row} is empty"
+    else:
+        for row, (src_line, after) in enumerate(
+            zip(edited_source, edited_translation), 1
+        ):
+            if src_line and not after:
+                return f"the translation in row {row} is empty"
     return None
 
 
@@ -147,10 +178,12 @@ def review_translation():
     """Optional checkpoint `pause_after_translate`: the task waits until the user resumes it."""
     runner = TaskRunner._current
     split_sub_path = Path(resolve_task_path(_5_SPLIT_SUB))
+    ws = workspace_for_path(split_sub_path)
     if (
         runner is None
         or not load_key_or("pause_after_translate", False)
         or split_sub_path.exists()
+        or ws.has_sub_cues()
     ):
         return
     source, translation = read_translation()

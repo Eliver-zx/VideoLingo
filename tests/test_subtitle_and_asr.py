@@ -1,16 +1,29 @@
 """Unit tests for target-first subtitle splitting, timeline alignment, and cloud ASR backends."""
+
 import pandas as pd
 import pytest
 
 from core._5_split_sub import align_source_by_ratio, calc_len, split_align_subs
-from core._6_gen_sub import align_timestamp, clean_translation, format_subtitle_text, get_sentence_timestamps
+from core._6_gen_sub import (
+    align_timestamp,
+    clean_translation,
+    format_subtitle_text,
+    get_sentence_timestamps,
+)
 from core._3_2_split_meaning import find_split_positions, mechanical_split
-from core.asr_backend import assembly_asr, deepgram_asr, replicate_asr, transcription_cache, zero_asr
+from core.asr_backend import (
+    assembly_asr,
+    deepgram_asr,
+    replicate_asr,
+    transcription_cache,
+    zero_asr,
+)
 
 
 # ------------------------------------------------------------------
 # 1. Target-language 32-char threshold & target-first subtitle splitting
 # ------------------------------------------------------------------
+
 
 def test_32_chinese_chars_threshold(monkeypatch):
     import core._5_split_sub as module
@@ -21,9 +34,16 @@ def test_32_chinese_chars_threshold(monkeypatch):
     assert calc_len("汉" * 32) * 1.3 <= 75
     assert calc_len("汉" * 33) * 1.3 > 75
 
-    settings = {"subtitle": {"max_length": 75, "target_multiplier": 1.3}, "max_workers": 1}
+    settings = {
+        "subtitle": {"max_length": 75, "target_multiplier": 1.3},
+        "max_workers": 1,
+    }
     monkeypatch.setattr(module, "load_key", lambda key: settings[key])
-    monkeypatch.setattr(module, "load_key_or", lambda key, default=None: "简体中文" if key == "target_language" else default)
+    monkeypatch.setattr(
+        module,
+        "load_key_or",
+        lambda key, default=None: "简体中文" if key == "target_language" else default,
+    )
 
     called_sentences = []
 
@@ -61,7 +81,11 @@ def test_32_chinese_chars_threshold(monkeypatch):
 
 def test_align_source_by_ratio_keeps_single_word_unsplit():
     # When source has fewer words than target parts, never produce an empty string or drop half the line
-    src, tr, remerged = align_source_by_ratio("Unbelievable!", "真是不敢相信会发生这样的事情", "真是不敢相信\n会发生这样的事情")
+    src, tr, remerged = align_source_by_ratio(
+        "Unbelievable!",
+        "真是不敢相信会发生这样的事情",
+        "真是不敢相信\n会发生这样的事情",
+    )
     assert src == ["Unbelievable!"]
     assert tr == ["真是不敢相信会发生这样的事情"]
     assert remerged == "真是不敢相信会发生这样的事情"
@@ -80,7 +104,9 @@ def test_chinese_mechanical_and_position_split_with_english_source(monkeypatch):
     assert "".join(parts) == zh_no_punct
 
     zh_sentence = "今天我们来聊一聊人工智能，以及它的未来"
-    pos = find_split_positions(zh_sentence, "今天我们来聊一聊人工智能，[br]以及它的未来", language="简体中文")
+    pos = find_split_positions(
+        zh_sentence, "今天我们来聊一聊人工智能，[br]以及它的未来", language="简体中文"
+    )
     assert pos == [len("今天我们来聊一聊人工智能，")]
 
 
@@ -88,62 +114,105 @@ def test_chinese_mechanical_and_position_split_with_english_source(monkeypatch):
 # 2. Timeline fuzzy matching, overlap fixing, and CJK formatting
 # ------------------------------------------------------------------
 
+
 def test_word_boundary_fuzzy_match_in_timestamps():
-    df_words = pd.DataFrame({
-        "text": ["People", "gathered", "on", "mass", "today."],
-        "start": [0.0, 0.5, 1.0, 1.2, 1.8],
-        "end": [0.4, 0.9, 1.1, 1.7, 2.3],
-    })
+    df_words = pd.DataFrame(
+        {
+            "text": ["People", "gathered", "on", "mass", "today."],
+            "start": [0.0, 0.5, 1.0, 1.2, 1.8],
+            "end": [0.4, 0.9, 1.1, 1.7, 2.3],
+        }
+    )
     # Slight 2-char difference ("en masse" vs "on mass")
-    df_sentences = pd.DataFrame({
-        "Source": ["People gathered", "en masse today."],
-    })
+    df_sentences = pd.DataFrame(
+        {
+            "Source": ["People gathered", "en masse today."],
+        }
+    )
     stamps = get_sentence_timestamps(df_words, df_sentences)
     assert stamps == [(0.0, 0.9), (1.0, 2.3)]
 
 
 def test_overlap_timestamps_are_resolved_and_formatted(tmp_path):
-    df_words = pd.DataFrame({
-        "text": ["First", "part", "Second", "part"],
-        "start": [0.0, 1.0, 1.5, 2.5],
-        "end": [0.9, 2.0, 2.4, 3.5],  # word 1 ends at 2.0, word 2 starts at 1.5 (overlap!)
-    })
-    df_translate = pd.DataFrame({
-        "Source": ["First part", "Second part"],
-        "Translation": ["这是 Python 3 的测试，第一部分。", "这是 AI 模型的，第二部分！"],
-    })
+    df_words = pd.DataFrame(
+        {
+            "text": ["First", "part", "Second", "part"],
+            "start": [0.0, 1.0, 1.5, 2.5],
+            "end": [
+                0.9,
+                2.0,
+                2.4,
+                3.5,
+            ],  # word 1 ends at 2.0, word 2 starts at 1.5 (overlap!)
+        }
+    )
+    df_translate = pd.DataFrame(
+        {
+            "Source": ["First part", "Second part"],
+            "Translation": [
+                "这是 Python 3 的测试，第一部分。",
+                "这是 AI 模型的，第二部分！",
+            ],
+        }
+    )
     df_translate["Translation"] = df_translate["Translation"].apply(clean_translation)
-    out = align_timestamp(df_words, df_translate, [("trans.srt", ["Translation"])], str(tmp_path), for_display=True)
+    out = align_timestamp(
+        df_words,
+        df_translate,
+        [("trans.srt", ["Translation"])],
+        str(tmp_path),
+        for_display=True,
+    )
 
     assert out.loc[0, "timestamp"] == "00:00:00,000 --> 00:00:01,750"
     assert out.loc[1, "timestamp"] == "00:00:01,750 --> 00:00:03,500"
     assert out.loc[0, "Translation"] == "这是Python 3的测试 第一部分"
     assert out.loc[1, "Translation"] == "这是AI模型的 第二部分"
-    assert format_subtitle_text("测试 123 中文 ABC 标点，句号。") == "测试123中文ABC标点 句号"
+    assert (
+        format_subtitle_text("测试 123 中文 ABC 标点，句号。")
+        == "测试123中文ABC标点 句号"
+    )
 
 
 # ------------------------------------------------------------------
 # 3. Cloud ASR Backends & Cache Key Integration
 # ------------------------------------------------------------------
 
+
 def test_deepgram_response_conversion():
     raw = {
         "results": {
-            "channels": [{
-                "detected_language": "en",
-                "alternatives": [{
-                    "transcript": "Hello world.",
-                    "words": [
-                        {"word": "hello", "punctuated_word": "Hello", "start": 0.1, "end": 0.5},
-                        {"word": "world", "punctuated_word": "world.", "start": 0.6, "end": 1.0},
+            "channels": [
+                {
+                    "detected_language": "en",
+                    "alternatives": [
+                        {
+                            "transcript": "Hello world.",
+                            "words": [
+                                {
+                                    "word": "hello",
+                                    "punctuated_word": "Hello",
+                                    "start": 0.1,
+                                    "end": 0.5,
+                                },
+                                {
+                                    "word": "world",
+                                    "punctuated_word": "world.",
+                                    "start": 0.6,
+                                    "end": 1.0,
+                                },
+                            ],
+                        }
                     ],
-                }],
-            }],
-            "utterances": [{
-                "start": 0.1,
-                "end": 1.0,
-                "transcript": "Hello world.",
-            }],
+                }
+            ],
+            "utterances": [
+                {
+                    "start": 0.1,
+                    "end": 1.0,
+                    "transcript": "Hello world.",
+                }
+            ],
         }
     }
     res = deepgram_asr.deepgram2whisper(raw, offset=10.0, fallback_lang="auto")
@@ -164,7 +233,9 @@ def test_assemblyai_response_conversion():
             {"text": "Next", "start": 1200, "end": 1500},
         ],
     }
-    res = assembly_asr.convert_assemblyai_response(raw, start_time_offset=5.0, fallback_lang="auto")
+    res = assembly_asr.convert_assemblyai_response(
+        raw, start_time_offset=5.0, fallback_lang="auto"
+    )
     assert res["language"] == "en"
     assert len(res["segments"]) == 2
     assert res["segments"][0]["start"] == 5.1
@@ -177,15 +248,17 @@ def test_gladia_zero_response_conversion():
     raw = {
         "transcription": {
             "languages": ["zh"],
-            "utterances": [{
-                "start": 1.0,
-                "end": 2.5,
-                "text": "你好世界",
-                "words": [
-                    {"word": "你好", "start": 1.0, "end": 1.7, "confidence": 0.99},
-                    {"word": "世界", "start": 1.8, "end": 2.5, "confidence": 0.98},
-                ],
-            }],
+            "utterances": [
+                {
+                    "start": 1.0,
+                    "end": 2.5,
+                    "text": "你好世界",
+                    "words": [
+                        {"word": "你好", "start": 1.0, "end": 1.7, "confidence": 0.99},
+                        {"word": "世界", "start": 1.8, "end": 2.5, "confidence": 0.98},
+                    ],
+                }
+            ],
         }
     }
     res = zero_asr.zero2whisper(raw, offset=20.0, fallback_lang="auto")
@@ -203,7 +276,9 @@ def test_replicate_response_normalization():
             {"word": "世界", "start": 1.3, "end": 2.0},
         ],
     }
-    res = replicate_asr.normalize_replicate_output(raw, offset=3.0, fallback_lang="auto")
+    res = replicate_asr.normalize_replicate_output(
+        raw, offset=3.0, fallback_lang="auto"
+    )
     assert res["language"] == "ja"
     assert res["segments"][0]["start"] == 3.5
     assert res["segments"][0]["end"] == 5.0
@@ -215,10 +290,14 @@ def test_cloud_asr_cache_keys_and_credential_checks(tmp_path, monkeypatch):
     media.write_bytes(b"dummy audio bytes")
 
     k_dg1 = transcription_cache.cache_key(
-        str(media), {"runtime": "deepgram", "deepgram_model": "nova-3", "language": "en"}, False
+        str(media),
+        {"runtime": "deepgram", "deepgram_model": "nova-3", "language": "en"},
+        False,
     )
     k_dg2 = transcription_cache.cache_key(
-        str(media), {"runtime": "deepgram", "deepgram_model": "nova-2", "language": "en"}, False
+        str(media),
+        {"runtime": "deepgram", "deepgram_model": "nova-2", "language": "en"},
+        False,
     )
     k_zero = transcription_cache.cache_key(
         str(media), {"runtime": "zero", "language": "en"}, False
@@ -235,8 +314,10 @@ def test_cloud_asr_cache_keys_and_credential_checks(tmp_path, monkeypatch):
 # 4. Pipeline Simplification & Edge-Case Regression Tests
 # ------------------------------------------------------------------
 
+
 def test_split_sentences_by_meaning_preserves_full_sentences(tmp_path, monkeypatch):
     import core._3_2_split_meaning as meaning
+    from core.workspace import TaskWorkspace
 
     nlp_txt = tmp_path / "split_by_nlp.txt"
     meaning_txt = tmp_path / "split_by_meaning.txt"
@@ -246,36 +327,57 @@ def test_split_sentences_by_meaning_preserves_full_sentences(tmp_path, monkeypat
     with pytest.raises(FileNotFoundError):
         meaning.split_sentences_by_meaning()
 
-    nlp_txt.write_text("First complete sentence here.\nSecond complete sentence here.\n", encoding="utf-8")
+    nlp_txt.write_text(
+        "First complete sentence here.\nSecond complete sentence here.\n",
+        encoding="utf-8",
+    )
     meaning.split_sentences_by_meaning()
 
-    assert meaning_txt.read_text(encoding="utf-8") == nlp_txt.read_text(encoding="utf-8")
+    assert [u["src"] for u in TaskWorkspace(tmp_path).load_utterances()] == [
+        "First complete sentence here.",
+        "Second complete sentence here.",
+    ]
 
 
-def test_split_for_sub_main_multi_pass_remerged_no_none_and_mtime_skip(tmp_path, monkeypatch):
+def test_split_for_sub_main_multi_pass_remerged_no_none_and_mtime_skip(
+    tmp_path, monkeypatch
+):
     import os
     import time
     import core._5_split_sub as module
+    from core.workspace import TaskWorkspace
 
     trans_xlsx = tmp_path / "translation_results.xlsx"
     split_xlsx = tmp_path / "translation_results_for_subtitles.xlsx"
     remerged_xlsx = tmp_path / "translation_results_remerged.xlsx"
 
     orig_sources = ["word " * 25, "short line"]
-    orig_translations = ["这是一段非常非常长的需要切分很多次的字幕文本内容测试" * 2, "短字幕"]
-    pd.DataFrame({
-        "Source": orig_sources,
-        "Translation": orig_translations,
-    }).to_excel(trans_xlsx, index=False)
+    orig_translations = [
+        "这是一段非常非常长的需要切分很多次的字幕文本内容测试" * 2,
+        "短字幕",
+    ]
+    pd.DataFrame(
+        {
+            "Source": orig_sources,
+            "Translation": orig_translations,
+        }
+    ).to_excel(trans_xlsx, index=False)
 
     monkeypatch.setattr(module, "_4_2_TRANSLATION", str(trans_xlsx))
     monkeypatch.setattr(module, "_5_SPLIT_SUB", str(split_xlsx))
     monkeypatch.setattr(module, "_5_REMERGED", str(remerged_xlsx))
     monkeypatch.setattr(module, "find_subtitle_file", lambda: None)
 
-    settings = {"subtitle": {"max_length": 40, "target_multiplier": 1.3}, "max_workers": 1}
+    settings = {
+        "subtitle": {"max_length": 40, "target_multiplier": 1.3},
+        "max_workers": 1,
+    }
     monkeypatch.setattr(module, "load_key", lambda key: settings[key])
-    monkeypatch.setattr(module, "load_key_or", lambda key, default=None: "简体中文" if key == "target_language" else default)
+    monkeypatch.setattr(
+        module,
+        "load_key_or",
+        lambda key, default=None: "简体中文" if key == "target_language" else default,
+    )
 
     call_count = {"n": 0}
 
@@ -290,10 +392,10 @@ def test_split_for_sub_main_multi_pass_remerged_no_none_and_mtime_skip(tmp_path,
     first_calls = call_count["n"]
     assert first_calls >= 2  # Multi-pass split occurred
 
-    df_remerged = pd.read_excel(remerged_xlsx)
-    assert not df_remerged.isna().any().any()
-    assert df_remerged["Source"].tolist() == orig_sources
-    assert df_remerged["Translation"].tolist() == orig_translations
+    ws = TaskWorkspace(tmp_path)
+    utts = ws.load_utterances()
+    assert [u["src"].strip() for u in utts] == [s.strip() for s in orig_sources]
+    assert [u["tgt"] for u in utts] == orig_translations
 
     # Second run when outputs are up-to-date and within max_length should skip
     module.split_for_sub_main()
@@ -306,7 +408,7 @@ def test_split_for_sub_main_multi_pass_remerged_no_none_and_mtime_skip(tmp_path,
     assert after_tighten_calls > first_calls
 
     # Touching _4_2_TRANSLATION with a newer mtime also invalidates the skip
-    future_time = os.path.getmtime(split_xlsx) + 10.0
+    future_time = ws.get_kv_mtime("sub_cues_saved") + 10.0
     os.utime(trans_xlsx, (future_time, future_time))
     time.sleep(0.01)
     module.split_for_sub_main()
@@ -316,18 +418,24 @@ def test_split_for_sub_main_multi_pass_remerged_no_none_and_mtime_skip(tmp_path,
 def test_align_timestamp_recomputes_duration_after_gap_and_overlap_smoothing():
     import core._6_gen_sub as gen_sub
 
-    df_text = pd.DataFrame({
-        "text": ["hello", "world", "next", "line"],
-        "start": [0.0, 0.4, 1.4, 2.0],
-        "end": [0.4, 1.0, 1.9, 3.0],
-    })
-    df_translate = pd.DataFrame({
-        "Source": ["hello world", "next line"],
-        "Translation": ["你好世界", "下一行"],
-    })
+    df_text = pd.DataFrame(
+        {
+            "text": ["hello", "world", "next", "line"],
+            "start": [0.0, 0.4, 1.4, 2.0],
+            "end": [0.4, 1.0, 1.9, 3.0],
+        }
+    )
+    df_translate = pd.DataFrame(
+        {
+            "Source": ["hello world", "next line"],
+            "Translation": ["你好世界", "下一行"],
+        }
+    )
     # Gap between line 0 (ends 1.0) and line 1 (starts 1.4) is 0.4s (< 1.0s),
     # so line 0 end timestamp is extended to 1.4s -> duration must become 1.4s, not 1.0s.
-    res = gen_sub.align_timestamp(df_text, df_translate, [], output_dir=None, for_display=False)
+    res = gen_sub.align_timestamp(
+        df_text, df_translate, [], output_dir=None, for_display=False
+    )
     assert res.loc[0, "duration"] == pytest.approx(1.4)
     assert res.loc[1, "duration"] == pytest.approx(1.6)
 
@@ -335,6 +443,7 @@ def test_align_timestamp_recomputes_duration_after_gap_and_overlap_smoothing():
 # ------------------------------------------------------------------
 # 5. Vocal Separation Models (HTDemucs, MDX-Net, SCNet, Mel-Band-RoFormer)
 # ------------------------------------------------------------------
+
 
 def test_vocal_separation_model_resolution_and_backend_package(monkeypatch):
     from core.asr_backend import demucs_vl
@@ -346,16 +455,34 @@ def test_vocal_separation_model_resolution_and_backend_package(monkeypatch):
     assert demucs_vl.separation_backend_package("mdx") == "audio_separator"
     assert demucs_vl.separation_backend_package("scnet") == "torch"
 
-    assert demucs_vl._classify_stem_filename("chunk_in_(Instrumental)_Kim_Vocal_2.wav") == "instrumental"
-    assert demucs_vl._classify_stem_filename("chunk_in_(Vocals)_Kim_Vocal_2.wav") == "vocals"
-    assert demucs_vl._classify_stem_filename("chunk_in_(Instrumental)_vocals_mel_band_roformer.wav") == "instrumental"
-    assert demucs_vl._classify_stem_filename("chunk_in_(Vocals)_vocals_mel_band_roformer.wav") == "vocals"
+    assert (
+        demucs_vl._classify_stem_filename("chunk_in_(Instrumental)_Kim_Vocal_2.wav")
+        == "instrumental"
+    )
+    assert (
+        demucs_vl._classify_stem_filename("chunk_in_(Vocals)_Kim_Vocal_2.wav")
+        == "vocals"
+    )
+    assert (
+        demucs_vl._classify_stem_filename(
+            "chunk_in_(Instrumental)_vocals_mel_band_roformer.wav"
+        )
+        == "instrumental"
+    )
+    assert (
+        demucs_vl._classify_stem_filename(
+            "chunk_in_(Vocals)_vocals_mel_band_roformer.wav"
+        )
+        == "vocals"
+    )
 
     with pytest.raises(ValueError, match="vocal_separation_model"):
         demucs_vl.resolve_separation_model("unknown_model")
 
 
-def test_audio_separator_adapter_separates_and_matches_sample_length(tmp_path, monkeypatch):
+def test_audio_separator_adapter_separates_and_matches_sample_length(
+    tmp_path, monkeypatch
+):
     import os
     import sys
     import types
@@ -391,8 +518,12 @@ def test_audio_separator_adapter_separates_and_matches_sample_length(tmp_path, m
             vocal_rel = f"chunk_in_(Vocals)_{model_stem}.wav"
             inst_rel = f"chunk_in_(Instrumental)_{model_stem}.wav"
             padded = np.vstack([data, np.zeros((12, data.shape[1]), dtype=np.float32)])
-            sf.write(os.path.join(out_dir, vocal_rel), padded * 0.75, sr, subtype="FLOAT")
-            sf.write(os.path.join(out_dir, inst_rel), padded * 0.25, sr, subtype="FLOAT")
+            sf.write(
+                os.path.join(out_dir, vocal_rel), padded * 0.75, sr, subtype="FLOAT"
+            )
+            sf.write(
+                os.path.join(out_dir, inst_rel), padded * 0.25, sr, subtype="FLOAT"
+            )
             return [vocal_rel, inst_rel]
 
     fake_pkg = types.ModuleType("audio_separator")
@@ -443,7 +574,9 @@ def test_native_scnet_forward_and_adapter_contract(tmp_path, monkeypatch):
 
     monkeypatch.setattr(scnet_vl, "SCNET_LARGE_CONFIG", tiny_cfg)
     monkeypatch.setattr(scnet_vl.SCNetSeparatorAdapter, "chunk_size", 2048)
-    adapter = scnet_vl.SCNetSeparatorAdapter(model_filename="tiny_scnet.ckpt", model_dir=str(tmp_path))
+    adapter = scnet_vl.SCNetSeparatorAdapter(
+        model_filename="tiny_scnet.ckpt", model_dir=str(tmp_path)
+    )
 
     wav = torch.randn((2, 3000), dtype=torch.float32) * 0.2
     _, outputs = adapter.separate_tensor(wav, 44100)
@@ -453,7 +586,9 @@ def test_native_scnet_forward_and_adapter_contract(tmp_path, monkeypatch):
         assert torch.isfinite(stem).all()
 
 
-def test_refer_audio_uses_selected_audio_separator_backend_and_refreshes_on_newer_vocal(tmp_path, monkeypatch):
+def test_refer_audio_uses_selected_audio_separator_backend_and_refreshes_on_newer_vocal(
+    tmp_path, monkeypatch
+):
     import os
     import time
     import numpy as np
@@ -465,16 +600,41 @@ def test_refer_audio_uses_selected_audio_separator_backend_and_refreshes_on_newe
     vocal_file.write_bytes(b"vocal track")
     monkeypatch.setattr(refer, "_AUDIO_REFERS_DIR", str(refers))
     monkeypatch.setattr(refer, "_VOCAL_AUDIO_FILE", str(vocal_file))
-    monkeypatch.setattr(refer, "find_spec", lambda name: object() if name == "audio_separator" else None)
-    monkeypatch.setattr(demucs_vl, "separation_backend_package", lambda model_key=None: "audio_separator")
+    monkeypatch.setattr(
+        refer, "find_spec", lambda name: object() if name == "audio_separator" else None
+    )
+    monkeypatch.setattr(
+        demucs_vl,
+        "separation_backend_package",
+        lambda model_key=None: "audio_separator",
+    )
 
     called = []
-    monkeypatch.setattr(demucs_vl, "demucs_audio", lambda model_key=None: called.append(model_key or "configured"))
-    monkeypatch.setattr(refer.pd, "read_excel", lambda path: pd.DataFrame(
-        {"number": [1], "start_time": ["00:00:00,000"], "end_time": ["00:00:01,000"]}
-    ))
+    monkeypatch.setattr(
+        demucs_vl,
+        "demucs_audio",
+        lambda model_key=None: called.append(model_key or "configured"),
+    )
+    monkeypatch.setattr(
+        refer.pd,
+        "read_excel",
+        lambda path: pd.DataFrame(
+            {
+                "number": [1],
+                "start_time": ["00:00:00,000"],
+                "end_time": ["00:00:01,000"],
+            }
+        ),
+    )
     read_calls = []
-    monkeypatch.setattr(refer.sf, "read", lambda path: (read_calls.append(path) or np.zeros(16000, dtype="float32"), 16000))
+    monkeypatch.setattr(
+        refer.sf,
+        "read",
+        lambda path: (
+            read_calls.append(path) or np.zeros(16000, dtype="float32"),
+            16000,
+        ),
+    )
 
     refer.extract_refer_audio_main()
     assert called == ["configured"]
@@ -496,12 +656,19 @@ def test_refer_audio_uses_selected_audio_separator_backend_and_refreshes_on_newe
 def test_cache_key_differentiates_vocal_separation_models_when_demucs_enabled(tmp_path):
     media = tmp_path / "sample.wav"
     media.write_bytes(b"audio payload")
-    base_whisper = {"runtime": "local", "backend": "qwen", "model": "large-v3", "language": "en"}
+    base_whisper = {
+        "runtime": "local",
+        "backend": "qwen",
+        "model": "large-v3",
+        "language": "en",
+    }
 
     # When demucs=False, vocal_separation_model does not change cache key
     k_off_default = transcription_cache.cache_key(str(media), base_whisper, False)
     k_off_roformer = transcription_cache.cache_key(
-        str(media), {**base_whisper, "vocal_separation_model": "mel_band_roformer"}, False
+        str(media),
+        {**base_whisper, "vocal_separation_model": "mel_band_roformer"},
+        False,
     )
     assert k_off_default == k_off_roformer
 
@@ -511,7 +678,9 @@ def test_cache_key_differentiates_vocal_separation_models_when_demucs_enabled(tm
         str(media), {**base_whisper, "vocal_separation_model": "htdemucs"}, True
     )
     k_on_roformer = transcription_cache.cache_key(
-        str(media), {**base_whisper, "vocal_separation_model": "mel_band_roformer"}, True
+        str(media),
+        {**base_whisper, "vocal_separation_model": "mel_band_roformer"},
+        True,
     )
     k_on_scnet = transcription_cache.cache_key(
         str(media), {**base_whisper, "vocal_separation_model": "scnet"}, True
@@ -519,6 +688,3 @@ def test_cache_key_differentiates_vocal_separation_models_when_demucs_enabled(tm
     assert k_on_legacy == k_on_htdemucs
     assert k_on_roformer != k_on_htdemucs
     assert k_on_scnet != k_on_roformer
-
-
-

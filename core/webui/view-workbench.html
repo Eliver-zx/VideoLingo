@@ -171,8 +171,10 @@
               </div>
 
               <div class="row" style="gap:8px;">
-                <input id="subtitle-stream-search" type="text" placeholder="搜索字幕或术语…" style="inline-size:240px;">
+                <input id="subtitle-stream-search" type="text" placeholder="搜索字幕或术语…" style="inline-size:210px;">
                 <span class="field-hint mono" id="stream-row-counter">共 0 句</span>
+                <button type="button" class="xs" id="btn-save-utterances" title="将当前修改的原文、译文与配音台词写入任务数据库并同步更新 SRT/ASS">保存字幕</button>
+                <button type="button" class="primary xs" id="btn-save-utterances-and-continue" title="保存字幕并在待校暂停时继续切行与压制">保存并继续 →</button>
               </div>
             </div>
 
@@ -183,7 +185,7 @@
                     <th style="width:52px;">#</th>
                     <th style="width:152px;">时间轴</th>
                     <th>原文</th>
-                    <th>译文</th>
+                    <th>译文 / 配音台词</th>
                   </tr>
                 </thead>
                 <tbody id="structured-stream-tbody"></tbody>

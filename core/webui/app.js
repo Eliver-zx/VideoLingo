@@ -8,6 +8,21 @@
     let domainListMeta = [];
     let currentConfig = {};
 
+    function isUserEditingDom() {
+      const active = document.activeElement;
+      if (!active) return isEditingTerms || isEditingUtterances;
+      const inTerms = Boolean(active.closest?.('#terms-review-panel'));
+      const inSubtitles = Boolean(active.closest?.('#structured-stream-tbody'));
+      const inGlossary = Boolean(active.closest?.('#domain-csv-tbody'));
+      return isEditingTerms || isEditingUtterances || inTerms || inSubtitles || inGlossary;
+    }
+
+    function reportActionError(scope, err) {
+      const msg = err?.message || String(err || '操作失败');
+      setAutosaveStatus('error', '操作失败');
+      appendLog('warn', scope, msg, true);
+    }
+
     async function apiFetch(url, options = {}) {
       const headers = { ...(options.headers || {}) };
       if (options.body && !(options.body instanceof FormData) && !headers['Content-Type']) {
@@ -15,11 +30,16 @@
       }
       const res = await fetch(url, { ...options, headers });
       if (!res.ok) {
-        let msg = res.statusText;
-        try {
-          const data = await res.json();
-          msg = data.detail || data.message || JSON.stringify(data);
-        } catch (_) {}
+        let msg = res.statusText || `HTTP ${res.status}`;
+        const rawText = await res.text();
+        if (rawText) {
+          try {
+            const data = JSON.parse(rawText);
+            msg = data.detail || data.message || JSON.stringify(data);
+          } catch (parseErr) {
+            msg = rawText.slice(0, 200) || parseErr.message || msg;
+          }
+        }
         throw new Error(msg);
       }
       return res.json();
@@ -147,13 +167,18 @@
 
       box.querySelectorAll('[data-task-id]').forEach(card => {
         card.addEventListener('click', async () => {
-          activeTaskId = card.getAttribute('data-task-id');
-          await selectActiveTask(activeTaskId);
+          const nextId = card.getAttribute('data-task-id');
+          const changed = nextId !== activeTaskId;
+          activeTaskId = nextId;
+          await selectActiveTask(activeTaskId, { resetEdits: changed });
         });
       });
     }
 
     function resetWorkbenchToEmpty() {
+      isEditingTerms = false;
+      isEditingUtterances = false;
+      setAutosaveStatus('completed', '已就绪');
       document.getElementById('detail-task-title').textContent = '未选择任务';
       const detailBadge = document.getElementById('detail-task-badge');
       if (detailBadge) {
@@ -178,7 +203,13 @@
       renderTaskTerms();
     }
 
-    async function selectActiveTask(taskId) {
+    async function selectActiveTask(taskId, options = {}) {
+      const resetEdits = Boolean(options.resetEdits);
+      if (resetEdits) {
+        isEditingTerms = false;
+        isEditingUtterances = false;
+        setAutosaveStatus('completed', '已就绪');
+      }
       const task = REAL_TASKS.find(x => x.id === taskId);
       if (!task) {
         resetWorkbenchToEmpty();
@@ -259,10 +290,13 @@
       };
     }
 
-    async function loadBackendTasks() {
+    async function loadBackendTasks(options = {}) {
+      const skipActiveDetail = Boolean(options.skipActiveDetail);
       try {
         const data = await apiFetch('/api/tasks');
         isBackendConnected = true;
+        const prevActive = REAL_TASKS.find(t => t.id === activeTaskId);
+        const prevState = prevActive?.rawState || prevActive?.state || '';
         const tasks = (data.tasks || []).map(mapBackendTaskToCard);
         REAL_TASKS.splice(0, REAL_TASKS.length, ...tasks);
         if (REAL_TASKS.length > 0) {
@@ -270,16 +304,30 @@
             activeTaskId = REAL_TASKS[0].id;
           }
           renderTaskRail();
-          await selectActiveTask(activeTaskId);
+          const nextActive = REAL_TASKS.find(t => t.id === activeTaskId);
+          const nextState = nextActive?.rawState || nextActive?.state || '';
+          const stateChanged = prevState !== nextState;
+          if (!skipActiveDetail || stateChanged || !prevActive) {
+            if (!isUserEditingDom() || stateChanged) {
+              await selectActiveTask(activeTaskId);
+            } else if (nextActive) {
+              syncPipelineRibbon(nextActive, STREAM_TABLE_ROWS.length, REAL_TASK_TERMS.length);
+            }
+          } else if (nextActive) {
+            syncPipelineRibbon(nextActive, STREAM_TABLE_ROWS.length, REAL_TASK_TERMS.length);
+          }
         } else {
           activeTaskId = '';
           renderTaskRail();
           resetWorkbenchToEmpty();
         }
-      } catch (_) {}
+      } catch (err) {
+        appendLog('warn', 'TASKS', `同步任务列表失败: ${err.message}`, true);
+      }
     }
 
-    async function loadBackendTaskDetail(taskId) {
+    async function loadBackendTaskDetail(taskId, options = {}) {
+      const preserveEdits = Boolean(options.preserveEdits);
       try {
         const [taskData, termsData, uttsData] = await Promise.all([
           apiFetch(`/api/tasks/${encodeURIComponent(taskId)}`),
@@ -294,106 +342,33 @@
           return;
         }
 
-        // Always sync REAL_TASK_TERMS with backend task's terms (including empty array)
-        const rawTerms = Array.isArray(termsData.terms) ? termsData.terms : [];
-        REAL_TASK_TERMS.splice(
-          0,
-          REAL_TASK_TERMS.length,
-          ...rawTerms.map(item => ({
-            src: item.src || '',
-            tgt: item.tgt || '',
-            aliases: Array.isArray(item.aliases) ? item.aliases : [],
-            note: item.note || '',
-            fix_source: Boolean(item.fix_source),
-            promote: Boolean(item.promote_to_domain ?? item.promote ?? false),
-          }))
-        );
-        const themeInput = document.getElementById('terms-theme-input');
-        if (themeInput) {
-          themeInput.value = termsData.summary || '';
+        if (!preserveEdits || !isEditingTerms) {
+          const rawTerms = Array.isArray(termsData.terms) ? termsData.terms : [];
+          REAL_TASK_TERMS.splice(
+            0,
+            REAL_TASK_TERMS.length,
+            ...rawTerms.map(item => ({
+              src: item.src || '',
+              tgt: item.tgt || '',
+              aliases: Array.isArray(item.aliases) ? item.aliases : [],
+              note: item.note || '',
+              fix_source: Boolean(item.fix_source),
+              promote: Boolean(item.promote_to_domain ?? item.promote ?? false),
+            }))
+          );
+          const themeInput = document.getElementById('terms-theme-input');
+          if (themeInput && document.activeElement !== themeInput) {
+            themeInput.value = termsData.summary || '';
+          }
         }
 
-        // Always sync STREAM_TABLE_ROWS and PIPELINE_BATCH_NODES with backend utterances
         const utts = Array.isArray(uttsData.utterances) ? uttsData.utterances : [];
         const sd = taskData.stages_done || {};
-        if (utts.length > 0) {
-          const batchCount = Math.max(1, Math.ceil(utts.length / 15));
-          const rows = utts.map((u, i) => {
-            const bIdx = Math.floor(i / 15) + 1;
-            const bId = `batch-${String(bIdx).padStart(2, '0')}`;
-            const numStr = `#${String(i + 1).padStart(3, '0')}`;
-            const tcStr = `${formatTimecode(u.start)} → ${formatTimecode(u.end)}`;
-            const hasCues = Array.isArray(u.sub_cues) && u.sub_cues.length > 1;
-            return {
-              idx: numStr,
-              stage: hasCues ? 'split' : 'translate',
-              batchId: bId,
-              isSplit: hasCues,
-              tc: tcStr,
-              meta: hasCues ? `B${String(bIdx).padStart(2, '0')} · 拆为 ${u.sub_cues.length} 轴` : `B${String(bIdx).padStart(2, '0')}`,
-              srcHtml: escapeHtml(u.src || ''),
-              tgtHtml: escapeHtml(u.tgt || ''),
-              uttIndex: i,
-              rawUtt: u,
-            };
-          });
-          STREAM_TABLE_ROWS.splice(0, STREAM_TABLE_ROWS.length, ...rows);
-
-          const baseNodes = [
-            { id: 'all', kind: 'summary', step: 'ALL', title: '全部字幕', meta: `${utts.length} 句`, time: '', desc: `全部字幕 (${utts.length} 句)` },
-            { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: sd.asr ? '已完成' : '未开始', time: '', desc: '语音识别' },
-            { id: 'nlp-all', kind: 'step', step: '02', title: '标点与断句', meta: `${utts.length} 句`, time: '', desc: `标点与断句 · ${utts.length} 句` },
-            { id: 'terms-03', kind: 'step', step: '03', title: '术语审校', meta: `${REAL_TASK_TERMS.length} 条`, time: '', desc: '术语审校' },
-            { id: 'step-04-group', kind: 'group', step: '04', title: '字幕翻译', meta: `${batchCount} 批`, time: '', desc: `字幕翻译 · ${batchCount} 批` },
-          ];
-          for (let b = 1; b <= batchCount; b++) {
-            const bCode = String(b).padStart(2, '0');
-            const sIdx = String((b - 1) * 15 + 1).padStart(3, '0');
-            const eIdx = String(Math.min(b * 15, utts.length)).padStart(3, '0');
-            const cnt = Math.min(b * 15, utts.length) - (b - 1) * 15;
-            baseNodes.push({
-              id: `batch-${bCode}`,
-              kind: 'child',
-              step: `B${bCode}`,
-              title: `#${sIdx}–${eIdx}`,
-              meta: `${cnt} 句`,
-              time: '',
-              desc: `第 ${sIdx}–${eIdx} 句`,
-            });
-          }
-          const splitRows = rows.filter(r => r.isSplit);
-          if (splitRows.length > 0) {
-            baseNodes.push({
-              id: 'split-04',
-              kind: 'child',
-              step: '切行',
-              title: '长句拆行',
-              meta: `${splitRows.length} 句`,
-              time: '',
-              desc: `长句拆行 (${splitRows.map(r => r.idx).slice(0, 3).join(', ')})`,
-            });
-          }
-          PIPELINE_BATCH_NODES.splice(0, PIPELINE_BATCH_NODES.length, ...baseNodes);
-          if (!PIPELINE_BATCH_NODES.some(n => n.id === activeBatchId)) {
-            activeBatchId = 'all';
-          }
-        } else {
-          STREAM_TABLE_ROWS.splice(0, STREAM_TABLE_ROWS.length);
-          PIPELINE_BATCH_NODES.splice(
-            0,
-            PIPELINE_BATCH_NODES.length,
-            { id: 'all', kind: 'summary', step: 'ALL', title: '全部字幕', meta: '0 句', time: '', desc: '全部字幕 (0 句)' },
-            { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: sd.asr ? '已完成' : '未开始', time: '', desc: '语音识别' },
-            { id: 'nlp-all', kind: 'step', step: '02', title: '标点与断句', meta: '0 句', time: '', desc: '标点与断句' },
-            { id: 'terms-03', kind: 'step', step: '03', title: '术语审校', meta: `${REAL_TASK_TERMS.length} 条`, time: '', desc: '术语审校' },
-            { id: 'step-04-group', kind: 'group', step: '04', title: '字幕翻译', meta: '0 批', time: '', desc: '字幕翻译' }
-          );
-          if (!PIPELINE_BATCH_NODES.some(n => n.id === activeBatchId)) {
-            activeBatchId = 'all';
-          }
+        if (!preserveEdits || !isEditingUtterances) {
+          rebuildStreamRowsFromUtterances(utts, sd);
         }
 
-        syncPipelineRibbon(card, utts.length, REAL_TASK_TERMS.length);
+        syncPipelineRibbon(card, STREAM_TABLE_ROWS.length, REAL_TASK_TERMS.length);
         if (card.state === 'paused' && card.stateLabel === '待审术语') {
           activeBatchId = 'terms-03';
         } else if (activeBatchId === 'terms-03' && REAL_TASK_TERMS.length === 0) {
@@ -401,9 +376,100 @@
         }
         renderBatchTree();
         syncDetailPane();
-        renderStreamTable();
-        renderTaskTerms();
-      } catch (_) {}
+        if (!preserveEdits || !isEditingUtterances) {
+          renderStreamTable();
+        }
+        if (!preserveEdits || !isEditingTerms) {
+          renderTaskTerms();
+        }
+      } catch (err) {
+        appendLog('warn', 'TASK', `加载任务详情失败 (${taskId}): ${err.message}`, true);
+      }
+    }
+
+    function rebuildStreamRowsFromUtterances(utts, sd = {}) {
+      if (utts.length > 0) {
+        const batchCount = Math.max(1, Math.ceil(utts.length / 15));
+        const rows = utts.map((u, i) => {
+          const bIdx = Math.floor(i / 15) + 1;
+          const bId = `batch-${String(bIdx).padStart(2, '0')}`;
+          const numStr = `#${String(i + 1).padStart(3, '0')}`;
+          const tcStr = `${formatTimecode(u.start)} → ${formatTimecode(u.end)}`;
+          const hasCues = Array.isArray(u.sub_cues) && u.sub_cues.length > 1;
+          const srcText = String(u.src ?? '');
+          const tgtText = String(u.tgt ?? '');
+          const ttsText = String(u.tts_text ?? tgtText);
+          return {
+            idx: numStr,
+            stage: hasCues ? 'split' : 'translate',
+            batchId: bId,
+            isSplit: hasCues,
+            tc: tcStr,
+            meta: hasCues ? `B${String(bIdx).padStart(2, '0')} · 拆为 ${u.sub_cues.length} 轴` : `B${String(bIdx).padStart(2, '0')}`,
+            srcText,
+            tgtText,
+            ttsText,
+            srcHtml: escapeHtml(srcText),
+            tgtHtml: escapeHtml(tgtText),
+            uttIndex: i,
+            rawUtt: { ...u, src: srcText, tgt: tgtText, tts_text: ttsText },
+          };
+        });
+        STREAM_TABLE_ROWS.splice(0, STREAM_TABLE_ROWS.length, ...rows);
+
+        const baseNodes = [
+          { id: 'all', kind: 'summary', step: 'ALL', title: '全部字幕', meta: `${utts.length} 句`, time: '', desc: `全部字幕 (${utts.length} 句)` },
+          { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: sd.asr ? '已完成' : '未开始', time: '', desc: '语音识别' },
+          { id: 'nlp-all', kind: 'step', step: '02', title: '标点与断句', meta: `${utts.length} 句`, time: '', desc: `标点与断句 · ${utts.length} 句` },
+          { id: 'terms-03', kind: 'step', step: '03', title: '术语审校', meta: `${REAL_TASK_TERMS.length} 条`, time: '', desc: '术语审校' },
+          { id: 'step-04-group', kind: 'group', step: '04', title: '字幕翻译', meta: `${batchCount} 批`, time: '', desc: `字幕翻译 · ${batchCount} 批` },
+        ];
+        for (let b = 1; b <= batchCount; b++) {
+          const bCode = String(b).padStart(2, '0');
+          const sIdx = String((b - 1) * 15 + 1).padStart(3, '0');
+          const eIdx = String(Math.min(b * 15, utts.length)).padStart(3, '0');
+          const cnt = Math.min(b * 15, utts.length) - (b - 1) * 15;
+          baseNodes.push({
+            id: `batch-${bCode}`,
+            kind: 'child',
+            step: `B${bCode}`,
+            title: `#${sIdx}–${eIdx}`,
+            meta: `${cnt} 句`,
+            time: '',
+            desc: `第 ${sIdx}–${eIdx} 句`,
+          });
+        }
+        const splitRows = rows.filter(r => r.isSplit);
+        if (splitRows.length > 0) {
+          baseNodes.push({
+            id: 'split-04',
+            kind: 'child',
+            step: '切行',
+            title: '长句拆行',
+            meta: `${splitRows.length} 句`,
+            time: '',
+            desc: `长句拆行 (${splitRows.map(r => r.idx).slice(0, 3).join(', ')})`,
+          });
+        }
+        PIPELINE_BATCH_NODES.splice(0, PIPELINE_BATCH_NODES.length, ...baseNodes);
+        if (!PIPELINE_BATCH_NODES.some(n => n.id === activeBatchId)) {
+          activeBatchId = 'all';
+        }
+      } else {
+        STREAM_TABLE_ROWS.splice(0, STREAM_TABLE_ROWS.length);
+        PIPELINE_BATCH_NODES.splice(
+          0,
+          PIPELINE_BATCH_NODES.length,
+          { id: 'all', kind: 'summary', step: 'ALL', title: '全部字幕', meta: '0 句', time: '', desc: '全部字幕 (0 句)' },
+          { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: sd.asr ? '已完成' : '未开始', time: '', desc: '语音识别' },
+          { id: 'nlp-all', kind: 'step', step: '02', title: '标点与断句', meta: '0 句', time: '', desc: '标点与断句' },
+          { id: 'terms-03', kind: 'step', step: '03', title: '术语审校', meta: `${REAL_TASK_TERMS.length} 条`, time: '', desc: '术语审校' },
+          { id: 'step-04-group', kind: 'group', step: '04', title: '字幕翻译', meta: '0 批', time: '', desc: '字幕翻译' }
+        );
+        if (!PIPELINE_BATCH_NODES.some(n => n.id === activeBatchId)) {
+          activeBatchId = 'all';
+        }
+      }
     }
 
     // Top-layer dialog exit animation & light-dismiss helper
@@ -656,9 +722,10 @@
             inputEl.value = res.paths[0];
             return;
           }
-          // User canceled native dialog or native dialog returned empty: do not pop a second dialog if native succeeded
           if (Array.isArray(res.paths)) return;
-        } catch (_) {}
+        } catch (err) {
+          appendLog('warn', 'FILE', `调用系统文件选择器失败，已切换为浏览器文件选择: ${err.message}`, true);
+        }
       }
       localVideoFileInput.click();
     });
@@ -819,6 +886,147 @@
       });
     }
 
+    function calcWeightedLen(text) {
+      let len = 0;
+      for (const ch of String(text || '')) {
+        len += /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(ch) ? 2 : 1;
+      }
+      return len;
+    }
+
+    function splitTextNearMiddle(text) {
+      const s = String(text || '').trim();
+      if (!s) return ['', ''];
+      const words = s.split(/\s+/);
+      if (words.length >= 2) {
+        const mid = Math.ceil(words.length / 2);
+        return [words.slice(0, mid).join(' '), words.slice(mid).join(' ')];
+      }
+      const chars = Array.from(s);
+      if (chars.length >= 2) {
+        const mid = Math.ceil(chars.length / 2);
+        return [chars.slice(0, mid).join(''), chars.slice(mid).join('')];
+      }
+      return [s, ''];
+    }
+
+    function splitStreamRowAt(uttIdx) {
+      const card = REAL_TASKS.find(t => t.id === activeTaskId);
+      const sd = card?.raw?.stages_done || {};
+      const utts = STREAM_TABLE_ROWS.map(r => ({ ...(r.rawUtt || {}), src: r.srcText ?? r.rawUtt?.src ?? '', tgt: r.tgtText ?? r.rawUtt?.tgt ?? '', tts_text: r.ttsText ?? r.rawUtt?.tts_text ?? r.tgtText ?? '' }));
+      const target = utts[uttIdx];
+      if (!target) return;
+      const [srcA, srcB] = splitTextNearMiddle(target.src);
+      const [tgtA, tgtB] = splitTextNearMiddle(target.tgt);
+      const [ttsA, ttsB] = splitTextNearMiddle(target.tts_text || target.tgt);
+      const start = Number(target.start || 0);
+      const end = Math.max(start, Number(target.end || start));
+      const midTime = Number(((start + end) / 2).toFixed(3));
+      const span = Array.isArray(target.word_span) && target.word_span.length >= 2 ? target.word_span : [0, 0];
+      const wStart = Number(span[0] || 0);
+      const wEnd = Math.max(wStart, Number(span[1] || wStart));
+      const spanLen = wEnd - wStart;
+      let spanA = [wStart, wEnd];
+      let spanB = [wStart, wEnd];
+      if (spanLen >= 2) {
+        const wordsA = String(srcA || '').trim().split(/\s+/).filter(Boolean).length || 1;
+        const wordsB = String(srcB || '').trim().split(/\s+/).filter(Boolean).length || 1;
+        const ratio = wordsA / Math.max(1, wordsA + wordsB);
+        const wMid = Math.min(wEnd - 1, Math.max(wStart + 1, wStart + Math.round(spanLen * ratio)));
+        spanA = [wStart, wMid];
+        spanB = [wMid, wEnd];
+      }
+
+      const firstUtt = {
+        ...target,
+        id: `${target.id || `u_${uttIdx}`}_a`,
+        start,
+        end: midTime,
+        word_span: spanA,
+        src: srcA,
+        tgt: tgtA,
+        tts_text: ttsA || tgtA,
+        sub_cues: [{ src: srcA, tgt: tgtA, trans: tgtA, start, end: midTime, word_span: spanA }],
+      };
+      const secondUtt = {
+        ...target,
+        id: `${target.id || `u_${uttIdx}`}_b`,
+        start: midTime,
+        end,
+        word_span: spanB,
+        src: srcB,
+        tgt: tgtB,
+        tts_text: ttsB || tgtB,
+        sub_cues: [{ src: srcB, tgt: tgtB, trans: tgtB, start: midTime, end, word_span: spanB }],
+      };
+      utts.splice(uttIdx, 1, firstUtt, secondUtt);
+      isEditingUtterances = true;
+      setAutosaveStatus('paused', '字幕未保存');
+      rebuildStreamRowsFromUtterances(utts, sd);
+      renderBatchTree();
+      renderStreamTable();
+    }
+
+    function mergeStreamRowWithNext(uttIdx) {
+      const card = REAL_TASKS.find(t => t.id === activeTaskId);
+      const sd = card?.raw?.stages_done || {};
+      const utts = STREAM_TABLE_ROWS.map(r => ({ ...(r.rawUtt || {}), src: r.srcText ?? r.rawUtt?.src ?? '', tgt: r.tgtText ?? r.rawUtt?.tgt ?? '', tts_text: r.ttsText ?? r.rawUtt?.tts_text ?? r.tgtText ?? '' }));
+      if (uttIdx < 0 || uttIdx >= utts.length - 1) return;
+      const cur = utts[uttIdx];
+      const nxt = utts[uttIdx + 1];
+      const joinSrc = [String(cur.src || '').trim(), String(nxt.src || '').trim()].filter(Boolean).join(' ');
+      const joinTgt = [String(cur.tgt || '').trim(), String(nxt.tgt || '').trim()].filter(Boolean).join(' ');
+      const joinTts = [String(cur.tts_text || cur.tgt || '').trim(), String(nxt.tts_text || nxt.tgt || '').trim()].filter(Boolean).join(' ');
+      const start = Number(cur.start || 0);
+      const end = Math.max(start, Number(nxt.end || cur.end || start));
+      const spanA = Array.isArray(cur.word_span) && cur.word_span.length >= 2 ? cur.word_span[0] : 0;
+      const spanB = Array.isArray(nxt.word_span) && nxt.word_span.length >= 2 ? nxt.word_span[1] : spanA;
+      const merged = {
+        ...cur,
+        start,
+        end,
+        word_span: [spanA, spanB],
+        src: joinSrc,
+        tgt: joinTgt,
+        tts_text: joinTts || joinTgt,
+        sub_cues: [{ src: joinSrc, tgt: joinTgt, trans: joinTgt, start, end, word_span: [spanA, spanB] }],
+      };
+      utts.splice(uttIdx, 2, merged);
+      isEditingUtterances = true;
+      setAutosaveStatus('paused', '字幕未保存');
+      rebuildStreamRowsFromUtterances(utts, sd);
+      renderBatchTree();
+      renderStreamTable();
+    }
+
+    async function persistTaskUtterancesToBackend() {
+      const task = REAL_TASKS.find(x => x.id === activeTaskId);
+      if (!isBackendConnected || !task?.fromBackend) {
+        isEditingUtterances = false;
+        setAutosaveStatus('completed', '已保存');
+        return;
+      }
+      const utterancesPayload = STREAM_TABLE_ROWS.map((r, i) => {
+        const base = r.rawUtt || {};
+        const src = String(r.srcText ?? base.src ?? '').trim();
+        const tgt = String(r.tgtText ?? base.tgt ?? '').trim();
+        const tts_text = String(r.ttsText ?? base.tts_text ?? tgt).trim() || tgt;
+        return {
+          ...base,
+          index: i,
+          src,
+          tgt,
+          tts_text,
+        };
+      });
+      await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/utterances`, {
+        method: 'PUT',
+        body: JSON.stringify({ utterances: utterancesPayload }),
+      });
+      isEditingUtterances = false;
+      setAutosaveStatus('completed', '字幕已保存');
+    }
+
     function renderStreamTable() {
       const tbody = document.getElementById('structured-stream-tbody');
       const query = (document.getElementById('subtitle-stream-search').value || '').trim().toLowerCase();
@@ -832,10 +1040,14 @@
           return false;
         }
         if (!query) return true;
+        const srcPlain = String(r.srcText ?? r.srcHtml ?? '').toLowerCase();
+        const tgtPlain = String(r.tgtText ?? r.tgtHtml ?? '').toLowerCase();
+        const ttsPlain = String(r.ttsText ?? '').toLowerCase();
         return (
           r.idx.toLowerCase().includes(query) ||
-          r.srcHtml.toLowerCase().includes(query) ||
-          r.tgtHtml.toLowerCase().includes(query) ||
+          srcPlain.includes(query) ||
+          tgtPlain.includes(query) ||
+          ttsPlain.includes(query) ||
           r.meta.toLowerCase().includes(query)
         );
       });
@@ -858,24 +1070,129 @@
         return;
       }
 
-      tbody.innerHTML = filtered.map(r => `
-        <tr>
+      const maxLenCfg = Number(currentConfig?.subtitle?.max_length || 75);
+      const tgtMultCfg = Number(currentConfig?.subtitle?.target_multiplier || 1.2);
+
+      tbody.innerHTML = filtered.map(r => {
+        const uIdx = Number(r.uttIndex ?? 0);
+        const srcVal = r.srcText !== undefined ? r.srcText : (r.rawUtt?.src ?? '');
+        const tgtVal = r.tgtText !== undefined ? r.tgtText : (r.rawUtt?.tgt ?? '');
+        const ttsVal = r.ttsText !== undefined ? r.ttsText : (r.rawUtt?.tts_text ?? tgtVal);
+        const weightedTgt = Math.round(calcWeightedLen(tgtVal) * tgtMultCfg);
+        const isOverLen = weightedTgt > maxLenCfg;
+        const canMergeNext = uIdx < STREAM_TABLE_ROWS.length - 1;
+        return `
+        <tr data-utt-row="${uIdx}">
           <td>
             <span class="sub-idx">${r.idx}</span>
+            <div class="row" style="gap:3px; margin-block-start:6px; flex-wrap:wrap;">
+              <button type="button" class="xs" style="padding:0 5px; block-size:20px; font-size:10px;" data-split-utt="${uIdx}" title="将该句从中间拆分为两句">拆行</button>
+              ${canMergeNext ? `<button type="button" class="xs" style="padding:0 5px; block-size:20px; font-size:10px;" data-merge-utt="${uIdx}" title="与下一句合并">合并</button>` : ''}
+            </div>
           </td>
           <td>
             <div class="sub-tc">
               <span>${r.tc}</span>
               <span class="field-hint">${r.meta}</span>
+              <span class="field-hint mono" data-utt-len-badge="${uIdx}" style="color:${isOverLen ? 'var(--rose)' : 'var(--text-muted)'};">${weightedTgt}/${maxLenCfg}</span>
             </div>
           </td>
-          <td class="sub-src">${r.srcHtml}</td>
-          <td class="sub-tgt">${r.tgtHtml}</td>
+          <td class="sub-src">
+            <input type="text" class="cell-input" value="${escapeAttr(srcVal)}" placeholder="原文字幕" data-utt-field="src" data-idx="${uIdx}">
+          </td>
+          <td class="sub-tgt">
+            <input type="text" class="cell-input" style="font-weight:600;" value="${escapeAttr(tgtVal)}" placeholder="译文字幕" data-utt-field="tgt" data-idx="${uIdx}">
+            <div class="row" style="gap:6px; margin-block-start:4px;">
+              <span class="field-hint mono" style="flex-shrink:0;">TTS</span>
+              <input type="text" class="cell-input" style="block-size:24px; font-size:var(--fs-xs); color:var(--text-secondary);" value="${escapeAttr(ttsVal)}" placeholder="配音口播词（默认同译文）" data-utt-field="tts_text" data-idx="${uIdx}">
+            </div>
+          </td>
         </tr>
-      `).join('');
+      `;
+      }).join('');
+
+      tbody.querySelectorAll('[data-utt-field]').forEach(inp => {
+        inp.addEventListener('input', () => {
+          const idx = Number(inp.getAttribute('data-idx'));
+          const field = inp.getAttribute('data-utt-field');
+          const row = STREAM_TABLE_ROWS[idx];
+          if (!row) return;
+          isEditingUtterances = true;
+          setAutosaveStatus('paused', '字幕未保存');
+          if (field === 'src') {
+            row.srcText = inp.value;
+            row.srcHtml = escapeHtml(inp.value);
+            if (row.rawUtt) row.rawUtt.src = inp.value;
+          } else if (field === 'tgt') {
+            const prevTgt = row.tgtText;
+            row.tgtText = inp.value;
+            row.tgtHtml = escapeHtml(inp.value);
+            if (row.rawUtt) row.rawUtt.tgt = inp.value;
+            if (!row.ttsText || row.ttsText === prevTgt) {
+              row.ttsText = inp.value;
+              if (row.rawUtt) row.rawUtt.tts_text = inp.value;
+              const ttsInp = tbody.querySelector(`input[data-utt-field="tts_text"][data-idx="${idx}"]`);
+              if (ttsInp && document.activeElement !== ttsInp) {
+                ttsInp.value = inp.value;
+              }
+            }
+            const badge = tbody.querySelector(`[data-utt-len-badge="${idx}"]`);
+            if (badge) {
+              const wLen = Math.round(calcWeightedLen(inp.value) * tgtMultCfg);
+              badge.textContent = `${wLen}/${maxLenCfg}`;
+              badge.style.color = wLen > maxLenCfg ? 'var(--rose)' : 'var(--text-muted)';
+            }
+          } else if (field === 'tts_text') {
+            row.ttsText = inp.value;
+            if (row.rawUtt) row.rawUtt.tts_text = inp.value;
+          }
+        });
+      });
+
+      tbody.querySelectorAll('[data-split-utt]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          splitStreamRowAt(Number(btn.getAttribute('data-split-utt')));
+        });
+      });
+
+      tbody.querySelectorAll('[data-merge-utt]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          mergeStreamRowWithNext(Number(btn.getAttribute('data-merge-utt')));
+        });
+      });
     }
 
     document.getElementById('subtitle-stream-search').addEventListener('input', renderStreamTable);
+
+    document.getElementById('btn-save-utterances')?.addEventListener('click', async () => {
+      try {
+        await persistTaskUtterancesToBackend();
+        appendLog('llm', 'SUBS', `Saved ${STREAM_TABLE_ROWS.length} utterances to project.sqlite.`, false);
+      } catch (err) {
+        reportActionError('SUBS', err);
+      }
+    });
+
+    document.getElementById('btn-save-utterances-and-continue')?.addEventListener('click', async () => {
+      const task = REAL_TASKS.find(x => x.id === activeTaskId);
+      try {
+        await persistTaskUtterancesToBackend();
+        if (isBackendConnected && task?.fromBackend) {
+          if (task.rawState === 'paused') {
+            await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/resume`, { method: 'POST' });
+          } else {
+            await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/invalidate`, {
+              method: 'POST',
+              body: JSON.stringify({ stage: 'sub_split', autorun: true, run_stage: 'subtitles' }),
+            });
+          }
+          await loadBackendTasks();
+        }
+        appendLog('llm', 'SUBS', `Saved ${STREAM_TABLE_ROWS.length} utterances and resumed subtitle pipeline.`, false);
+      } catch (err) {
+        reportActionError('SUBS', err);
+      }
+    });
 
     // =========================================================================
     // 5. 五阶段流水线进度状态同步
@@ -1046,6 +1363,8 @@
         btn.addEventListener('click', () => {
           const [rIdx, aIdx] = btn.getAttribute('data-del-alias').split(':').map(Number);
           REAL_TASK_TERMS[rIdx].aliases.splice(aIdx, 1);
+          isEditingTerms = true;
+          setAutosaveStatus('paused', '术语未保存');
           renderTaskTerms();
         });
       });
@@ -1056,6 +1375,8 @@
             e.preventDefault();
             const rIdx = Number(inp.getAttribute('data-add-alias'));
             REAL_TASK_TERMS[rIdx].aliases.push(inp.value.trim());
+            isEditingTerms = true;
+            setAutosaveStatus('paused', '术语未保存');
             renderTaskTerms();
           }
         });
@@ -1066,6 +1387,8 @@
           const rIdx = Number(inp.getAttribute('data-idx'));
           const field = inp.getAttribute('data-term-field');
           REAL_TASK_TERMS[rIdx][field] = inp.value;
+          isEditingTerms = true;
+          setAutosaveStatus('paused', '术语未保存');
         });
       });
 
@@ -1073,6 +1396,8 @@
         chk.addEventListener('change', () => {
           const rIdx = Number(chk.getAttribute('data-term-fix'));
           REAL_TASK_TERMS[rIdx].fix_source = chk.checked;
+          isEditingTerms = true;
+          setAutosaveStatus('paused', '术语未保存');
         });
       });
 
@@ -1080,21 +1405,32 @@
         chk.addEventListener('change', () => {
           const rIdx = Number(chk.getAttribute('data-term-promote'));
           REAL_TASK_TERMS[rIdx].promote = chk.checked;
+          isEditingTerms = true;
+          setAutosaveStatus('paused', '术语未保存');
         });
       });
     }
+
+    document.getElementById('terms-theme-input')?.addEventListener('input', () => {
+      isEditingTerms = true;
+      setAutosaveStatus('paused', '术语未保存');
+    });
 
     document.getElementById('task-terms-search').addEventListener('input', renderTaskTerms);
 
     document.getElementById('btn-batch-fix-on').addEventListener('click', () => {
       const allOn = REAL_TASK_TERMS.every(t => t.fix_source);
       REAL_TASK_TERMS.forEach(t => { t.fix_source = !allOn; });
+      isEditingTerms = true;
+      setAutosaveStatus('paused', '术语未保存');
       renderTaskTerms();
     });
 
     document.getElementById('btn-batch-promote-on').addEventListener('click', () => {
       const allOn = REAL_TASK_TERMS.every(t => t.promote);
       REAL_TASK_TERMS.forEach(t => { t.promote = !allOn; });
+      isEditingTerms = true;
+      setAutosaveStatus('paused', '术语未保存');
       renderTaskTerms();
     });
 
@@ -1107,6 +1443,8 @@
         fix_source: false,
         promote: true
       });
+      isEditingTerms = true;
+      setAutosaveStatus('paused', '术语未保存');
       renderTaskTerms();
       const firstInput = document.querySelector('#task-terms-tbody input[data-term-field="src"]');
       firstInput?.focus();
@@ -1114,7 +1452,11 @@
 
     async function persistTaskTermsToBackend() {
       const task = REAL_TASKS.find(x => x.id === activeTaskId);
-      if (!isBackendConnected || !task?.fromBackend) return;
+      if (!isBackendConnected || !task?.fromBackend) {
+        isEditingTerms = false;
+        setAutosaveStatus('completed', '已保存');
+        return;
+      }
       const summary = document.getElementById('terms-theme-input')?.value?.trim() || '';
       const glossary_domain = document.getElementById('detail-domain-select')?.value ?? task.domain ?? '';
       const payloadTerms = REAL_TASK_TERMS
@@ -1131,6 +1473,7 @@
         method: 'PUT',
         body: JSON.stringify({ summary, terms: payloadTerms, glossary_domain }),
       });
+      isEditingTerms = false;
       setAutosaveStatus('completed', '已保存');
     }
 
@@ -1146,7 +1489,9 @@
             method: 'PUT',
             body: JSON.stringify({ glossary_domain: dom }),
           });
-        } catch (_) {}
+        } catch (err) {
+          reportActionError('TERMS', err);
+        }
       }
     });
 
@@ -1162,7 +1507,10 @@
           appendLog('llm', 'TERMS', `Invalidated stage 'summarize' and re-running term extraction for ${activeTaskId}...`, false);
           await loadBackendTasks();
           return;
-        } catch (_) {}
+        } catch (err) {
+          reportActionError('TERMS', err);
+          return;
+        }
       }
       appendLog('llm', 'TERMS', `Re-extracting terminology with bound domain glossary...`, false);
     });
@@ -1181,18 +1529,25 @@
             });
           }
           await loadBackendTasks();
-        } catch (_) {}
+        } catch (err) {
+          reportActionError('TERMS', err);
+          return;
+        }
       }
       activeBatchId = 'step-04-group';
       renderBatchTree();
       syncDetailPane();
       renderStreamTable();
-      appendLog('llm', 'TERMS', `Saved terms.json (${REAL_TASK_TERMS.length} terms) and resumed Step 04 translation...`, false);
+      appendLog('llm', 'TERMS', `Saved terms (${REAL_TASK_TERMS.length} terms) and resumed Step 04 translation...`, false);
     });
 
     document.getElementById('btn-save-terms-only').addEventListener('click', async () => {
-      await persistTaskTermsToBackend();
-      appendLog('llm', 'TERMS', 'Saved output/log/terms.json without advancing pipeline checkpoint.', false);
+      try {
+        await persistTaskTermsToBackend();
+        appendLog('llm', 'TERMS', 'Saved task terms to project.sqlite without advancing pipeline checkpoint.', false);
+      } catch (err) {
+        reportActionError('TERMS', err);
+      }
     });
 
     // =========================================================================
@@ -1267,7 +1622,10 @@
       if (isBackendConnected && task.fromBackend) {
         try {
           await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/open-dir`, { method: 'POST' });
-        } catch (_) {}
+        } catch (err) {
+          reportActionError('OPEN', err);
+          return;
+        }
       }
       appendLog('llm', 'OPEN', `Opened local directory output/${activeTaskId}/ in Finder / Explorer for Subtitle Edit review.`, false);
     });
@@ -1280,12 +1638,17 @@
       appendLog('llm', 'MERGE', `Burning bilingual ASS subtitles into output/${activeTaskId}/output_sub.mp4...`, false);
       if (isBackendConnected && task.fromBackend) {
         try {
+          if (isEditingUtterances) {
+            await persistTaskUtterancesToBackend();
+          }
           await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/run`, {
             method: 'POST',
             body: JSON.stringify({ stage: 'subtitles', dubbing: false }),
           });
           await loadBackendTasks();
-        } catch (_) {}
+        } catch (err) {
+          reportActionError('MERGE', err);
+        }
       }
     });
 
@@ -1297,12 +1660,17 @@
       appendLog('llm', 'TTS', `Running TTS alignment from edited trans.srt -> output/${activeTaskId}/output_dub.mp4...`, false);
       if (isBackendConnected && task.fromBackend) {
         try {
+          if (isEditingUtterances) {
+            await persistTaskUtterancesToBackend();
+          }
           await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/run`, {
             method: 'POST',
             body: JSON.stringify({ stage: 'dubbing', dubbing: true }),
           });
           await loadBackendTasks();
-        } catch (_) {}
+        } catch (err) {
+          reportActionError('TTS', err);
+        }
       }
     });
 
@@ -1313,7 +1681,10 @@
         try {
           await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/stop`, { method: 'POST' });
           await loadBackendTasks();
-        } catch (_) {}
+        } catch (err) {
+          reportActionError('STOP', err);
+          return;
+        }
       }
       appendLog('warn', 'STOP', `Requested stop for task ${activeTaskId}.`, true);
     });
@@ -1518,7 +1889,9 @@
             m.has_dict = Boolean(data.has_dict);
             m.dict_count = data.dict_count ?? 0;
           }
-        } catch (_) {}
+        } catch (err) {
+          reportActionError('GLOSSARY', err);
+        }
       }
       renderDomainList();
       renderDomainCsvTable();
@@ -1554,7 +1927,9 @@
         } else {
           await selectGlossaryDomain('');
         }
-      } catch (_) {}
+      } catch (err) {
+        appendLog('warn', 'GLOSSARY', `加载领域词表列表失败: ${err.message}`, true);
+      }
     }
 
     async function loadDomainDictEntries(dom, keyword = '') {
@@ -1566,7 +1941,9 @@
             renderDictSearch(keyword, true);
             return;
           }
-        } catch (_) {}
+        } catch (err) {
+          appendLog('warn', 'DICT', `检索内置词典失败 (${dom}): ${err.message}`, true);
+        }
       }
       domainDictEntries = [];
       renderDictSearch(keyword, true);
@@ -1675,7 +2052,10 @@
           setAutosaveStatus('completed', '词表已保存');
           await loadBackendGlossaryDomains();
           return;
-        } catch (_) {}
+        } catch (err) {
+          reportActionError('GLOSSARY', err);
+          return;
+        }
       }
       setAutosaveStatus('completed', '词表已保存');
     });
@@ -1711,7 +2091,9 @@
             body: form,
           });
           await loadBackendGlossaryDomains();
-        } catch (_) {}
+        } catch (err) {
+          reportActionError('IMPORT', err);
+        }
       }
       glossaryFileInput.value = '';
     });
@@ -1730,7 +2112,10 @@
           activeGlossaryDomain = slug;
           await loadBackendGlossaryDomains();
           return;
-        } catch (_) {}
+        } catch (err) {
+          reportActionError('GLOSSARY', err);
+          return;
+        }
       }
       if (!domainListMeta.some(d => d.domain === slug)) {
         domainListMeta.push({ domain: slug, terms_count: 0, has_dict: false, dict_count: 0 });
@@ -1747,7 +2132,10 @@
           await apiFetch(`/api/glossary/domains/${encodeURIComponent(activeGlossaryDomain)}`, { method: 'DELETE' });
           await loadBackendGlossaryDomains();
           return;
-        } catch (_) {}
+        } catch (err) {
+          reportActionError('GLOSSARY', err);
+          return;
+        }
       }
       domainListMeta = domainListMeta.filter(d => d.domain !== activeGlossaryDomain);
       await selectGlossaryDomain(domainListMeta[0]?.domain || '');
@@ -1908,7 +2296,9 @@
           regionInput.value = res.region;
           regionInput.dispatchEvent(new Event('input'));
         }
-      } catch (_) {}
+      } catch (err) {
+        reportActionError('MAI', err);
+      }
       btn.textContent = '探测';
     });
 
@@ -1956,9 +2346,13 @@
             method: 'PUT',
             body: JSON.stringify({ updates: defaults }),
           });
-        } catch (_) {}
+          setAutosaveStatus('completed', '已恢复默认');
+        } catch (err) {
+          reportActionError('CONFIG', err);
+        }
+      } else {
+        setAutosaveStatus('completed', '已恢复默认');
       }
-      setAutosaveStatus('completed', '已恢复默认');
     });
 
     document.getElementById('btn-fetch-models')?.addEventListener('click', async () => {
@@ -2048,9 +2442,13 @@
                   method: 'PUT',
                   body: JSON.stringify({ updates: payload }),
                 });
-              } catch (_) {}
+                setAutosaveStatus('completed', '已保存');
+              } catch (err) {
+                reportActionError('CONFIG', err);
+              }
+            } else {
+              setAutosaveStatus('completed', '已保存');
             }
-            setAutosaveStatus('completed', '已保存');
           }, 400);
         };
         inp.addEventListener('input', handler);
@@ -2091,7 +2489,9 @@
         syncAsrRuntimePanel();
         syncTtsMethodPanel();
         updateAssPreview();
-      } catch (_) {}
+      } catch (err) {
+        appendLog('warn', 'CONFIG', `加载全局设置失败: ${err.message}`, true);
+      }
     }
 
     // =========================================================================
@@ -2110,10 +2510,15 @@
               const warn = Boolean(d.error) || /warn|error|fail|异常|失败/i.test(msg);
               appendLog('llm', (d.step || d.state || 'RUN').toUpperCase().slice(0, 6), msg, warn);
             }
-            loadBackendTasks();
-          } catch (_) {}
+            const isProgressTick = d.type === 'task_progress' || (d.state === 'running' && !d.pause_message && !d.error);
+            loadBackendTasks({ skipActiveDetail: isProgressTick });
+          } catch (parseErr) {
+            appendLog('warn', 'SSE', `解析事件流数据失败: ${parseErr.message}`, true);
+          }
         };
-      } catch (_) {}
+      } catch (err) {
+        appendLog('warn', 'SSE', `连接实时事件流失败: ${err.message}`, true);
+      }
     }
 
     // 初始化全量视图 (同步立即渲染空状态，随后异步同步后端数据)

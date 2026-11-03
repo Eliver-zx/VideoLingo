@@ -531,6 +531,7 @@ def test_split_by_mark_handles_text_longer_than_the_tokenizer_limit(
     tmp_path, monkeypatch
 ):
     from core import _3_1_split_nlp
+    from core.workspace import TaskWorkspace
 
     seen = []
 
@@ -544,10 +545,16 @@ def test_split_by_mark_handles_text_longer_than_the_tokenizer_limit(
         for i in range(6000)
         for word in ("This", "is", "sentence", "number", f"{i}.")
     ]
+    ws = TaskWorkspace(tmp_path)
+    ws.save_words(
+        [
+            {"text": w, "start": i * 0.1, "end": (i + 1) * 0.1, "speaker": "SPEAKER_00"}
+            for i, w in enumerate(words)
+        ]
+    )
     nlp_out = tmp_path / "split_by_nlp.txt"
     meaning_out = tmp_path / "split_by_meaning.txt"
     cleaned_xlsx = tmp_path / "cleaned_chunks.xlsx"
-    pd.DataFrame({"text": words}).to_excel(cleaned_xlsx, index=False)
 
     monkeypatch.setattr(_3_1_split_nlp, "_2_CLEANED_CHUNKS", str(cleaned_xlsx))
     monkeypatch.setattr(_3_1_split_nlp, "_3_1_SPLIT_BY_NLP", str(nlp_out))
@@ -557,7 +564,7 @@ def test_split_by_mark_handles_text_longer_than_the_tokenizer_limit(
 
     _3_1_split_nlp.split_by_spacy()
 
-    lines = nlp_out.read_text(encoding="utf-8").splitlines()
+    lines = [u["src"] for u in ws.load_utterances()]
     assert len(seen) > 1
     assert lines == [f"This is sentence number {i}." for i in range(6000)]
 
@@ -1056,6 +1063,8 @@ def test_split_sub_stops_when_the_task_is_cancelled(monkeypatch):
 
 
 def test_split_sub_main_writes_lines_of_equal_length(monkeypatch, tmp_path):
+    from core.workspace import TaskWorkspace
+
     def align(prompt):
         if prompt == LONG_TR:
             return {
@@ -1078,34 +1087,56 @@ def test_split_sub_main_writes_lines_of_equal_length(monkeypatch, tmp_path):
         return "another long source line\nthat is split in two"
 
     module = _split_sub(monkeypatch, split=split, align=align, max_length=30)
+    ws = TaskWorkspace(tmp_path)
+    ws.save_utterances(
+        [
+            {
+                "id": "utt_0000",
+                "src": LONG_SRC,
+                "tgt": LONG_TR,
+                "word_span": [0, 1],
+                "start": 0.0,
+                "end": 1.0,
+            },
+            {
+                "id": "utt_0001",
+                "src": "another long source line that is split in two",
+                "tgt": "第二行需要切分的比较长的译文字幕",
+                "word_span": [1, 2],
+                "start": 1.0,
+                "end": 2.0,
+            },
+        ]
+    )
     translation, split_sub, remerged = (
         str(tmp_path / name) for name in ("t.xlsx", "s.xlsx", "r.xlsx")
     )
-    pd.DataFrame(
-        {
-            "Source": [LONG_SRC, "another long source line that is split in two"],
-            "Translation": [LONG_TR, "第二行需要切分的比较长的译文字幕"],
-        }
-    ).to_excel(translation, index=False)
     monkeypatch.setattr(module, "_4_2_TRANSLATION", translation)
     monkeypatch.setattr(module, "_5_SPLIT_SUB", split_sub)
     monkeypatch.setattr(module, "_5_REMERGED", remerged)
 
     module.split_for_sub_main()
 
-    result = pd.read_excel(split_sub)
-    assert result["Source"].tolist() == [
+    utts = ws.load_utterances()
+    sub_cues = [c for u in utts for c in u.get("sub_cues", [])]
+    assert [c["src"] for c in sub_cues] == [
         LONG_SRC,
         "another long source line",
         "that is split in two",
     ]
-    assert result["Translation"].tolist() == [
+    assert [c["tgt"] for c in sub_cues] == [
         LONG_TR,
         "第二行需要切分的",
         "比较长的译文字幕",
     ]
-    assert not result.isna().any().any()
-    assert not pd.read_excel(remerged).isna().any().any()
+    assert [u["src"] for u in utts] == [
+        LONG_SRC,
+        "another long source line that is split in two",
+    ]
+    assert [u["tgt"] for u in utts] == [
+        LONG_TR,
+        "第二行需要切分的比较长的译文字幕",
+    ]
 
 
 # ------------------------------------------------------------------
@@ -2209,6 +2240,7 @@ def test_file_without_subtitles_is_not_added(monkeypatch, tmp_path):
 
 def test_subtitles_take_the_place_of_the_recognition(monkeypatch, tmp_path):
     from core._6_gen_sub import get_sentence_timestamps
+    from core.workspace import TaskWorkspace
 
     module = _input_subtitles(monkeypatch, tmp_path)
     module.add_input_subtitles("talk.srt", SRT.encode("utf-8"))
@@ -2216,25 +2248,28 @@ def test_subtitles_take_the_place_of_the_recognition(monkeypatch, tmp_path):
     module.import_subtitles()
 
     sentences = [text for _, _, text in CUES]
-    for name in ("split_by_nlp.txt", "split_by_meaning.txt"):
-        with open(f"output/log/{name}", encoding="utf-8") as f:
-            assert f.read().split("\n") == sentences
-    words = pd.read_excel("output/log/cleaned_chunks.xlsx")
-    assert list(words.columns) == ["text", "start", "end", "speaker_id"]
-    assert list(words["text"][:2]) == ['"Hello"', '"world."'] and len(words) == 12
-    assert list(words["start"][:3]) == [1.0, 2.0, 3.5] and list(words["end"][:3]) == [
+    ws = TaskWorkspace("output")
+    utts = ws.load_utterances()
+    assert [u["src"] for u in utts] == sentences
+    raw_words = ws.load_words()
+    assert [w["text"] for w in raw_words[:2]] == ["Hello", "world."] and len(
+        raw_words
+    ) == 12
+    assert [w["start"] for w in raw_words[:3]] == [1.0, 2.0, 3.5] and [
+        w["end"] for w in raw_words[:3]
+    ] == [
         2.0,
         3.0,
         3.5,
     ]
-    # The lines get the times of their subtitles back
-    words["text"] = words["text"].str.strip('"')
+    words = pd.DataFrame(raw_words)
     stamps = get_sentence_timestamps(words, pd.DataFrame({"Source": sentences}))
     assert stamps == [(start, end) for start, end, _ in CUES]
 
 
 def test_subtitles_with_a_video_prepare_the_audio_of_the_dubbing(monkeypatch, tmp_path):
     import core._2_asr as asr
+    from core.workspace import TaskWorkspace
 
     module = _input_subtitles(monkeypatch, tmp_path, video=True)
     module.add_input_subtitles("talk.srt", SRT.encode("utf-8"))
@@ -2244,11 +2279,12 @@ def test_subtitles_with_a_video_prepare_the_audio_of_the_dubbing(monkeypatch, tm
     module.import_subtitles()
 
     assert calls == [("output/talk.mp4", "video", False)]
-    assert os.path.exists("output/log/cleaned_chunks.xlsx")
+    assert TaskWorkspace("output").has_words()
 
 
 def test_subtitles_without_a_video_need_no_audio(monkeypatch, tmp_path):
     import core._2_asr as asr
+    from core.workspace import TaskWorkspace
 
     module = _input_subtitles(monkeypatch, tmp_path)
     module.add_input_subtitles("talk.srt", SRT.encode("utf-8"))
@@ -2258,7 +2294,7 @@ def test_subtitles_without_a_video_need_no_audio(monkeypatch, tmp_path):
 
     module.import_subtitles()
 
-    assert os.path.exists("output/log/cleaned_chunks.xlsx")
+    assert TaskWorkspace("output").has_words()
 
 
 def test_subtitles_need_their_language(monkeypatch, tmp_path):
@@ -2270,21 +2306,33 @@ def test_subtitles_need_their_language(monkeypatch, tmp_path):
 
 
 def test_recognition_is_kept_without_subtitles_of_the_user(monkeypatch, tmp_path):
+    from core.workspace import TaskWorkspace
+
     module = _input_subtitles(monkeypatch, tmp_path, video=True)
     module.import_subtitles()
-    assert not os.path.exists("output/log")
+    assert not TaskWorkspace("output").has_words()
 
     # A retry keeps the words that are there
     module.add_input_subtitles("talk.srt", SRT.encode("utf-8"))
-    os.makedirs("output/log")
-    _words().to_excel("output/log/cleaned_chunks.xlsx", index=False)
+    ws = TaskWorkspace("output")
+    ws.save_words(
+        [
+            {
+                "text": str(r["text"]).strip('"'),
+                "start": float(r["start"]),
+                "end": float(r["end"]),
+                "speaker": str(r.get("speaker_id", "SPEAKER_00")),
+            }
+            for _, r in _words().iterrows()
+        ]
+    )
     module.import_subtitles()
-    assert len(pd.read_excel("output/log/cleaned_chunks.xlsx")) == 5
-    assert os.listdir("output/log") == ["cleaned_chunks.xlsx"]
+    assert len(ws.load_words()) == 5
 
 
 def test_subtitles_of_the_user_are_not_cut(monkeypatch, tmp_path):
     import core._5_split_sub as module
+    from core.workspace import TaskWorkspace
 
     monkeypatch.chdir(tmp_path)
     os.makedirs("output/log")
@@ -2296,13 +2344,12 @@ def test_subtitles_of_the_user_are_not_cut(monkeypatch, tmp_path):
 
     module.split_for_sub_main()
 
-    for name in (
-        "translation_results_for_subtitles.xlsx",
-        "translation_results_remerged.xlsx",
-    ):
-        df = pd.read_excel(f"output/log/{name}")
-        assert list(df["Source"]) == ["Hello world.", "...", "How are you?"]
-        assert list(df["Translation"]) == ["大家好。" * 30, "……", "你好吗？"]
+    utts = TaskWorkspace("output").load_utterances()
+    assert [u["src"] for u in utts] == ["Hello world.", "...", "How are you?"]
+    assert [u["tgt"] for u in utts] == ["大家好。" * 30, "……", "你好吗？"]
+    sub_cues = [c for u in utts for c in u.get("sub_cues", [])]
+    assert [c["src"] for c in sub_cues] == ["Hello world.", "...", "How are you?"]
+    assert [c["tgt"] for c in sub_cues] == ["大家好。" * 30, "……", "你好吗？"]
 
 
 def test_source_subtitles_of_the_user_are_not_cut(monkeypatch, tmp_path):

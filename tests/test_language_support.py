@@ -1,4 +1,5 @@
 """Downstream language handling: joiners, code-switched joining and punctuation splitting (offline)."""
+
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,7 +10,6 @@ from core import _3_1_split_nlp
 from core.asr_backend.qwen_asr_local import ISO_TO_QWEN
 from core.utils import config_utils
 from core.utils.config_utils import get_joiner, join_words
-from core.utils.models import _3_1_SPLIT_BY_NLP
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,23 +18,40 @@ ROOT = Path(__file__).resolve().parents[1]
 # get_joiner: every language auto detection can return has a joiner
 # ------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("language", sorted(ISO_TO_QWEN))
 def test_every_qwen_language_has_a_joiner(language):
     assert get_joiner(language) in ("", " ")
 
 
-@pytest.mark.parametrize("language,joiner", [
-    ("en", " "), ("zh", ""), ("ja", ""),                    # config.yaml lists
-    ("ko", " "), ("vi", " "), ("pt", " "), ("ar", " "),     # built-in: spaced scripts
-    ("th", ""), ("yue", ""), ("lo", ""), ("ZH", ""),        # built-in: unspaced scripts
-])
+@pytest.mark.parametrize(
+    "language,joiner",
+    [
+        ("en", " "),
+        ("zh", ""),
+        ("ja", ""),  # config.yaml lists
+        ("ko", " "),
+        ("vi", " "),
+        ("pt", " "),
+        ("ar", " "),  # built-in: spaced scripts
+        ("th", ""),
+        ("yue", ""),
+        ("lo", ""),
+        ("ZH", ""),  # built-in: unspaced scripts
+    ],
+)
 def test_joiner_values(language, joiner):
     assert get_joiner(language) == joiner
 
 
 def test_config_lists_override_built_in_rule():
-    lists = {"language_split_with_space": ["th"], "language_split_without_space": ["ko"]}
-    with patch.object(config_utils, "load_key_or", lambda key, default: lists.get(key, default)):
+    lists = {
+        "language_split_with_space": ["th"],
+        "language_split_without_space": ["ko"],
+    }
+    with patch.object(
+        config_utils, "load_key_or", lambda key, default: lists.get(key, default)
+    ):
         assert get_joiner("th") == " " and get_joiner("ko") == ""
 
 
@@ -48,22 +65,35 @@ def test_unknown_language_still_raises(language):
 # join_words: code-switched words keep their spaces in unspaced languages
 # ------------------------------------------------------------------
 
-@pytest.mark.parametrize("words,expected", [
-    (["Hello", "Fiona"], "Hello Fiona"),                       # Mini: HelloFiona
-    (["call", "me", "Lisa"], "call me Lisa"),                  # Mini: callmeLisa
-    (["See", "you", "See", "you"], "See you See you"),
-    (["Microsoft", "Global"], "Microsoft Global"),
-    (["Hello，", "Fiona", "呀"], "Hello，Fiona呀"),            # full-width punctuation: no space
-    (["Hello,", "Fiona"], "Hello, Fiona"),                     # ASCII punctuation before a word
-    (["有", "个", "meeting", "啊"], "有个meeting啊"),          # CJK next to Latin: unspaced as before
-    (["你", "好，", "世", "界。"], "你好，世界。"),              # CJK next to CJK
-    (["iPhone", "15"], "iPhone 15"), (["2025", "年"], "2025年"), (["第", "3", "章"], "第3章"),
-    (["don", "'t"], "don't"), (["3.", "5"], "3.5"),
-    (["今日", "は", "Zoom", "で", "ミーティング"], "今日はZoomでミーティング"),
-    (["コーヒー", "々"], "コーヒー々"),
-    (["สวัสดี", "ครับ"], "สวัสดีครับ"),
-    (["", "Hello", "", "world"], "Hello world"),
-])
+
+@pytest.mark.parametrize(
+    "words,expected",
+    [
+        (["Hello", "Fiona"], "Hello Fiona"),  # Mini: HelloFiona
+        (["call", "me", "Lisa"], "call me Lisa"),  # Mini: callmeLisa
+        (["See", "you", "See", "you"], "See you See you"),
+        (["Microsoft", "Global"], "Microsoft Global"),
+        (
+            ["Hello，", "Fiona", "呀"],
+            "Hello，Fiona呀",
+        ),  # full-width punctuation: no space
+        (["Hello,", "Fiona"], "Hello, Fiona"),  # ASCII punctuation before a word
+        (
+            ["有", "个", "meeting", "啊"],
+            "有个meeting啊",
+        ),  # CJK next to Latin: unspaced as before
+        (["你", "好，", "世", "界。"], "你好，世界。"),  # CJK next to CJK
+        (["iPhone", "15"], "iPhone 15"),
+        (["2025", "年"], "2025年"),
+        (["第", "3", "章"], "第3章"),
+        (["don", "'t"], "don't"),
+        (["3.", "5"], "3.5"),
+        (["今日", "は", "Zoom", "で", "ミーティング"], "今日はZoomでミーティング"),
+        (["コーヒー", "々"], "コーヒー々"),
+        (["สวัสดี", "ครับ"], "สวัสดีครับ"),
+        (["", "Hello", "", "world"], "Hello world"),
+    ],
+)
 def test_join_words_without_space(words, expected):
     assert join_words(words, "") == expected
 
@@ -77,9 +107,12 @@ def test_join_words_with_space_is_plain_join():
 # Multilingual punctuation splitting (spaCy-free)
 # ------------------------------------------------------------------
 
+
 def test_arabic_and_multilingual_punctuation_splitting():
     words = ["مرحبا", "بكم.", "كيف", "حالكم؟", "نحن", "بخير!"]
-    with patch.object(_3_1_split_nlp, "ask_gpt", side_effect=RuntimeError("offline fallback")):
+    with patch.object(
+        _3_1_split_nlp, "ask_gpt", side_effect=RuntimeError("offline fallback")
+    ):
         sents = _3_1_split_nlp.restore_and_split_words(words, language="ar")
     assert len(sents) == 3
     assert sents == ["مرحبا بكم.", "كيف حالكم؟", "نحن بخير!"]
@@ -89,26 +122,40 @@ def test_arabic_and_multilingual_punctuation_splitting():
 # The whole split stage runs for newly supported languages
 # ------------------------------------------------------------------
 
+
 @pytest.fixture
 def project(tmp_path, monkeypatch):
     """A working directory with config.yaml (auto -> detected language) and cleaned_chunks.xlsx."""
+
     def make(language, words):
         text = (ROOT / "config.yaml").read_text(encoding="utf-8")
-        text = text.replace("  language: 'en'\n  detected_language: 'en'",
-                            f"  language: 'auto'\n  detected_language: '{language}'", 1)
+        text = text.replace(
+            "  language: 'en'\n  detected_language: 'en'",
+            f"  language: 'auto'\n  detected_language: '{language}'",
+            1,
+        )
         assert f"detected_language: '{language}'" in text
         (tmp_path / "config.yaml").write_text(text, encoding="utf-8")
         (tmp_path / "output/log").mkdir(parents=True)
-        pd.DataFrame({"text": words}).to_excel(tmp_path / "output/log/cleaned_chunks.xlsx", index=False)
+        pd.DataFrame({"text": words}).to_excel(
+            tmp_path / "output/log/cleaned_chunks.xlsx", index=False
+        )
         monkeypatch.chdir(tmp_path)
         return tmp_path
+
     return make
 
 
 def run_split_stage():
-    with patch.object(_3_1_split_nlp, "ask_gpt", side_effect=RuntimeError("offline punctuation fallback")):
+    from core.workspace import get_active_workspace
+
+    with patch.object(
+        _3_1_split_nlp,
+        "ask_gpt",
+        side_effect=RuntimeError("offline punctuation fallback"),
+    ):
         _3_1_split_nlp.split_by_spacy()
-    return Path(_3_1_SPLIT_BY_NLP).read_text(encoding="utf-8").splitlines()
+    return [u["src"] for u in get_active_workspace().load_utterances()]
 
 
 KO_WORDS = "안녕하세요. 저는 오늘 인생을 다시 시작한 이야기를 하려고 합니다. 여러분, 끈기가 중요합니다! 감사합니다.".split()
@@ -118,8 +165,12 @@ def test_korean_split_stage_runs_without_a_downloaded_model(project):
     project("ko", KO_WORDS)
     assert config_utils.get_source_language() == "ko"
     lines = run_split_stage()
-    assert lines == ["안녕하세요.", "저는 오늘 인생을 다시 시작한 이야기를 하려고 합니다.",
-                     "여러분, 끈기가 중요합니다!", "감사합니다."]
+    assert lines == [
+        "안녕하세요.",
+        "저는 오늘 인생을 다시 시작한 이야기를 하려고 합니다.",
+        "여러분, 끈기가 중요합니다!",
+        "감사합니다.",
+    ]
 
 
 def test_thai_uses_unspaced_joiner_in_split_stage(project):
@@ -128,35 +179,67 @@ def test_thai_uses_unspaced_joiner_in_split_stage(project):
 
 
 def test_code_switched_chinese_keeps_english_spaces_in_split_stage(project):
-    project("zh", ["Hello，", "Fiona", "呀", "，", "有", "个", "meeting", "啊", "。",
-                   "call", "me", "Lisa", "就", "好", "。"])
+    project(
+        "zh",
+        [
+            "Hello，",
+            "Fiona",
+            "呀",
+            "，",
+            "有",
+            "个",
+            "meeting",
+            "啊",
+            "。",
+            "call",
+            "me",
+            "Lisa",
+            "就",
+            "好",
+            "。",
+        ],
+    )
     lines = run_split_stage()
     text = "".join(lines)
-    assert "Hello，Fiona呀" in text and "有个meeting啊" in text and "call me Lisa就好" in text
+    assert (
+        "Hello，Fiona呀" in text
+        and "有个meeting啊" in text
+        and "call me Lisa就好" in text
+    )
 
 
 def test_split_positions_use_the_same_join(project):
     # _3_2_split_meaning compares the LLM split (spaces between words) with the joined original.
     project("zh", ["x"])
     from core._3_2_split_meaning import find_split_positions
+
     original = "我们call me Lisa就好然后开会"
-    assert find_split_positions(original, "我们 call me Lisa 就好[br]然后 开会") == [len("我们call me Lisa就好")]
+    assert find_split_positions(original, "我们 call me Lisa 就好[br]然后 开会") == [
+        len("我们call me Lisa就好")
+    ]
 
 
-@pytest.mark.parametrize("tokens,expected", [
-    (["2", "0", "2", "5", "年"], "2025年"),
-    (["２", "０", "２", "６", "年"], "２０２６年"),
-    (["1,", "2", "3", "4", ".", "5", "円"], "1,234.5円"),
-])
+@pytest.mark.parametrize(
+    "tokens,expected",
+    [
+        (["2", "0", "2", "5", "年"], "2025年"),
+        (["２", "０", "２", "６", "年"], "２０２６年"),
+        (["1,", "2", "3", "4", ".", "5", "円"], "1,234.5円"),
+    ],
+)
 def test_unspaced_numeric_tokens_stay_contiguous(tokens, expected):
     assert join_words(tokens, "") == expected
 
 
-@pytest.mark.parametrize("text", ["2025年に行きます。", "今日は２０２６年です。", "①テストです。", "ｶﾞｯﾂです。"])
+@pytest.mark.parametrize(
+    "text",
+    ["2025年に行きます。", "今日は２０２６年です。", "①テストです。", "ｶﾞｯﾂです。"],
+)
 def test_japanese_aligner_tokens_preserve_text(text):
     pytest.importorskip("qwen_asr")
     from qwen_asr.inference.qwen3_forced_aligner import Qwen3ForceAlignProcessor  # type: ignore[import-not-found]
     from core.asr_backend.qwen_asr_local import attach_words
+
     tokens, _ = Qwen3ForceAlignProcessor().encode_timestamp(text, "Japanese")
     aligned = attach_words(text, [(token, i, i + 1) for i, token in enumerate(tokens)])
     assert join_words([item["word"] for item in aligned], "") == text

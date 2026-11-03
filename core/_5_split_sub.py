@@ -4,7 +4,6 @@ import concurrent.futures
 import inspect
 import math
 import os
-from pathlib import Path
 import re
 from typing import Any, List, Tuple
 
@@ -43,7 +42,7 @@ from core.utils.models import (  # noqa: F401
     _5_SPLIT_SUB,
     resolve_task_path,
 )
-from core.workspace import TaskWorkspace, get_active_workspace
+from core.workspace import workspace_for_path
 
 console = Console()
 
@@ -868,19 +867,9 @@ def _partition_word_span_for_cues(
 
 def split_for_sub_main():
     split_sub_path = resolve_task_path(_5_SPLIT_SUB)
-    remerged_path = resolve_task_path(_5_REMERGED)
     trans_path = resolve_task_path(_4_2_TRANSLATION)
     abs_split_path = os.path.abspath(split_sub_path)
-
-    ws = (
-        get_active_workspace()
-        if str(_5_SPLIT_SUB).startswith("output/")
-        else TaskWorkspace(
-            Path(split_sub_path).parent.parent
-            if Path(split_sub_path).parent.name == "log"
-            else Path(split_sub_path).parent
-        )
-    )
+    ws = workspace_for_path(split_sub_path)
 
     try:
         subtitle_set = load_key("subtitle")
@@ -889,62 +878,112 @@ def split_for_sub_main():
     MAX_SUB_LENGTH = float(subtitle_set["max_length"])
     TARGET_SUB_MULTIPLIER = float(subtitle_set["target_multiplier"])
 
-    if (
-        os.path.exists(split_sub_path)
-        and os.path.exists(remerged_path)
-        and os.path.exists(trans_path)
-        and os.path.getmtime(split_sub_path) >= os.path.getmtime(trans_path)
-    ):
+    utterances = ws.load_utterances()
+    if utterances and ws.has_sub_cues():
         try:
             prev_cfg = _LAST_SPLIT_CONFIG_BY_PATH.get(abs_split_path)
-            if prev_cfg is None and ws.utterances_path.is_file():
-                utters = ws.load_utterances()
-                if utters and isinstance(utters[0].get("sub_split_config"), dict):
-                    cfg_d = utters[0]["sub_split_config"]
-                    prev_cfg = (
-                        float(cfg_d.get("max_length", -1)),
-                        float(cfg_d.get("target_multiplier", -1)),
-                    )
-            config_matches = prev_cfg is None or prev_cfg == (
-                MAX_SUB_LENGTH,
-                TARGET_SUB_MULTIPLIER,
+            if prev_cfg is None and isinstance(
+                utterances[0].get("sub_split_config"), dict
+            ):
+                cfg_d = utterances[0]["sub_split_config"]
+                prev_cfg = (
+                    float(cfg_d.get("max_length", -1)),
+                    float(cfg_d.get("target_multiplier", -1)),
+                )
+            saved_rev = ws.get_kv("sub_split_rev")
+            rev_matches = (
+                saved_rev is not None and int(saved_rev) == ws.get_utterances_revision()
             )
-            df_existing = pd.read_excel(split_sub_path)
+            cues_mtime = ws.get_kv_mtime("sub_cues_saved")
+            trans_file_newer = (
+                os.path.exists(trans_path)
+                and cues_mtime > 0
+                and os.path.getmtime(trans_path) > cues_mtime
+            )
+            config_matches = prev_cfg == (MAX_SUB_LENGTH, TARGET_SUB_MULTIPLIER)
+            all_cues = [
+                c
+                for u in utterances
+                for c in (u.get("sub_cues") or [])
+                if isinstance(c, dict)
+            ]
             if (
-                config_matches
+                rev_matches
+                and not trans_file_newer
+                and config_matches
+                and all_cues
                 and all(
-                    calc_len(str(s)) <= MAX_SUB_LENGTH
-                    for s in df_existing["Source"].fillna("")
+                    calc_len(str(c.get("src") or "")) <= MAX_SUB_LENGTH
+                    for c in all_cues
                 )
                 and all(
-                    calc_len(str(tr)) * TARGET_SUB_MULTIPLIER <= MAX_SUB_LENGTH
-                    for tr in df_existing["Translation"].fillna("")
+                    calc_len(str(c.get("tgt", c.get("trans", "")) or ""))
+                    * TARGET_SUB_MULTIPLIER
+                    <= MAX_SUB_LENGTH
+                    for c in all_cues
                 )
             ):
                 rprint(
-                    f"[yellow]⚠️ File <{split_sub_path}> already exists and is up-to-date, "
+                    "[yellow]⚠️ Subtitle split cues already exist in workspace database and are up-to-date, "
                     "skip <split_for_sub_main> step.[/yellow]"
                 )
                 return
-        except Exception:
+        except (ValueError, TypeError, KeyError, OSError):
             pass
 
     console.print("[bold green]🚀 Start splitting subtitles...[/bold green]")
 
-    df = pd.read_excel(trans_path)
-    src = df["Source"].tolist()
-    trans = df["Translation"].tolist()
+    if utterances and not (
+        os.path.exists(trans_path)
+        and ws.get_utterances_mtime() > 0
+        and os.path.getmtime(trans_path) > ws.get_utterances_mtime()
+    ):
+        src = [str(u.get("src") or "") for u in utterances]
+        trans = [str(u.get("tgt") or "") for u in utterances]
+    elif os.path.exists(trans_path):
+        df = pd.read_excel(trans_path)
+        src = [str(x) for x in df["Source"].fillna("").tolist()]
+        trans = [str(x) for x in df["Translation"].fillna("").tolist()]
+        utterances = [
+            {
+                "id": f"u_{i:04d}",
+                "index": i,
+                "word_span": [0, 0],
+                "start": 0.0,
+                "end": 0.0,
+                "gap_after": 0.0,
+                "src": s,
+                "tgt": t,
+                "tts_text": t,
+            }
+            for i, (s, t) in enumerate(zip(src, trans))
+        ]
+    else:
+        raise FileNotFoundError(
+            f"No translated utterances found in workspace database: {ws.db_path}"
+        )
 
     if find_subtitle_file():
-        # The subtitles of the user keep their lines and their times
         console.print(
             "[cyan]📄 Subtitles of the user: the lines are kept as they are[/cyan]"
         )
-        os.makedirs(os.path.dirname(split_sub_path) or ".", exist_ok=True)
-        for path in (split_sub_path, remerged_path):
-            pd.DataFrame({"Source": src, "Translation": trans}).to_excel(
-                path, index=False
-            )
+        for u in utterances:
+            u["sub_split_config"] = {
+                "max_length": MAX_SUB_LENGTH,
+                "target_multiplier": TARGET_SUB_MULTIPLIER,
+            }
+            u["sub_cues"] = [
+                {
+                    "src": str(u.get("src") or ""),
+                    "tgt": str(u.get("tgt") or ""),
+                    "trans": str(u.get("tgt") or ""),
+                    "word_span": list(u.get("word_span") or [0, 0]),
+                    "start": float(u.get("start") or 0.0),
+                    "end": float(u.get("end") or 0.0),
+                }
+            ]
+        rev = ws.save_utterances(utterances)
+        ws.set_kv("sub_split_rev", rev)
         _LAST_SPLIT_CONFIG_BY_PATH[abs_split_path] = (
             MAX_SUB_LENGTH,
             TARGET_SUB_MULTIPLIER,
@@ -956,32 +995,28 @@ def split_for_sub_main():
     split_src, split_trans = src.copy(), trans.copy()
     origin_indices = list(range(len(orig_src)))
 
-    utterances: list[dict[str, Any]] = []
-    words: list[dict[str, Any]] = []
+    words = ws.load_words()
     orig_word_gaps: dict[int, list[float] | None] = {}
-    if ws.utterances_path.is_file() and ws.words_path.is_file():
-        utterances = ws.load_utterances()
-        words = ws.load_words()
-        if len(utterances) == len(orig_src) and words:
-            n_total_w = len(words)
-            for u_idx, u in enumerate(utterances):
-                span = u.get("word_span") or [0, n_total_w]
-                w_a = max(0, min(int(span[0]) if len(span) >= 2 else 0, n_total_w - 1))
-                w_b = max(
-                    w_a + 1,
-                    min(int(span[1]) if len(span) >= 2 else n_total_w, n_total_w),
-                )
-                if w_b - w_a > 1:
-                    orig_word_gaps[u_idx] = [
-                        max(
-                            0.0,
-                            float(words[k + 1].get("start", 0.0))
-                            - float(words[k].get("end", 0.0)),
-                        )
-                        for k in range(w_a, w_b - 1)
-                    ]
-                else:
-                    orig_word_gaps[u_idx] = None
+    if len(utterances) == len(orig_src) and words:
+        n_total_w = len(words)
+        for u_idx, u in enumerate(utterances):
+            span = u.get("word_span") or [0, n_total_w]
+            w_a = max(0, min(int(span[0]) if len(span) >= 2 else 0, n_total_w - 1))
+            w_b = max(
+                w_a + 1,
+                min(int(span[1]) if len(span) >= 2 else n_total_w, n_total_w),
+            )
+            if w_b - w_a > 1:
+                orig_word_gaps[u_idx] = [
+                    max(
+                        0.0,
+                        float(words[k + 1].get("start", 0.0))
+                        - float(words[k].get("end", 0.0)),
+                    )
+                    for k in range(w_a, w_b - 1)
+                ]
+            else:
+                orig_word_gaps[u_idx] = None
 
     for attempt in range(3):
         console.print(Panel(f"🔄 Split attempt {attempt + 1}", expand=False))
@@ -995,7 +1030,6 @@ def split_for_sub_main():
         if attempt == 0:
             orig_remerged = remerged
 
-        # Update origin_indices if split_align_subs expanded any lines
         if len(split_src) != len(prev_src):
             new_indices: list[int] = []
             cursor = 0
@@ -1004,7 +1038,6 @@ def split_for_sub_main():
                     new_indices.append(orig_idx)
                     cursor += 1
                 else:
-                    # Gather parts until their combined cleaned length covers old_s
                     target_clean_len = len(_clean_alnum(old_s))
                     acc_len = 0
                     while cursor < len(split_src):
@@ -1026,40 +1059,49 @@ def split_for_sub_main():
 
         src, trans = split_src, split_trans
 
-    os.makedirs(os.path.dirname(split_sub_path) or ".", exist_ok=True)
-    pd.DataFrame({"Source": split_src, "Translation": split_trans}).to_excel(
-        split_sub_path, index=False
-    )
-    pd.DataFrame({"Source": orig_src, "Translation": orig_remerged}).to_excel(
-        remerged_path, index=False
-    )
     _LAST_SPLIT_CONFIG_BY_PATH[abs_split_path] = (MAX_SUB_LENGTH, TARGET_SUB_MULTIPLIER)
 
-    if ws.utterances_path.is_file() and ws.words_path.is_file():
-        utterances = ws.load_utterances()
-        words = ws.load_words()
-        if len(utterances) == len(orig_src) and len(origin_indices) == len(split_src):
-            grouped_src: dict[int, list[str]] = {i: [] for i in range(len(orig_src))}
-            grouped_tr: dict[int, list[str]] = {i: [] for i in range(len(orig_src))}
-            for u_idx, s_part, t_part in zip(origin_indices, split_src, split_trans):
-                grouped_src[u_idx].append(str(s_part))
-                grouped_tr[u_idx].append(str(t_part))
-            for u_idx, u in enumerate(utterances):
-                span = u.get("word_span") or [0, len(words)]
-                w_a = int(span[0]) if len(span) >= 2 else 0
-                w_b = int(span[1]) if len(span) >= 2 else len(words)
-                u["sub_split_config"] = {
-                    "max_length": MAX_SUB_LENGTH,
-                    "target_multiplier": TARGET_SUB_MULTIPLIER,
+    if len(origin_indices) != len(split_src):
+        origin_indices = [min(i, len(orig_src) - 1) for i in range(len(split_src))]
+
+    grouped_src: dict[int, list[str]] = {i: [] for i in range(len(orig_src))}
+    grouped_tr: dict[int, list[str]] = {i: [] for i in range(len(orig_src))}
+    for u_idx, s_part, t_part in zip(origin_indices, split_src, split_trans):
+        grouped_src[u_idx].append(str(s_part))
+        grouped_tr[u_idx].append(str(t_part))
+
+    for u_idx, u in enumerate(utterances):
+        u["tgt"] = str(orig_remerged[u_idx])
+        if not str(u.get("tts_text") or "").strip():
+            u["tts_text"] = str(orig_remerged[u_idx])
+        u["sub_split_config"] = {
+            "max_length": MAX_SUB_LENGTH,
+            "target_multiplier": TARGET_SUB_MULTIPLIER,
+        }
+        s_parts = grouped_src.get(u_idx) or [str(orig_src[u_idx])]
+        t_parts = grouped_tr.get(u_idx) or [str(orig_remerged[u_idx])]
+        if words:
+            span = u.get("word_span") or [0, len(words)]
+            w_a = int(span[0]) if len(span) >= 2 else 0
+            w_b = int(span[1]) if len(span) >= 2 else len(words)
+            u["sub_cues"] = _partition_word_span_for_cues(
+                w_a, w_b, s_parts, t_parts, words
+            )
+        else:
+            u["sub_cues"] = [
+                {
+                    "src": sp,
+                    "tgt": tp,
+                    "trans": tp,
+                    "word_span": [0, 0],
+                    "start": float(u.get("start") or 0.0),
+                    "end": float(u.get("end") or 0.0),
                 }
-                u["sub_cues"] = _partition_word_span_for_cues(
-                    w_a,
-                    w_b,
-                    grouped_src.get(u_idx) or [str(orig_src[u_idx])],
-                    grouped_tr.get(u_idx) or [str(orig_remerged[u_idx])],
-                    words,
-                )
-            ws.save_utterances(utterances)
+                for sp, tp in zip(s_parts, t_parts)
+            ]
+
+    rev = ws.save_utterances(utterances)
+    ws.set_kv("sub_split_rev", rev)
 
 
 if __name__ == "__main__":

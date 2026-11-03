@@ -3,9 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 from difflib import SequenceMatcher
 import os
-from pathlib import Path
 import re
-import shutil
 from typing import Any
 import unicodedata
 
@@ -22,13 +20,13 @@ from core.utils import (
     load_key_or,
     rprint,
 )
-from core.utils.models import (
+from core.utils.models import (  # noqa: F401
     _2_CLEANED_CHUNKS,
     _3_1_SPLIT_BY_NLP,
     _3_2_SPLIT_BY_MEANING,
     resolve_task_path,
 )
-from core.workspace import TaskWorkspace, get_active_workspace
+from core.workspace import workspace_for_path  # noqa: F401
 
 CHUNK_WORDS = 400
 OVERLAP_WORDS = 60
@@ -985,18 +983,13 @@ def _build_utterances_from_sentences(
 
 
 def split_by_spacy():
-    nlp_path = resolve_task_path(_3_1_SPLIT_BY_NLP)
-    meaning_path = resolve_task_path(_3_2_SPLIT_BY_MEANING)
     cleaned_path = resolve_task_path(_2_CLEANED_CHUNKS)
+    ws = workspace_for_path(cleaned_path)
 
-    if os.path.exists(nlp_path) and os.path.exists(meaning_path):
+    if ws.has_utterances():
         rprint(
-            f"[yellow]⚠️ Files <{nlp_path}> and <{meaning_path}> already exist, "
-            "skip <split_by_spacy> step.[/yellow]"
+            "[yellow]⚠️ Utterances already exist in workspace database, skip <split_by_spacy> step.[/yellow]"
         )
-        return
-    if os.path.exists(nlp_path) and not os.path.exists(meaning_path):
-        shutil.copyfile(nlp_path, meaning_path)
         return
 
     language = get_source_language()
@@ -1005,24 +998,8 @@ def split_by_spacy():
         f"[blue]🔍 Splitting sentences by LLM-restored punctuation (language: {language})...[/blue]"
     )
 
-    ws = (
-        get_active_workspace()
-        if str(_2_CLEANED_CHUNKS).startswith("output/")
-        else TaskWorkspace(
-            Path(cleaned_path).parent.parent
-            if Path(cleaned_path).parent.name == "log"
-            else Path(cleaned_path).parent
-        )
-    )
-
-    word_dicts: list[dict[str, Any]] = []
-    if ws.words_path.is_file() and (
-        not os.path.exists(cleaned_path)
-        or os.path.getmtime(ws.words_path) >= os.path.getmtime(cleaned_path)
-    ):
-        word_dicts = ws.load_words()
-
-    if not word_dicts:
+    word_dicts: list[dict[str, Any]] = ws.load_words()
+    if not word_dicts and os.path.exists(cleaned_path):
         chunks = pd.read_excel(cleaned_path)
         for _idx, row in chunks.iterrows():
             raw_txt = str(row.get("text", "")).strip('"').strip()
@@ -1055,19 +1032,7 @@ def split_by_spacy():
     utterances = _build_utterances_from_sentences(sentences, word_dicts, joiner)
     ws.save_utterances(utterances)
 
-    os.makedirs(os.path.dirname(nlp_path) or ".", exist_ok=True)
-    os.makedirs(os.path.dirname(meaning_path) or ".", exist_ok=True)
-    output_text = "\n".join(sentences) + ("\n" if sentences else "")
-    with open(nlp_path, "w", encoding="utf-8") as f:
-        f.write(output_text)
-
-    with open(meaning_path, "w", encoding="utf-8") as f:
-        f.write(output_text)
-
-    rprint(
-        f"[green]💾 {len(sentences)} sentences saved to → `{nlp_path}` "
-        f"and `{meaning_path}`[/green]"
-    )
+    rprint(f"[green]💾 {len(sentences)} sentences saved to `{ws.db_path}`[/green]")
 
 
 if __name__ == "__main__":

@@ -103,8 +103,11 @@ def _on_runner_event(payload: dict[str, Any]) -> None:
                         "error": payload.get("error"),
                     }
                 )
-            except Exception:
-                pass
+            except OSError as exc:
+                print(
+                    f"Warning: Failed to update task manifest for {task_id}: {exc}",
+                    file=sys.stderr,
+                )
     with _sse_lock:
         for q in list(_sse_subscribers):
             try:
@@ -274,12 +277,11 @@ def _workspace_summary(ws: TaskWorkspace) -> dict[str, Any]:
             )
         truncated = data
     stages_done = {
-        "asr": ws.words_path.is_file()
-        or (ws.log_dir / "cleaned_chunks.xlsx").is_file(),
-        "split": ws.utterances_path.is_file()
-        or (ws.log_dir / "split_by_meaning.txt").is_file(),
-        "terms": ws.terms_path.is_file() or (ws.log_dir / "terminology.json").is_file(),
-        "translate": (ws.log_dir / "translation_results.xlsx").is_file(),
+        "asr": ws.has_words() or (ws.log_dir / "cleaned_chunks.xlsx").is_file(),
+        "split": ws.has_utterances() or (ws.log_dir / "split_by_meaning.txt").is_file(),
+        "terms": ws.has_terms() or (ws.log_dir / "terminology.json").is_file(),
+        "translate": ws.has_translations()
+        or (ws.log_dir / "translation_results.xlsx").is_file(),
         "subtitles": (ws.root / "trans.srt").is_file()
         and (ws.root / "src.srt").is_file(),
         "sub_video": (ws.root / "output_sub.mp4").is_file(),
@@ -676,12 +678,8 @@ def invalidate_task_stage(task_id: str, request: InvalidateStageRequest):
 @app.get("/api/tasks/{task_id}/terms")
 def get_task_terms(task_id: str):
     ws = _resolve_workspace(task_id)
-    if ws.terms_path.is_file():
+    if ws.has_terms():
         return ws.load_terms()
-    legacy_path = ws.log_dir / "terminology.json"
-    if legacy_path.is_file():
-        data = json.loads(legacy_path.read_text(encoding="utf-8"))
-        return {"summary": data.get("theme", ""), "terms": data.get("terms", [])}
     return {"summary": "", "terms": []}
 
 
@@ -779,26 +777,65 @@ def get_task_utterances(task_id: str):
 @app.put("/api/tasks/{task_id}/utterances")
 def update_task_utterances(task_id: str, request: UtterancesUpdateRequest):
     ws = _resolve_workspace(task_id)
-    ws.save_utterances(request.utterances)
-    if request.utterances:
-        meaning_txt = ws.log_dir / "split_by_meaning.txt"
-        if meaning_txt.is_file():
-            src_lines = [str(u.get("src") or "").strip() for u in request.utterances]
-            meaning_txt.write_text("\n".join(src_lines) + "\n", encoding="utf-8")
-        trans_xlsx = ws.log_dir / "translation_results.xlsx"
-        if trans_xlsx.is_file():
-            import pandas as pd
+    normalized_utts = []
+    for idx, u in enumerate(request.utterances):
+        item = dict(u)
+        src = str(item.get("src") or "").strip()
+        tgt = str(item.get("tgt") or "").strip()
+        tts_text = str(item.get("tts_text") or tgt).strip()
+        item["src"] = src
+        item["tgt"] = tgt
+        item["tts_text"] = tts_text
+        cues = item.get("sub_cues")
+        default_cue = {
+            "src": src,
+            "tgt": tgt,
+            "trans": tgt,
+            "word_span": list(item.get("word_span") or [0, 0]),
+            "start": float(item.get("start") or 0.0),
+            "end": float(item.get("end") or 0.0),
+        }
+        if isinstance(cues, list) and len(cues) == 1:
+            c0 = dict(cues[0]) if isinstance(cues[0], dict) else {}
+            item["sub_cues"] = [
+                {**default_cue, **c0, "src": src, "tgt": tgt, "trans": tgt}
+            ]
+        elif isinstance(cues, list) and len(cues) > 1:
+            prev_src = " ".join(
+                str(c.get("src") or "").strip() for c in cues if c.get("src")
+            ).strip()
+            prev_tgt = " ".join(
+                str(c.get("tgt", c.get("trans", c.get("text", ""))) or "").strip()
+                for c in cues
+                if c.get("tgt") or c.get("trans") or c.get("text")
+            ).strip()
+            if src != prev_src or tgt != prev_tgt:
+                item["sub_cues"] = [default_cue]
+        normalized_utts.append(item)
+    ws.save_utterances(normalized_utts)
+    ws.delete_kv("sub_split_cfg", "sub_split_rev")
+    if ws.has_dub_tasks() or (ws.audio_dir / "tts_tasks.xlsx").is_file():
+        ws.invalidate_from_stage("dub_tts")
+    is_task_active = runner.active_task_id == ws.task_id and runner.is_active
+    has_words_data = ws.has_words() or (ws.log_dir / "cleaned_chunks.xlsx").is_file()
+    if (
+        normalized_utts
+        and not is_task_active
+        and has_words_data
+        and (ws.src_srt_path.is_file() or ws.trans_srt_path.is_file())
+    ):
+        from core._6_gen_sub import align_timestamp_main
 
-            df = pd.read_excel(trans_xlsx)
-            if len(df) == len(request.utterances):
-                df["Source"] = [
-                    str(u.get("src") or "").strip() for u in request.utterances
-                ]
-                df["Translation"] = [
-                    str(u.get("tgt") or "").strip() for u in request.utterances
-                ]
-                df.to_excel(trans_xlsx, index=False)
-    return {"saved": len(request.utterances)}
+        manifest = ws.load_manifest()
+        overrides = dict(manifest.get("config_override") or {})
+        with workspace_context(ws), task_config_context(overrides):
+            try:
+                align_timestamp_main()
+            except Exception as exc:
+                raise HTTPException(
+                    500, f"Failed to realign subtitle files: {exc}"
+                ) from exc
+    return {"saved": len(normalized_utts)}
 
 
 @app.delete("/api/tasks/{task_id}")
@@ -1065,8 +1102,10 @@ def api_search_glossary_domain_dict(domain: str, q: str = "", limit: int = 50):
         return {"entries": None, "total": 0}
     try:
         parsed = json.loads(dict_file.read_text(encoding="utf-8-sig"))
-    except Exception:
-        return {"entries": [], "total": 0}
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            500, f"Failed to read domain dictionary {dict_file.name}: {exc}"
+        ) from exc
     pairs: list[dict[str, str]] = []
     if isinstance(parsed, dict):
         terms_list = parsed.get("terms")
@@ -1496,7 +1535,18 @@ def archive():
 @app.post("/api/tasks/{task_id}/open-dir")
 def open_task_dir(task_id: str):
     ws = _resolve_workspace(task_id)
-    return {"task_id": ws.task_id, "path": str(ws.root.resolve())}
+    abs_path = str(ws.root.resolve())
+    if "PYTEST_CURRENT_TEST" not in os.environ:
+        import subprocess
+        import sys
+
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", abs_path])
+        elif sys.platform.startswith("win"):
+            os.startfile(abs_path)  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", abs_path])
+    return {"task_id": ws.task_id, "path": abs_path}
 
 
 @app.get("/{asset_name}")

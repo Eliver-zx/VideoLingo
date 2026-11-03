@@ -12,8 +12,10 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import sqlite3
 import subprocess
 import threading
+import time
 from typing import Any
 import uuid
 
@@ -245,6 +247,10 @@ class TaskWorkspace:
     @property
     def gpt_log_dir(self) -> Path:
         return self.root / "gpt_log"
+
+    @property
+    def db_path(self) -> Path:
+        return self.root / "project.sqlite"
 
     @property
     def words_path(self) -> Path:
@@ -526,31 +532,214 @@ class TaskWorkspace:
                 return str(sub).replace("\\", "/")
         return None
 
-    # ─── 3 Core JSON Contracts (`words.json`, `terms.json`, `utterances.json`) ───
+    # ─── SQLite Store (`project.sqlite`) ───
+
+    @staticmethod
+    def _ensure_schema(conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS task_kv (
+                key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS words (
+                idx INTEGER PRIMARY KEY,
+                text TEXT NOT NULL,
+                punct_after TEXT NOT NULL DEFAULT '',
+                start REAL NOT NULL DEFAULT 0.0,
+                end REAL NOT NULL DEFAULT 0.0,
+                speaker TEXT,
+                payload_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS terms (
+                idx INTEGER PRIMARY KEY,
+                src TEXT NOT NULL,
+                tgt TEXT NOT NULL,
+                aliases_json TEXT NOT NULL DEFAULT '[]',
+                note TEXT NOT NULL DEFAULT '',
+                fix_source INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'task'
+            );
+            CREATE TABLE IF NOT EXISTS utterances (
+                idx INTEGER PRIMARY KEY,
+                id TEXT NOT NULL,
+                start REAL NOT NULL DEFAULT 0.0,
+                end REAL NOT NULL DEFAULT 0.0,
+                gap_after REAL NOT NULL DEFAULT 0.0,
+                word_start INTEGER NOT NULL DEFAULT 0,
+                word_end INTEGER NOT NULL DEFAULT 0,
+                speaker TEXT,
+                src TEXT NOT NULL DEFAULT '',
+                tgt TEXT NOT NULL DEFAULT '',
+                tts_text TEXT NOT NULL DEFAULT '',
+                sub_cues_json TEXT NOT NULL DEFAULT '[]',
+                payload_json TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS translation_cache (
+                idx INTEGER PRIMARY KEY,
+                src TEXT NOT NULL,
+                tgt TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS dub_tasks (
+                idx INTEGER PRIMARY KEY,
+                number INTEGER NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+            """
+        )
+
+    @contextlib.contextmanager
+    def _db(self, *, write: bool = False):
+        if write:
+            self.root.mkdir(parents=True, exist_ok=True)
+        elif not self.db_path.is_file():
+            yield None
+            return
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            self._ensure_schema(conn)
+            if write:
+                with conn:
+                    yield conn
+            else:
+                yield conn
+        finally:
+            conn.close()
+
+    def get_kv(self, key: str, default: Any = None) -> Any:
+        with self._db(write=False) as conn:
+            if conn is None:
+                return default
+            row = conn.execute(
+                "SELECT value_json FROM task_kv WHERE key = ?", (key,)
+            ).fetchone()
+            if row is None:
+                return default
+            return json.loads(row["value_json"])
+
+    def get_kv_mtime(self, key: str) -> float:
+        with self._db(write=False) as conn:
+            if conn is None:
+                return 0.0
+            row = conn.execute(
+                "SELECT updated_at FROM task_kv WHERE key = ?", (key,)
+            ).fetchone()
+            return float(row["updated_at"]) if row is not None else 0.0
+
+    def set_kv(self, key: str, value: Any, *, mtime: float | None = None) -> None:
+        ts = float(mtime) if mtime is not None else time.time()
+        raw = json.dumps(value, ensure_ascii=False)
+        with self._db(write=True) as conn:
+            assert conn is not None
+            conn.execute(
+                """
+                INSERT INTO task_kv (key, value_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    updated_at = excluded.updated_at
+                """,
+                (key, raw, ts),
+            )
+
+    def delete_kv(self, *keys: str) -> None:
+        if not keys or not self.db_path.is_file():
+            return
+        with self._db(write=True) as conn:
+            assert conn is not None
+            conn.executemany("DELETE FROM task_kv WHERE key = ?", [(k,) for k in keys])
 
     def save_words(self, words: list[dict[str, Any]]) -> None:
         normalized: list[dict[str, Any]] = []
+        rows: list[tuple[Any, ...]] = []
         for idx, w in enumerate(words):
-            normalized.append(
-                {
-                    "idx": idx,
-                    "text": str(w.get("text", w.get("word", ""))).strip(),
-                    "punct_after": str(w.get("punct_after", "")),
-                    "start": round(float(w.get("start", 0.0)), 3),
-                    "end": round(float(w.get("end", 0.0)), 3),
-                    "speaker": w.get("speaker", w.get("speaker_id")),
-                }
+            item = {
+                "idx": idx,
+                "text": str(w.get("text", w.get("word", ""))).strip(),
+                "punct_after": str(w.get("punct_after", "")),
+                "start": round(float(w.get("start", 0.0)), 3),
+                "end": round(float(w.get("end", 0.0)), 3),
+                "speaker": w.get("speaker", w.get("speaker_id")),
+            }
+            normalized.append(item)
+            rows.append(
+                (
+                    idx,
+                    item["text"],
+                    item["punct_after"],
+                    item["start"],
+                    item["end"],
+                    item["speaker"],
+                    json.dumps(item, ensure_ascii=False),
+                )
             )
-        _atomic_write_json(self.words_path, normalized)
+        ts = time.time()
+        with self._db(write=True) as conn:
+            assert conn is not None
+            conn.execute("DELETE FROM words")
+            if rows:
+                conn.executemany(
+                    """
+                    INSERT INTO words (idx, text, punct_after, start, end, speaker, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+            conn.execute(
+                """
+                INSERT INTO task_kv (key, value_json, updated_at)
+                VALUES ('words_saved', 'true', ?)
+                ON CONFLICT(key) DO UPDATE SET value_json = 'true', updated_at = excluded.updated_at
+                """,
+                (ts,),
+            )
+        if self.words_path.is_file():
+            with contextlib.suppress(OSError):
+                self.words_path.unlink()
 
     def load_words(self) -> list[dict[str, Any]]:
-        if not self.words_path.is_file():
-            return []
-        with open(self.words_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with self._db(write=False) as conn:
+            if conn is not None:
+                rows = conn.execute(
+                    "SELECT payload_json FROM words ORDER BY idx ASC"
+                ).fetchall()
+                if rows:
+                    return [json.loads(r["payload_json"]) for r in rows]
+        if self.words_path.is_file():
+            with open(self.words_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list) and data:
+                self.save_words(data)
+                return data
+        return []
 
-    def save_terms(self, summary: str, terms: list[dict[str, Any]]) -> None:
+    def has_words(self) -> bool:
+        with self._db(write=False) as conn:
+            if conn is not None:
+                row = conn.execute("SELECT 1 FROM words LIMIT 1").fetchone()
+                if row is not None:
+                    return True
+        return self.words_path.is_file()
+
+    def get_words_mtime(self) -> float:
+        mt = self.get_kv_mtime("words_saved")
+        if mt > 0:
+            return mt
+        if self.words_path.is_file():
+            return os.path.getmtime(self.words_path)
+        return 0.0
+
+    def save_terms(
+        self,
+        summary: str,
+        terms: list[dict[str, Any]],
+        *,
+        mtime: float | None = None,
+    ) -> None:
         cleaned_terms: list[dict[str, Any]] = []
+        rows: list[tuple[Any, ...]] = []
         for item in terms:
             src = str(item.get("src") or "").strip()
             tgt = str(item.get("tgt") or "").strip()
@@ -570,70 +759,428 @@ class TaskWorkspace:
                     if str(a).strip() and str(a).strip().lower() != src.lower()
                 )
             )
-            cleaned_terms.append(
-                {
-                    "src": src,
-                    "tgt": tgt,
-                    "aliases": aliases,
-                    "note": str(item.get("note") or "").strip(),
-                    "fix_source": bool(item.get("fix_source", False)),
-                    "source": str(item.get("source") or "task"),
-                }
+            cleaned = {
+                "src": src,
+                "tgt": tgt,
+                "aliases": aliases,
+                "note": str(item.get("note") or "").strip(),
+                "fix_source": bool(item.get("fix_source", False)),
+                "source": str(item.get("source") or "task"),
+            }
+            idx = len(cleaned_terms)
+            cleaned_terms.append(cleaned)
+            rows.append(
+                (
+                    idx,
+                    cleaned["src"],
+                    cleaned["tgt"],
+                    json.dumps(cleaned["aliases"], ensure_ascii=False),
+                    cleaned["note"],
+                    1 if cleaned["fix_source"] else 0,
+                    cleaned["source"],
+                )
             )
-        payload = {
-            "summary": summary or "",
-            "theme": summary or "",
-            "terms": cleaned_terms,
-        }
-        _atomic_write_json(self.terms_path, payload)
-        _atomic_write_json(self.log_dir / "terminology.json", payload)
+        ts = float(mtime) if mtime is not None else time.time()
+        summary_str = str(summary or "")
+        with self._db(write=True) as conn:
+            assert conn is not None
+            conn.execute("DELETE FROM terms")
+            if rows:
+                conn.executemany(
+                    """
+                    INSERT INTO terms (idx, src, tgt, aliases_json, note, fix_source, source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+            conn.execute(
+                """
+                INSERT INTO task_kv (key, value_json, updated_at)
+                VALUES ('terms_meta', ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    json.dumps(
+                        {"summary": summary_str, "theme": summary_str},
+                        ensure_ascii=False,
+                    ),
+                    ts,
+                ),
+            )
+        for p in (self.terms_path, self.log_dir / "terminology.json"):
+            if p.is_file():
+                with contextlib.suppress(OSError):
+                    p.unlink()
 
     def load_terms(self) -> dict[str, Any]:
-        if not self.terms_path.is_file():
-            return {"summary": "", "terms": []}
-        with open(self.terms_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            raw_terms = data.get("terms") or []
-            norm_terms: list[dict[str, Any]] = []
-            for t in raw_terms:
-                if not isinstance(t, dict):
-                    continue
-                src = str(t.get("src") or "").strip()
-                tgt = str(t.get("tgt") or "").strip()
-                if not src or not tgt:
-                    continue
-                aliases = t.get("aliases") or []
-                if isinstance(aliases, str):
-                    aliases = [
-                        x.strip()
-                        for x in re.split(r"[,;|/，；｜]", aliases)
-                        if x.strip()
+        with self._db(write=False) as conn:
+            if conn is not None:
+                meta_row = conn.execute(
+                    "SELECT value_json FROM task_kv WHERE key = 'terms_meta'"
+                ).fetchone()
+                term_rows = conn.execute(
+                    "SELECT src, tgt, aliases_json, note, fix_source, source FROM terms ORDER BY idx ASC"
+                ).fetchall()
+                if meta_row is not None or term_rows:
+                    summary_str = ""
+                    if meta_row is not None:
+                        meta = json.loads(meta_row["value_json"])
+                        summary_str = str(
+                            meta.get("summary") or meta.get("theme") or ""
+                        )
+                    norm_terms = [
+                        {
+                            "src": str(r["src"]),
+                            "tgt": str(r["tgt"]),
+                            "aliases": json.loads(r["aliases_json"] or "[]"),
+                            "note": str(r["note"] or ""),
+                            "fix_source": bool(r["fix_source"]),
+                            "source": str(r["source"] or "task"),
+                        }
+                        for r in term_rows
                     ]
-                norm_terms.append(
-                    {
-                        "src": src,
-                        "tgt": tgt,
-                        "aliases": [str(a).strip() for a in aliases if str(a).strip()],
-                        "note": str(t.get("note") or "").strip(),
-                        "fix_source": bool(t.get("fix_source", False)),
-                        "source": str(t.get("source") or "task"),
-                    }
-                )
-            return {
-                "summary": str(data.get("summary") or data.get("theme") or ""),
-                "terms": norm_terms,
-            }
+                    return {"summary": summary_str, "terms": norm_terms}
+
+        for candidate in (self.terms_path, self.log_dir / "terminology.json"):
+            if candidate.is_file():
+                mt = os.path.getmtime(candidate)
+                with open(candidate, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    summary_str = str(data.get("summary") or data.get("theme") or "")
+                    raw_terms = data.get("terms") or []
+                    self.save_terms(summary_str, raw_terms, mtime=mt)
+                    return self.load_terms()
         return {"summary": "", "terms": []}
 
-    def save_utterances(self, utterances: list[dict[str, Any]]) -> None:
-        _atomic_write_json(self.utterances_path, utterances)
+    def has_terms(self) -> bool:
+        with self._db(write=False) as conn:
+            if conn is not None:
+                row = conn.execute(
+                    "SELECT 1 FROM task_kv WHERE key = 'terms_meta'"
+                ).fetchone()
+                if row is not None:
+                    return True
+                t_row = conn.execute("SELECT 1 FROM terms LIMIT 1").fetchone()
+                if t_row is not None:
+                    return True
+        return (
+            self.terms_path.is_file() or (self.log_dir / "terminology.json").is_file()
+        )
+
+    def get_terms_mtime(self) -> float:
+        mt = self.get_kv_mtime("terms_meta")
+        if mt > 0:
+            return mt
+        for p in (self.terms_path, self.log_dir / "terminology.json"):
+            if p.is_file():
+                return os.path.getmtime(p)
+        return 0.0
+
+    def set_terms_mtime(self, mtime: float) -> None:
+        meta = self.get_kv("terms_meta")
+        if meta is None:
+            loaded = self.load_terms()
+            self.save_terms(
+                loaded.get("summary", ""), loaded.get("terms", []), mtime=mtime
+            )
+        else:
+            self.set_kv("terms_meta", meta, mtime=mtime)
+
+    def save_utterances(
+        self,
+        utterances: list[dict[str, Any]],
+        *,
+        mtime: float | None = None,
+    ) -> int:
+        ts = float(mtime) if mtime is not None else time.time()
+        rows: list[tuple[Any, ...]] = []
+        has_any_tgt = False
+        has_any_cues = False
+        for idx, u in enumerate(utterances):
+            item = dict(u)
+            item["index"] = int(item.get("index", idx))
+            utt_id = str(item.get("id") or f"u_{idx:04d}")
+            item["id"] = utt_id
+            start = round(float(item.get("start", 0.0)), 3)
+            end = round(float(item.get("end", 0.0)), 3)
+            gap_after = round(float(item.get("gap_after", 0.0)), 3)
+            w_span = item.get("word_span") or [0, 0]
+            w_start = int(w_span[0]) if len(w_span) >= 1 else 0
+            w_end = int(w_span[1]) if len(w_span) >= 2 else w_start
+            speaker = item.get("speaker", item.get("speaker_id"))
+            src = str(item.get("src") or "")
+            tgt = str(item.get("tgt") or "")
+            tts_text = str(item.get("tts_text") or tgt)
+            sub_cues = item.get("sub_cues") or []
+            if tgt.strip():
+                has_any_tgt = True
+            if sub_cues:
+                has_any_cues = True
+            rows.append(
+                (
+                    idx,
+                    utt_id,
+                    start,
+                    end,
+                    gap_after,
+                    w_start,
+                    w_end,
+                    speaker,
+                    src,
+                    tgt,
+                    tts_text,
+                    json.dumps(sub_cues, ensure_ascii=False),
+                    json.dumps(item, ensure_ascii=False),
+                )
+            )
+        with self._db(write=True) as conn:
+            assert conn is not None
+            rev_row = conn.execute(
+                "SELECT value_json FROM task_kv WHERE key = 'utterances_revision'"
+            ).fetchone()
+            next_rev = (int(json.loads(rev_row["value_json"])) + 1) if rev_row else 1
+            conn.execute("DELETE FROM utterances")
+            if rows:
+                conn.executemany(
+                    """
+                    INSERT INTO utterances (
+                        idx, id, start, end, gap_after, word_start, word_end,
+                        speaker, src, tgt, tts_text, sub_cues_json, payload_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+            for k, v in (
+                ("utterances_saved", True),
+                ("utterances_revision", next_rev),
+                ("translations_saved", has_any_tgt),
+                ("sub_cues_saved", has_any_cues),
+            ):
+                conn.execute(
+                    """
+                    INSERT INTO task_kv (key, value_json, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value_json = excluded.value_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (k, json.dumps(v), ts),
+                )
+        if self.utterances_path.is_file():
+            with contextlib.suppress(OSError):
+                self.utterances_path.unlink()
+        return next_rev
 
     def load_utterances(self) -> list[dict[str, Any]]:
-        if not self.utterances_path.is_file():
-            return []
-        with open(self.utterances_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with self._db(write=False) as conn:
+            if conn is not None:
+                rows = conn.execute(
+                    "SELECT payload_json FROM utterances ORDER BY idx ASC"
+                ).fetchall()
+                if rows:
+                    return [json.loads(r["payload_json"]) for r in rows]
+        if self.utterances_path.is_file():
+            mt = os.path.getmtime(self.utterances_path)
+            with open(self.utterances_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list) and data:
+                self.save_utterances(data, mtime=mt)
+                return data
+        return []
+
+    def has_utterances(self) -> bool:
+        with self._db(write=False) as conn:
+            if conn is not None:
+                row = conn.execute("SELECT 1 FROM utterances LIMIT 1").fetchone()
+                if row is not None:
+                    return True
+        return self.utterances_path.is_file()
+
+    def has_translations(self) -> bool:
+        if bool(self.get_kv("translations_saved", False)):
+            return True
+        utts = self.load_utterances()
+        return bool(utts) and any(str(u.get("tgt") or "").strip() for u in utts)
+
+    def has_sub_cues(self) -> bool:
+        if bool(self.get_kv("sub_cues_saved", False)):
+            return True
+        utts = self.load_utterances()
+        return bool(utts) and any(bool(u.get("sub_cues")) for u in utts)
+
+    def get_utterances_mtime(self) -> float:
+        mt = self.get_kv_mtime("utterances_saved")
+        if mt > 0:
+            return mt
+        if self.utterances_path.is_file():
+            return os.path.getmtime(self.utterances_path)
+        return 0.0
+
+    def get_utterances_revision(self) -> int:
+        return int(self.get_kv("utterances_revision", 0) or 0)
+
+    def save_translation_cache(
+        self, fingerprint: str, rows: list[tuple[str, str]]
+    ) -> None:
+        ts = time.time()
+        with self._db(write=True) as conn:
+            assert conn is not None
+            conn.execute("DELETE FROM translation_cache")
+            if rows:
+                conn.executemany(
+                    "INSERT INTO translation_cache (idx, src, tgt) VALUES (?, ?, ?)",
+                    [(i, str(s), str(t)) for i, (s, t) in enumerate(rows)],
+                )
+            conn.execute(
+                """
+                INSERT INTO task_kv (key, value_json, updated_at)
+                VALUES ('translation_cache_fp', ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    updated_at = excluded.updated_at
+                """,
+                (json.dumps(fingerprint), ts),
+            )
+
+    def load_translation_cache(
+        self, expected_fingerprint: str, expected_sources: list[str]
+    ) -> list[str] | None:
+        with self._db(write=False) as conn:
+            if conn is None:
+                return None
+            fp_row = conn.execute(
+                "SELECT value_json FROM task_kv WHERE key = 'translation_cache_fp'"
+            ).fetchone()
+            if (
+                fp_row is None
+                or json.loads(fp_row["value_json"]) != expected_fingerprint
+            ):
+                return None
+            rows = conn.execute(
+                "SELECT src, tgt FROM translation_cache ORDER BY idx ASC"
+            ).fetchall()
+            if len(rows) != len(expected_sources):
+                return None
+            if [str(r["src"]).strip() for r in rows] != [
+                s.strip() for s in expected_sources
+            ]:
+                return None
+            return [str(r["tgt"]) for r in rows]
+
+    def save_dub_tasks(self, tasks: Any) -> None:
+        if hasattr(tasks, "to_dict"):
+            records = tasks.to_dict(orient="records")
+        else:
+            records = list(tasks or [])
+        rows: list[tuple[int, int, str]] = []
+        has_chunks = False
+        for idx, rec in enumerate(records):
+            item = dict(rec)
+            num = int(item.get("number", idx + 1))
+            item["number"] = num
+            if item.get("lines") is not None and item.get("cut_off") is not None:
+                has_chunks = True
+            rows.append((idx, num, json.dumps(item, ensure_ascii=False, default=str)))
+        ts = time.time()
+        with self._db(write=True) as conn:
+            assert conn is not None
+            conn.execute("DELETE FROM dub_tasks")
+            if rows:
+                conn.executemany(
+                    "INSERT INTO dub_tasks (idx, number, payload_json) VALUES (?, ?, ?)",
+                    rows,
+                )
+            for k, v in (
+                ("dub_tasks_saved", True),
+                ("dub_chunks_saved", has_chunks),
+            ):
+                conn.execute(
+                    """
+                    INSERT INTO task_kv (key, value_json, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value_json = excluded.value_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (k, json.dumps(v), ts),
+                )
+
+    def load_dub_tasks(self) -> list[dict[str, Any]]:
+        with self._db(write=False) as conn:
+            if conn is not None:
+                rows = conn.execute(
+                    "SELECT payload_json FROM dub_tasks ORDER BY idx ASC"
+                ).fetchall()
+                if rows:
+                    return [json.loads(r["payload_json"]) for r in rows]
+        return []
+
+    def load_dub_tasks_df(self):
+        import pandas as pd
+
+        records = self.load_dub_tasks()
+        if not records:
+            return pd.DataFrame()
+        return pd.DataFrame(records)
+
+    def has_dub_tasks(self) -> bool:
+        with self._db(write=False) as conn:
+            if conn is not None:
+                row = conn.execute("SELECT 1 FROM dub_tasks LIMIT 1").fetchone()
+                if row is not None:
+                    return True
+        return False
+
+    def has_dub_chunks(self) -> bool:
+        if not self.has_dub_tasks():
+            return False
+        if self.get_kv("dub_chunks_saved") is True:
+            return True
+        records = self.load_dub_tasks()
+        return bool(
+            records
+            and all(
+                r.get("lines") is not None and r.get("cut_off") is not None
+                for r in records
+            )
+        )
+
+    def is_step_done(self, target_path: str | Path) -> bool:
+        s = str(target_path).replace("\\", "/")
+        name = Path(s).name
+        if name in {"cleaned_chunks.xlsx", "words.json"}:
+            return self.has_words()
+        if name in {"split_by_nlp.txt", "split_by_meaning.txt", "utterances.json"}:
+            return self.has_utterances()
+        if name in {"terminology.json", "terms.json"}:
+            return self.has_terms()
+        if name == "translation_results.xlsx":
+            return self.has_translations()
+        if name in {
+            "translation_results_for_subtitles.xlsx",
+            "translation_results_remerged.xlsx",
+        }:
+            return self.has_sub_cues()
+        if name == "tts_tasks.xlsx":
+            if not self.has_dub_chunks():
+                return False
+            dub_mtime = self.get_kv_mtime("dub_tasks_saved")
+            for srt_p in (
+                self.audio_dir / "trans_subs_for_audio.srt",
+                self.trans_srt_path,
+            ):
+                if (
+                    srt_p.is_file()
+                    and dub_mtime > 0
+                    and srt_p.stat().st_mtime > dub_mtime
+                ):
+                    return False
+            return True
+        return False
 
     # ─── Stage Fingerprint DAG & Cascading Invalidation ───
 
@@ -674,6 +1221,11 @@ class TaskWorkspace:
         dirs_to_clear: list[Path] = []
 
         if stage == "asr":
+            if self.db_path.is_file():
+                with self._db(write=True) as conn:
+                    assert conn is not None
+                    conn.execute("DELETE FROM words")
+                    conn.execute("DELETE FROM task_kv WHERE key = 'words_saved'")
             paths_to_remove.extend(
                 [
                     self.words_path,
@@ -681,6 +1233,13 @@ class TaskWorkspace:
                 ]
             )
         elif stage == "split":
+            if self.db_path.is_file():
+                with self._db(write=True) as conn:
+                    assert conn is not None
+                    conn.execute("DELETE FROM utterances")
+                    conn.execute(
+                        "DELETE FROM task_kv WHERE key IN ('utterances_saved', 'utterances_revision', 'translations_saved', 'sub_cues_saved', 'sub_split_cfg', 'sub_split_rev')"
+                    )
             paths_to_remove.extend(
                 [
                     self.utterances_path,
@@ -689,6 +1248,11 @@ class TaskWorkspace:
                 ]
             )
         elif stage == "summarize":
+            if self.db_path.is_file():
+                with self._db(write=True) as conn:
+                    assert conn is not None
+                    conn.execute("DELETE FROM terms")
+                    conn.execute("DELETE FROM task_kv WHERE key = 'terms_meta'")
             paths_to_remove.extend(
                 [
                     self.terms_path,
@@ -696,6 +1260,21 @@ class TaskWorkspace:
                 ]
             )
         elif stage == "translate":
+            if self.db_path.is_file():
+                utts = self.load_utterances()
+                if utts:
+                    for u in utts:
+                        u["tgt"] = ""
+                        u["tts_text"] = ""
+                        u.pop("sub_cues", None)
+                        u.pop("sub_split_config", None)
+                    self.save_utterances(utts)
+                with self._db(write=True) as conn:
+                    assert conn is not None
+                    conn.execute("DELETE FROM translation_cache")
+                    conn.execute(
+                        "DELETE FROM task_kv WHERE key IN ('translation_cache_fp', 'translations_saved', 'sub_cues_saved', 'sub_split_cfg', 'sub_split_rev')"
+                    )
             paths_to_remove.extend(
                 [
                     self.log_dir / "translation_results.xlsx",
@@ -703,6 +1282,14 @@ class TaskWorkspace:
                 ]
             )
         elif stage == "sub_split":
+            if self.db_path.is_file():
+                utts = self.load_utterances()
+                if utts:
+                    for u in utts:
+                        u.pop("sub_cues", None)
+                        u.pop("sub_split_config", None)
+                    self.save_utterances(utts)
+                self.delete_kv("sub_cues_saved", "sub_split_cfg", "sub_split_rev")
             paths_to_remove.extend(
                 [
                     self.src_srt_path,
@@ -717,6 +1304,13 @@ class TaskWorkspace:
         elif stage == "sub_video":
             paths_to_remove.append(self.sub_video_path)
         elif stage == "dub_tts":
+            if self.db_path.is_file():
+                with self._db(write=True) as conn:
+                    assert conn is not None
+                    conn.execute("DELETE FROM dub_tasks")
+                    conn.execute(
+                        "DELETE FROM task_kv WHERE key IN ('dub_tasks_saved', 'dub_chunks_saved')"
+                    )
             paths_to_remove.extend(
                 [
                     self.audio_dir / "tts_tasks.xlsx",
@@ -1061,6 +1655,17 @@ def get_active_workspace() -> TaskWorkspace:
         if _PROCESS_TASK_DIR is not None:
             return TaskWorkspace(_PROCESS_TASK_DIR)
     return TaskWorkspace(OUTPUT_ROOT)
+
+
+def workspace_for_path(path: str | Path | None = None) -> TaskWorkspace:
+    if path is None:
+        return get_active_workspace()
+    s = str(path).replace("\\", "/")
+    if s == "output" or s.startswith("output/"):
+        return get_active_workspace()
+    p = Path(path)
+    ws_root = p.parent.parent if p.parent.name in {"log", "audio"} else p.parent
+    return TaskWorkspace(ws_root)
 
 
 def set_process_workspace(task_dir: str | Path | None) -> None:
