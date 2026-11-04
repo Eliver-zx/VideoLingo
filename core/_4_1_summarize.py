@@ -11,6 +11,7 @@ from difflib import SequenceMatcher
 
 import pandas as pd
 
+from core.concurrency import ContextThreadPoolExecutor
 from core.prompts import get_consolidate_terms_prompt, get_summary_prompt
 from core.task_runner import StopTask
 from core.utils import (
@@ -1736,7 +1737,7 @@ def get_summary():
         chunk_results.append(_extract_chunk_summary(0, chunks[0], custom_terms_json))
     else:
         max_workers = max(1, int(load_key_or("max_workers", 4) or 4))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
                 executor.submit(
                     _extract_chunk_summary, idx, chunk_text, custom_terms_json

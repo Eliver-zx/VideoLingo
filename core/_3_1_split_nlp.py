@@ -9,6 +9,7 @@ import unicodedata
 
 import pandas as pd
 
+from core.concurrency import ContextThreadPoolExecutor
 from core.prompts import get_punctuation_prompt
 from core.task_runner import StopTask
 from core.utils import (
@@ -788,7 +789,7 @@ def restore_and_split_words(
     global_end_indices: set[int] = set()
     global_punct_by_word: dict[int, str] = {}
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_win = {
             executor.submit(
                 _restore_window_punctuation,

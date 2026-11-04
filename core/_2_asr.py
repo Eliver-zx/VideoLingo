@@ -4,7 +4,7 @@ from core.utils import (
     load_key,
     load_key_or,
     rprint,
-    update_key,
+    set_runtime_state as update_key,
 )
 from core.asr_backend.audio_preprocess import (
     process_transcription,

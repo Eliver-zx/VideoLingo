@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import copy
 import csv
 from datetime import datetime, timezone
 import errno
@@ -44,8 +45,12 @@ STAGE_ORDER: tuple[str, ...] = (
 _ACTIVE_TASK_DIR: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
     "_ACTIVE_TASK_DIR", default=None
 )
-_DEFAULT_TASK_DIR_LOCK = threading.Lock()
-_PROCESS_TASK_DIR: Path | None = None
+# Track (resolved_db_path, st_ino) for SQLite databases that have already applied WAL and DDL.
+_INITIALIZED_DB_INODES: set[tuple[Path, int]] = set()
+_INIT_DB_LOCK = threading.Lock()
+# In-memory mirror of runtime task attributes keyed by resolved workspace root path for fast read access.
+_RUNTIME_STATE_BY_WS: dict[Path, dict[str, Any]] = {}
+_RUNTIME_STATE_LOCK = threading.Lock()
 
 
 def _now_iso() -> str:
@@ -536,6 +541,9 @@ class TaskWorkspace:
 
     @staticmethod
     def _ensure_schema(conn: sqlite3.Connection) -> None:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS task_kv (
@@ -586,8 +594,38 @@ class TaskWorkspace:
                 number INTEGER NOT NULL,
                 payload_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS llm_cache (
+                log_title TEXT NOT NULL,
+                prompt_hash TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                model TEXT NOT NULL,
+                reasoning_effort TEXT NOT NULL,
+                resp_type TEXT NOT NULL,
+                resp_json TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                PRIMARY KEY (log_title, prompt_hash, model, reasoning_effort, resp_type)
+            );
             """
         )
+
+    def _ensure_db_initialized(self, conn: sqlite3.Connection) -> None:
+        resolved_db = self.db_path.resolve()
+        try:
+            ino = resolved_db.stat().st_ino
+        except OSError:
+            ino = 0
+        cache_key = (resolved_db, ino)
+        if ino and cache_key in _INITIALIZED_DB_INODES:
+            return
+        with _INIT_DB_LOCK:
+            if ino and cache_key in _INITIALIZED_DB_INODES:
+                return
+            self._ensure_schema(conn)
+            try:
+                ino = resolved_db.stat().st_ino
+                _INITIALIZED_DB_INODES.add((resolved_db, ino))
+            except OSError:
+                pass
 
     @contextlib.contextmanager
     def _db(self, *, write: bool = False):
@@ -599,7 +637,7 @@ class TaskWorkspace:
         conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
         try:
-            self._ensure_schema(conn)
+            self._ensure_db_initialized(conn)
             if write:
                 with conn:
                     yield conn
@@ -607,6 +645,148 @@ class TaskWorkspace:
                 yield conn
         finally:
             conn.close()
+
+    def set_runtime_state(self, key: str, value: Any) -> None:
+        ws_key = self.root.resolve()
+        with _RUNTIME_STATE_LOCK:
+            bucket = _RUNTIME_STATE_BY_WS.setdefault(ws_key, {})
+            bucket[key] = (
+                copy.deepcopy(value) if isinstance(value, (dict, list)) else value
+            )
+        self.set_kv(f"runtime.{key}", value)
+
+    def get_runtime_state(self, key: str, default: Any = None) -> Any:
+        ws_key = self.root.resolve()
+        with _RUNTIME_STATE_LOCK:
+            bucket = _RUNTIME_STATE_BY_WS.get(ws_key)
+            if bucket is not None and key in bucket:
+                val = bucket[key]
+                return copy.deepcopy(val) if isinstance(val, (dict, list)) else val
+        if not self.db_path.is_file():
+            return default
+        val = self.get_kv(f"runtime.{key}", default=None)
+        if val is not None:
+            with _RUNTIME_STATE_LOCK:
+                _RUNTIME_STATE_BY_WS.setdefault(ws_key, {})[key] = (
+                    copy.deepcopy(val) if isinstance(val, (dict, list)) else val
+                )
+            return val
+        return default
+
+    def get_all_runtime_state(self) -> dict[str, Any]:
+        ws_key = self.root.resolve()
+        out: dict[str, Any] = {}
+        if self.db_path.is_file():
+            with self._db(write=False) as conn:
+                if conn is not None:
+                    rows = conn.execute(
+                        "SELECT key, value_json FROM task_kv WHERE key LIKE 'runtime.%'"
+                    ).fetchall()
+                    for r in rows:
+                        out[r["key"][len("runtime.") :]] = json.loads(r["value_json"])
+        with _RUNTIME_STATE_LOCK:
+            bucket = _RUNTIME_STATE_BY_WS.get(ws_key)
+            if bucket:
+                out.update(copy.deepcopy(bucket))
+        return out
+
+    def clear_runtime_cache(self, prefix: str | None = None) -> None:
+        ws_key = self.root.resolve()
+        with _RUNTIME_STATE_LOCK:
+            if prefix is None:
+                _RUNTIME_STATE_BY_WS.pop(ws_key, None)
+            else:
+                bucket = _RUNTIME_STATE_BY_WS.get(ws_key)
+                if bucket:
+                    for k in [
+                        k for k in bucket if k == prefix or k.startswith(f"{prefix}.")
+                    ]:
+                        bucket.pop(k, None)
+        if prefix is None:
+            db_resolved = self.db_path.resolve()
+            with _INIT_DB_LOCK:
+                for entry in [e for e in _INITIALIZED_DB_INODES if e[0] == db_resolved]:
+                    _INITIALIZED_DB_INODES.discard(entry)
+        elif self.db_path.is_file():
+            with self._db(write=True) as conn:
+                assert conn is not None
+                conn.execute(
+                    "DELETE FROM task_kv WHERE key = ? OR key LIKE ?",
+                    (f"runtime.{prefix}", f"runtime.{prefix}.%"),
+                )
+
+    def save_llm_cache(
+        self,
+        *,
+        log_title: str,
+        prompt: str,
+        model: str,
+        reasoning_effort: str,
+        resp_type: str,
+        resp: Any,
+    ) -> None:
+        prompt_hash = hashlib.sha256(str(prompt).encode("utf-8")).hexdigest()
+        norm_type = str(resp_type or "")
+        norm_model = str(model or "")
+        norm_effort = str(reasoning_effort or "none")
+        raw_resp = json.dumps(resp, ensure_ascii=False)
+        ts = time.time()
+        with self._db(write=True) as conn:
+            assert conn is not None
+            conn.execute(
+                """
+                INSERT INTO llm_cache (
+                    log_title, prompt_hash, prompt, model, reasoning_effort, resp_type, resp_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(log_title, prompt_hash, model, reasoning_effort, resp_type) DO UPDATE SET
+                    resp_json = excluded.resp_json,
+                    created_at = excluded.created_at
+                """,
+                (
+                    str(log_title),
+                    prompt_hash,
+                    str(prompt),
+                    norm_model,
+                    norm_effort,
+                    norm_type,
+                    raw_resp,
+                    ts,
+                ),
+            )
+
+    def load_llm_cache(
+        self,
+        *,
+        log_title: str,
+        prompt: str,
+        resp_type: str | None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> tuple[bool, Any]:
+        if not self.db_path.is_file():
+            return False, None
+        prompt_hash = hashlib.sha256(str(prompt).encode("utf-8")).hexdigest()
+        norm_type = str(resp_type or "")
+        query = (
+            "SELECT resp_json, model, reasoning_effort FROM llm_cache "
+            "WHERE log_title = ? AND prompt_hash = ? AND prompt = ? AND resp_type = ? "
+            "ORDER BY created_at DESC"
+        )
+        with self._db(write=False) as conn:
+            if conn is None:
+                return False, None
+            rows = conn.execute(
+                query, (str(log_title), prompt_hash, str(prompt), norm_type)
+            ).fetchall()
+            for r in rows:
+                if model is not None and r["model"] and r["model"] != str(model):
+                    continue
+                if reasoning_effort is not None and r["reasoning_effort"] != str(
+                    reasoning_effort
+                ):
+                    continue
+                return True, json.loads(r["resp_json"])
+        return False, None
 
     def get_kv(self, key: str, default: Any = None) -> Any:
         with self._db(write=False) as conn:
@@ -902,7 +1082,12 @@ class TaskWorkspace:
         for idx, u in enumerate(utterances):
             item = dict(u)
             item["index"] = int(item.get("index", idx))
-            utt_id = str(item.get("id") or f"u_{idx:04d}")
+            raw_id = item.get("id")
+            utt_id = (
+                str(raw_id)
+                if raw_id is not None and str(raw_id) != ""
+                else f"u_{idx:04d}"
+            )
             item["id"] = utt_id
             start = round(float(item.get("start", 0.0)), 3)
             end = round(float(item.get("end", 0.0)), 3)
@@ -1221,6 +1406,7 @@ class TaskWorkspace:
         dirs_to_clear: list[Path] = []
 
         if stage == "asr":
+            self.clear_runtime_cache("whisper.detected_language")
             if self.db_path.is_file():
                 with self._db(write=True) as conn:
                     assert conn is not None
@@ -1651,9 +1837,6 @@ def get_active_workspace() -> TaskWorkspace:
     ctx_dir = _ACTIVE_TASK_DIR.get()
     if ctx_dir is not None:
         return TaskWorkspace(ctx_dir)
-    with _DEFAULT_TASK_DIR_LOCK:
-        if _PROCESS_TASK_DIR is not None:
-            return TaskWorkspace(_PROCESS_TASK_DIR)
     return TaskWorkspace(OUTPUT_ROOT)
 
 
@@ -1668,25 +1851,13 @@ def workspace_for_path(path: str | Path | None = None) -> TaskWorkspace:
     return TaskWorkspace(ws_root)
 
 
-def set_process_workspace(task_dir: str | Path | None) -> None:
-    global _PROCESS_TASK_DIR
-    with _DEFAULT_TASK_DIR_LOCK:
-        _PROCESS_TASK_DIR = Path(task_dir) if task_dir is not None else None
-
-
 @contextlib.contextmanager
 def workspace_context(task_dir: str | Path | TaskWorkspace):
-    global _PROCESS_TASK_DIR
     resolved = task_dir.root if isinstance(task_dir, TaskWorkspace) else Path(task_dir)
     token = _ACTIVE_TASK_DIR.set(resolved)
-    with _DEFAULT_TASK_DIR_LOCK:
-        prev_proc_dir = _PROCESS_TASK_DIR
-        _PROCESS_TASK_DIR = resolved
     try:
         yield TaskWorkspace(resolved)
     finally:
-        with _DEFAULT_TASK_DIR_LOCK:
-            _PROCESS_TASK_DIR = prev_proc_dir
         _ACTIVE_TASK_DIR.reset(token)
 
 

@@ -20,7 +20,9 @@ class TaskRunner:
     """Manages a background thread that executes a sequence of steps with pause/stop control and SSE notifications."""
 
     # Public read-only state
-    state: str = "idle"  # idle | running | paused | stopping | stopped | completed | error
+    state: str = (
+        "idle"  # idle | running | paused | stopping | stopped | completed | error
+    )
     current_step: int = -1  # 0-indexed, -1 = not started
     total_steps: int = 0
     current_label: str = ""
@@ -34,7 +36,9 @@ class TaskRunner:
     _thread: threading.Thread | None = None
     _steps: list = field(default_factory=list)
     _listeners: list[Callable[[dict[str, Any]], None]] = field(default_factory=list)
-    _queue: deque[tuple[str | None, list[tuple[str, Callable]], Callable[[], Any] | None]] = field(default_factory=deque)
+    _queue: deque[
+        tuple[str | None, list[tuple[str, Callable]], Callable[[], Any] | None]
+    ] = field(default_factory=deque)
     _queue_lock: threading.Lock = field(default_factory=threading.Lock)
 
     _current: ClassVar["TaskRunner | None"] = None
@@ -84,7 +88,13 @@ class TaskRunner:
 
     # ------ Control API ------
 
-    def start(self, steps: list[tuple[str, Callable]], *, task_id: str | None = None, on_finish: Callable[[], Any] | None = None):
+    def start(
+        self,
+        steps: list[tuple[str, Callable]],
+        *,
+        task_id: str | None = None,
+        on_finish: Callable[[], Any] | None = None,
+    ):
         """Start executing steps in a background thread."""
         if self.is_active:
             raise RuntimeError("A task is already active")
@@ -101,11 +111,19 @@ class TaskRunner:
         self._pause_event.set()
         self._stop_event.clear()
 
-        self._thread = threading.Thread(target=self._run, args=(on_finish,), daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, args=(on_finish,), daemon=True
+        )
         self._thread.start()
         self._notify("task_started")
 
-    def enqueue(self, steps: list[tuple[str, Callable]], *, task_id: str | None = None, on_finish: Callable[[], Any] | None = None) -> bool:
+    def enqueue(
+        self,
+        steps: list[tuple[str, Callable]],
+        *,
+        task_id: str | None = None,
+        on_finish: Callable[[], Any] | None = None,
+    ) -> bool:
         """Start immediately if idle, or append to the serial queue if a task is currently running."""
         with self._queue_lock:
             if not self.is_active:
@@ -129,16 +147,27 @@ class TaskRunner:
             self.state = "running"
             self._notify("task_resumed")
 
-    def stop(self):
-        """Request stop. The task will halt before the next step."""
-        with self._queue_lock:
-            self._queue.clear()
+    def stop(self, *, clear_queue: bool = False):
+        """Request stop for the active task; optionally clear queued tasks."""
+        if clear_queue:
+            with self._queue_lock:
+                self._queue.clear()
         if self.state in ("running", "paused"):
             self.state = "stopping"
             self.pause_message = ""
             self._stop_event.set()
             self._pause_event.set()  # unblock if paused so thread can exit
             self._notify("task_stopping")
+
+    def cancel_queued(self, task_id: str) -> bool:
+        """Remove a queued task by task_id before it starts."""
+        with self._queue_lock:
+            for item in list(self._queue):
+                if item[0] == task_id:
+                    self._queue.remove(item)
+                    self._notify("queue_updated")
+                    return True
+        return False
 
     def reset(self):
         """Reset to idle state (only when not running)."""
@@ -155,7 +184,9 @@ class TaskRunner:
 
     @property
     def is_active(self) -> bool:
-        return self.state in ("running", "paused", "stopping") or bool(self._thread and self._thread.is_alive())
+        return self.state in ("running", "paused", "stopping") or bool(
+            self._thread and self._thread.is_alive()
+        )
 
     @property
     def is_done(self) -> bool:
@@ -166,7 +197,11 @@ class TaskRunner:
         """0.0 to 1.0"""
         if self.total_steps == 0:
             return 0.0
-        return 1.0 if self.state == "completed" else max(self.current_step, 0) / self.total_steps
+        return (
+            1.0
+            if self.state == "completed"
+            else max(self.current_step, 0) / self.total_steps
+        )
 
     # ------ Internal ------
 
@@ -215,8 +250,9 @@ class TaskRunner:
 
     def _drain_next_queued(self) -> None:
         with self._queue_lock:
-            if not self._queue or self.state == "stopped":
+            if not self._queue:
                 return
             next_task_id, next_steps, next_finish = self._queue.popleft()
             self._thread = None
+            self.state = "idle"
         self.start(next_steps, task_id=next_task_id, on_finish=next_finish)

@@ -10,7 +10,8 @@ import pandas as pd
 from pydub import AudioSegment
 from rich.console import Console
 from rich.progress import Progress
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
+from core.concurrency import ContextThreadPoolExecutor
 
 from core.utils import check_cancel, load_key, rprint
 from core.utils.models import (
@@ -182,7 +183,7 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
         # parallel processing for remaining tasks
         if len(tasks_df) > warmup_size:
             remaining_tasks = tasks_df.iloc[warmup_size:].copy()
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [
                     executor.submit(process_row, row, tasks_df.copy())
                     for _, row in remaining_tasks.iterrows()

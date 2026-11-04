@@ -5,14 +5,10 @@ from typing import Any, Dict, Optional
 from rich import print as rprint
 
 from core.asr_backend.audio_preprocess import audio_slice_wav
-from core.utils import check_cancel, load_key_or, update_key
+from core.utils import check_cancel, load_key_or, set_runtime_state as update_key
 
-REPLICATE_PARAKEET_MODEL = (
-    "huanshere/parakeet-tdt-0.6b-v2:6f0fb1d0715174c31e76601f8b98f5e2d7a616cd7a0bf00584c2c820ffb039a4"
-)
-REPLICATE_WHISPERX_MODEL = (
-    "victor-upmeet/whisperx:84d2ad2d6194fe98a17d2b60bef1c7f910c46b2f6fd38996ca457afd9c8abfcb"
-)
+REPLICATE_PARAKEET_MODEL = "huanshere/parakeet-tdt-0.6b-v2:6f0fb1d0715174c31e76601f8b98f5e2d7a616cd7a0bf00584c2c820ffb039a4"
+REPLICATE_WHISPERX_MODEL = "victor-upmeet/whisperx:84d2ad2d6194fe98a17d2b60bef1c7f910c46b2f6fd38996ca457afd9c8abfcb"
 SAMPLE_RATE = 16000
 
 
@@ -25,16 +21,23 @@ def configured_credentials() -> str:
 
 def _get_replicate_client(api_token: str) -> Any:
     from importlib import import_module
+
     try:
         replicate = import_module("replicate")
     except ImportError as exc:
-        raise RuntimeError("The 'replicate' package is required for Replicate ASR (`pip install replicate`).") from exc
+        raise RuntimeError(
+            "The 'replicate' package is required for Replicate ASR (`pip install replicate`)."
+        ) from exc
     return replicate.Client(api_token=api_token)
 
 
-def normalize_replicate_output(output: Dict[str, Any], offset: float = 0.0, fallback_lang: str = "en") -> Dict[str, Any]:
+def normalize_replicate_output(
+    output: Dict[str, Any], offset: float = 0.0, fallback_lang: str = "en"
+) -> Dict[str, Any]:
     if not isinstance(output, dict):
-        raise ValueError(f"Unexpected Replicate ASR output type: {type(output).__name__}")
+        raise ValueError(
+            f"Unexpected Replicate ASR output type: {type(output).__name__}"
+        )
 
     raw_segments = output.get("segments")
     if "word_timestamps" in output and not raw_segments:
@@ -47,7 +50,7 @@ def normalize_replicate_output(output: Dict[str, Any], offset: float = 0.0, fall
         if not isinstance(seg, dict):
             continue
         words = []
-        for w in (seg.get("words") or []):
+        for w in seg.get("words") or []:
             if not isinstance(w, dict):
                 continue
             word_text = str(w.get("word") or w.get("text") or "").strip()
@@ -74,14 +77,18 @@ def normalize_replicate_output(output: Dict[str, Any], offset: float = 0.0, fall
             seg_end = words[-1]["end"]
 
         if words or seg_text:
-            segments.append({
-                "start": seg_start,
-                "end": seg_end,
-                "text": seg_text,
-                "words": words,
-            })
+            segments.append(
+                {
+                    "start": seg_start,
+                    "end": seg_end,
+                    "text": seg_text,
+                    "words": words,
+                }
+            )
 
-    detected_lang = output.get("detected_language") or output.get("language") or fallback_lang
+    detected_lang = (
+        output.get("detected_language") or output.get("language") or fallback_lang
+    )
     if not detected_lang or str(detected_lang).lower() == "auto":
         detected_lang = "en"
 
@@ -119,7 +126,9 @@ def transcribe_audio_replicate_parakeet(
     parsed = normalize_replicate_output(output, offset=offset, fallback_lang=language)
     if parsed.get("language"):
         update_key("whisper.detected_language", parsed["language"])
-    rprint(f"[green]✓ Replicate Parakeet transcription completed in {time.perf_counter() - t0:.2f}s[/green]")
+    rprint(
+        f"[green]✓ Replicate Parakeet transcription completed in {time.perf_counter() - t0:.2f}s[/green]"
+    )
     return parsed
 
 
@@ -158,5 +167,7 @@ def transcribe_audio_replicate_whisper(
     parsed = normalize_replicate_output(output, offset=offset, fallback_lang=language)
     if parsed.get("language"):
         update_key("whisper.detected_language", parsed["language"])
-    rprint(f"[green]✓ Replicate WhisperX transcription completed in {time.perf_counter() - t0:.2f}s[/green]")
+    rprint(
+        f"[green]✓ Replicate WhisperX transcription completed in {time.perf_counter() - t0:.2f}s[/green]"
+    )
     return parsed

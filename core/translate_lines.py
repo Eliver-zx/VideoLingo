@@ -12,7 +12,16 @@ from core.utils import ask_gpt, check_cancel, load_key
 
 console = Console()
 
-LAST_DIRECT_BY_INDEX: dict[int, list[str]] = {}
+
+class TranslateResultTuple(tuple):
+    """2-tuple (translate_result, lines) carrying `.direct_lines` without global state."""
+
+    direct_lines: list[str]
+
+    def __new__(cls, translate_result: str, lines: str, direct_lines: list[str]):
+        obj = super().__new__(cls, (translate_result, lines))
+        obj.direct_lines = direct_lines
+        return obj
 
 
 def valid_translate_result(
@@ -114,17 +123,12 @@ def translate_lines(
             "origin", line_list[idx] if idx < len(line_list) else ""
         )
         faith_result[i]["direct"] = faith_result[i]["direct"].replace("\n", " ")
-    LAST_DIRECT_BY_INDEX[index] = [
-        faith_result[i]["direct"].strip() for i in faith_result
-    ]
+    direct_lines = [faith_result[i]["direct"].strip() for i in faith_result]
 
     # If reflect_translate is False or not set, use faithful translation directly
     reflect_translate = load_key("reflect_translate")
     if not reflect_translate:
-        # If reflect_translate is False or not set, use faithful translation directly
-        translate_result = "\n".join(
-            [faith_result[i]["direct"].strip() for i in faith_result]
-        )
+        translate_result = "\n".join(direct_lines)
 
         table = Table(title="Translation Results", show_header=False, box=box.ROUNDED)
         table.add_column("Translations", style="bold")
@@ -135,7 +139,7 @@ def translate_lines(
                 table.add_row("[yellow]" + "-" * 50 + "[/yellow]")
 
         console.print(table)
-        return translate_result, lines
+        return TranslateResultTuple(translate_result, lines, direct_lines)
 
     ## Step 2: Express Smoothly
     prompt2 = get_prompt_expressiveness(faith_result, lines, shared_prompt)
@@ -182,7 +186,7 @@ def translate_lines(
         )
         raise ValueError(f"Origin ···{lines}···,\nbut got ···{translate_result}···")
 
-    return translate_result, lines
+    return TranslateResultTuple(translate_result, lines, direct_lines)
 
 
 if __name__ == "__main__":

@@ -19,8 +19,6 @@ yaml.preserve_quotes = True
 _TASK_CONFIG_OVERRIDES: contextvars.ContextVar[dict[str, Any] | None] = (
     contextvars.ContextVar("_TASK_CONFIG_OVERRIDES", default=None)
 )
-_PROCESS_CONFIG_OVERRIDES: dict[str, Any] | None = None
-_OVERRIDES_LOCK = threading.Lock()
 
 # In-memory cache of plain Python dicts keyed by (resolved_path, st_ino, st_mtime_ns, st_size).
 # Eliminates repeated disk reads & ruamel.yaml parsing while staying 0-latency coherent
@@ -233,34 +231,44 @@ def _apply_override_entries(
 
 def _get_active_overrides() -> dict[str, Any] | None:
     overrides = _TASK_CONFIG_OVERRIDES.get()
-    with _OVERRIDES_LOCK:
-        if overrides is None:
-            overrides = _PROCESS_CONFIG_OVERRIDES
-        return dict(overrides) if overrides is not None else None
+    if overrides is not None:
+        overrides = dict(overrides)
+    from core.workspace import _ACTIVE_TASK_DIR, TaskWorkspace
+
+    active_dir = _ACTIVE_TASK_DIR.get()
+    if active_dir is not None:
+        rt_states = TaskWorkspace(active_dir).get_all_runtime_state()
+        if rt_states:
+            base = overrides if overrides is not None else {}
+            overrides = _apply_override_entries(base, rt_states)
+    return overrides
+
+
+def set_runtime_state(key: str, value: Any) -> None:
+    """Persist a dynamic runtime task property into the active TaskWorkspace without touching global config.yaml."""
+    from core.workspace import _ACTIVE_TASK_DIR, TaskWorkspace
+
+    active_dir = _ACTIVE_TASK_DIR.get()
+    if active_dir is not None:
+        TaskWorkspace(active_dir).set_runtime_state(key, value)
+    override_target = _TASK_CONFIG_OVERRIDES.get()
+    if override_target is not None:
+        updated = _apply_override_entries(dict(override_target), {key: value})
+        _TASK_CONFIG_OVERRIDES.set(updated)
+    elif active_dir is None:
+        update_key(key, value, add_missing=True)
 
 
 @contextlib.contextmanager
 def task_config_context(overrides: dict[str, Any] | None):
-    """Apply task-scoped configuration overrides without mutating global `config.yaml` (propagates to worker threads)."""
-    global _PROCESS_CONFIG_OVERRIDES
+    """Apply task-scoped configuration overrides without mutating global `config.yaml` (propagates via ContextThreadPoolExecutor)."""
     current = _TASK_CONFIG_OVERRIDES.get()
-    if current is None:
-        with _OVERRIDES_LOCK:
-            current = (
-                dict(_PROCESS_CONFIG_OVERRIDES) if _PROCESS_CONFIG_OVERRIDES else {}
-            )
-    else:
-        current = dict(current)
-    merged = _apply_override_entries(current, overrides) if overrides else current
+    base = dict(current) if current is not None else {}
+    merged = _apply_override_entries(base, overrides) if overrides else base
     token = _TASK_CONFIG_OVERRIDES.set(merged)
-    with _OVERRIDES_LOCK:
-        prev_proc = _PROCESS_CONFIG_OVERRIDES
-        _PROCESS_CONFIG_OVERRIDES = merged
     try:
         yield merged
     finally:
-        with _OVERRIDES_LOCK:
-            _PROCESS_CONFIG_OVERRIDES = prev_proc
         _TASK_CONFIG_OVERRIDES.reset(token)
 
 
@@ -386,22 +394,15 @@ def load_key_or(key, default=None):
 
 
 def _sync_active_override_on_update(key: str, new_value: Any) -> None:
-    """Keep active task override dictionary consistent when a key is updated in-flight."""
-    global _PROCESS_CONFIG_OVERRIDES
+    """Keep active task override dictionary consistent when a key is updated in-flight in the same context."""
     incoming: dict[str, Any] = {key: new_value}
     if key == "whisper.language" and new_value != "auto":
         incoming["whisper.detected_language"] = new_value
-    with _OVERRIDES_LOCK:
-        ctx_target = _TASK_CONFIG_OVERRIDES.get()
-        proc_target = _PROCESS_CONFIG_OVERRIDES
-        base = ctx_target if ctx_target is not None else proc_target
-        if base is None:
-            return
-        updated = _apply_override_entries(base, incoming)
-        if ctx_target is not None:
-            _TASK_CONFIG_OVERRIDES.set(updated)
-        if proc_target is not None:
-            _PROCESS_CONFIG_OVERRIDES = updated
+    ctx_target = _TASK_CONFIG_OVERRIDES.get()
+    if ctx_target is None:
+        return
+    updated = _apply_override_entries(ctx_target, incoming)
+    _TASK_CONFIG_OVERRIDES.set(updated)
 
 
 def update_key(key: str, new_value: Any, add_missing: bool = False) -> bool:

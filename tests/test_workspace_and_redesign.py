@@ -669,8 +669,8 @@ def test_fastapi_webui_tasks_terms_and_utterances_endpoints(
 
 
 def test_threadpool_workers_inherit_workspace_and_config_overrides(tmp_path: Path):
-    """Child threads in ThreadPoolExecutor must inherit workspace_context and task_config_context."""
-    from concurrent.futures import ThreadPoolExecutor
+    """Child threads in ContextThreadPoolExecutor must inherit workspace_context and task_config_context."""
+    from core.concurrency import ContextThreadPoolExecutor
     from core.utils.models import resolve_task_path
 
     ws = TaskWorkspace(tmp_path / "output" / "worker_task")
@@ -682,7 +682,7 @@ def test_threadpool_workers_inherit_workspace_and_config_overrides(tmp_path: Pat
             {"target_language": "Español", "max_workers": 2}
         ),
     ):
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        with ContextThreadPoolExecutor(max_workers=2) as pool:
             f_path = pool.submit(resolve_task_path, "output/log/terminology.json")
             f_lang = pool.submit(config_utils.load_key, "target_language")
             resolved_in_child = f_path.result()
@@ -2028,3 +2028,138 @@ def test_sqlite_only_step11_and_dubbing_chunk_invalidation(tmp_path: Path):
         _11_merge_audio.create_srt_subtitle()
     assert ws.dub_srt_path.is_file()
     assert "你好世界" in ws.dub_srt_path.read_text(encoding="utf-8")
+
+
+def test_concurrent_workspace_isolation_runtime_state_and_sqlite_llm_cache(
+    tmp_path: Path,
+):
+    """Concurrent ContextThreadPoolExecutor tasks isolate runtime state, use SQLite WAL + llm_cache, and never touch config.yaml."""
+    from core import _8_1_audio_task, _8_2_dub_chunks
+    from core.concurrency import ContextThreadPoolExecutor
+    from core.utils.ask_gpt import _load_cache, _save_cache
+
+    ws_a = TaskWorkspace(tmp_path / "task_a")
+    ws_b = TaskWorkspace(tmp_path / "task_b")
+    ws_a.ensure_dirs()
+    ws_b.ensure_dirs()
+
+    def worker_job(
+        ws: TaskWorkspace, lang: str, target: str
+    ) -> tuple[str, str, object]:
+        with (
+            workspace_context(ws),
+            config_utils.task_config_context({"target_language": target}),
+        ):
+            config_utils.set_runtime_state("whisper.detected_language", lang)
+            _save_cache(
+                model="test-model",
+                prompt=f"hello-{lang}",
+                resp_content=f'{{"ans": "{lang}"}}',
+                resp_type="json",
+                resp={"ans": lang},
+                log_title="unit_test",
+            )
+            with ContextThreadPoolExecutor(max_workers=2) as inner_pool:
+                det = inner_pool.submit(
+                    config_utils.load_key, "whisper.detected_language"
+                ).result()
+                tgt = inner_pool.submit(
+                    config_utils.load_key, "target_language"
+                ).result()
+                cached = inner_pool.submit(
+                    _load_cache,
+                    "hello-" + lang,
+                    "json",
+                    "unit_test",
+                ).result()
+            return det, tgt, cached
+
+    with ContextThreadPoolExecutor(max_workers=2) as outer_pool:
+        fa = outer_pool.submit(worker_job, ws_a, "ja", "简体中文")
+        fb = outer_pool.submit(worker_job, ws_b, "fr", "English")
+        res_a = fa.result()
+        res_b = fb.result()
+
+    assert res_a == ("ja", "简体中文", {"ans": "ja"})
+    assert res_b == ("fr", "English", {"ans": "fr"})
+    assert ws_a.get_runtime_state("whisper.detected_language") == "ja"
+    assert ws_b.get_runtime_state("whisper.detected_language") == "fr"
+    assert ws_a.load_llm_cache(
+        log_title="unit_test", prompt="hello-ja", resp_type="json"
+    ) == (True, {"ans": "ja"})
+    assert ws_b.load_llm_cache(
+        log_title="unit_test", prompt="hello-fr", resp_type="json"
+    ) == (True, {"ans": "fr"})
+
+    with ws_a._db(write=False) as conn:
+        assert conn is not None
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    assert str(mode).lower() == "wal"
+
+    # Verify structured Step 8.1 and 8.2 run directly from project.sqlite without disk SRT files,
+    # including multi-cue utterances with custom tts_text != tgt and empty/parenthetical utterances
+    ws_a.save_utterances(
+        [
+            {
+                "id": 0,
+                "word_span": [0, 1],
+                "start": 0.0,
+                "end": 2.0,
+                "gap_after": 0.0,
+                "src_raw": "こんにちは",
+                "src": "こんにちは。",
+                "direct": "你好。",
+                "tgt": "第一行字幕 / 第二行字幕",
+                "tts_text": "你好，配音专享。",
+                "sub_cues": [
+                    {
+                        "start": 0.0,
+                        "end": 1.0,
+                        "src": "こんにちは",
+                        "tgt": "第一行字幕",
+                    },
+                    {
+                        "start": 1.0,
+                        "end": 2.0,
+                        "src": "世界",
+                        "tgt": "第二行字幕",
+                    },
+                ],
+            },
+            {
+                "id": 1,
+                "word_span": [1, 2],
+                "start": 2.0,
+                "end": 3.0,
+                "gap_after": 0.0,
+                "src_raw": "(笑)",
+                "src": "(笑)",
+                "direct": "（笑声）",
+                "tgt": "（笑声）",
+                "tts_text": "（笑声）",
+                "sub_cues": [],
+            },
+        ]
+    )
+    assert not (ws_a.audio_dir / "trans_subs_for_audio.srt").exists()
+    with workspace_context(ws_a):
+        df_tasks = _8_1_audio_task.process_srt()
+        assert len(df_tasks) == 1
+        assert df_tasks.iloc[0]["text"] == "你好，配音专享。"
+        ws_a.save_dub_tasks(df_tasks.to_dict(orient="records"))
+        _8_2_dub_chunks.gen_dub_chunks()
+    dub_tasks = ws_a.load_dub_tasks()
+    assert len(dub_tasks) == 1
+    assert dub_tasks[0]["lines"] == ["你好，配音专享。"]
+    assert dub_tasks[0]["src_lines"] == ["こんにちは。"]
+
+    # Verify invalidate_from_stage("asr") and clear_runtime_cache evict cached runtime state
+    import shutil
+
+    ws_a.invalidate_from_stage("asr")
+    assert ws_a.get_runtime_state("whisper.detected_language") is None
+    ws_b.clear_runtime_cache()
+    shutil.rmtree(ws_b.root)
+    ws_b_recreated = TaskWorkspace(tmp_path / "task_b")
+    ws_b_recreated.ensure_dirs()
+    assert ws_b_recreated.get_runtime_state("whisper.detected_language") is None

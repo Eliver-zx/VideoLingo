@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import concurrent.futures
 import inspect
 import math
 import os
@@ -18,6 +17,7 @@ from core._3_2_split_meaning import (
     find_split_positions,
     split_sentence as _default_split_sentence,
 )
+from core.concurrency import ContextThreadPoolExecutor
 from core.prompts import (
     get_align_prompt as _default_get_align_prompt,
     get_batch_split_prompt,
@@ -564,7 +564,7 @@ def _batch_split_sentences_llm(
         return out
 
     max_workers = max(1, int(load_key_or("max_workers", 4) or 4))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(_run_batch, b) for b in batches]
         for fut in futures:
             check_cancel()
@@ -738,9 +738,7 @@ def split_align_subs(
             tr_work[i] = tr_parts
             remerged_tr_lines[i] = tr_remerged
 
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=load_key("max_workers")
-        ) as executor:
+        with ContextThreadPoolExecutor(max_workers=load_key("max_workers")) as executor:
             futures = [executor.submit(process, i) for i in to_split]
         for i, future in zip(to_split, futures):
             error = future.exception()
@@ -782,9 +780,7 @@ def split_source_lines(lines: List[str]) -> List[str]:
         if all(calc_len(line) <= max_length for line in lines):
             break
         check_cancel()
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=load_key("max_workers")
-        ) as executor:
+        with ContextThreadPoolExecutor(max_workers=load_key("max_workers")) as executor:
             lines = [part for parts in executor.map(process, lines) for part in parts]
     return lines
 

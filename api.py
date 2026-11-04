@@ -122,20 +122,6 @@ runner.add_listener(_on_runner_event)
 # ─── Request Models ───
 
 
-class InputRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    source: str = Field(
-        min_length=1,
-        description="Local file path or HTTP(S) video URL; an SRT file to translate subtitles without a video",
-    )
-    subtitles: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Local SRT file that is used instead of the recognition",
-    )
-    existing: Literal["reject", "archive", "replace"] = "reject"
-
-
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     stage: Literal["transcribe", "subtitles", "dubbing", "all"] = "all"
@@ -189,23 +175,6 @@ class ConfigUpdateRequest(BaseModel):
 
 
 # ─── Shared Helpers ───
-
-
-def require_idle():
-    if runner.is_active:
-        raise HTTPException(
-            409, "An operation is active; wait for /status before continuing."
-        )
-
-
-def archive_output():
-    from core.utils.onekeycleanup import cleanup
-
-    cleanup()
-    if OUTPUT.exists() and any(OUTPUT.iterdir()):
-        raise RuntimeError(
-            "Some output files could not be archived; inspect output/ before retrying."
-        )
 
 
 def subtitle_file(path):
@@ -598,7 +567,28 @@ def upload_task(
 @app.post("/api/tasks/{task_id}/run", status_code=202)
 def run_task(task_id: str, request: RunRequest):
     ws = _resolve_workspace(task_id)
+    if runner.active_task_id == ws.task_id and runner.is_active:
+        raise HTTPException(409, f"Task {ws.task_id} is already running.")
     manifest = ws.load_manifest()
+    media_kind = (manifest.get("media") or {}).get("kind")
+    if not media_kind:
+        try:
+            _, media_kind = ws.resolve_media_file()
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+    needs_dubbing = request.stage == "dubbing" or (
+        request.stage == "all" and request.dubbing
+    )
+    if needs_dubbing and media_kind in ("audio", "subtitle"):
+        raise HTTPException(
+            422, "Input without a video supports subtitles only, as in the UI."
+        )
+    if request.stage == "dubbing" and not (
+        ws.has_utterances()
+        or all((ws.root / name).exists() for name in ("src.srt", "trans.srt"))
+    ):
+        raise HTTPException(409, "Generate subtitles before starting dubbing.")
+
     overrides = dict(manifest.get("config_override") or {})
     if request.target_language:
         overrides["target_language"] = request.target_language
@@ -611,9 +601,6 @@ def run_task(task_id: str, request: RunRequest):
     manifest["config_override"] = overrides
     ws.save_manifest(manifest)
 
-    needs_dubbing = request.stage == "dubbing" or (
-        request.stage == "all" and request.dubbing
-    )
     steps = _wrap_workspace_steps(
         ws, get_steps(request.stage, needs_dubbing), overrides
     )
@@ -642,10 +629,13 @@ def resume_task(task_id: str):
 @app.post("/api/tasks/{task_id}/stop")
 def stop_task(task_id: str):
     ws = _resolve_workspace(task_id)
-    if runner.active_task_id != ws.task_id or not runner.is_active:
-        raise HTTPException(409, f"Task {ws.task_id} is not active.")
-    runner.stop()
-    return {"state": runner.state}
+    if runner.active_task_id == ws.task_id and runner.is_active:
+        runner.stop(clear_queue=False)
+        return {"state": runner.state}
+    if runner.cancel_queued(ws.task_id):
+        ws.update_manifest(execution={"state": "stopped"})
+        return {"state": "stopped"}
+    raise HTTPException(409, f"Task {ws.task_id} is not active.")
 
 
 @app.post("/api/tasks/{task_id}/invalidate")
@@ -843,6 +833,8 @@ def delete_task(task_id: str):
     ws = _resolve_workspace(task_id)
     if runner.active_task_id == ws.task_id and runner.is_active:
         raise HTTPException(409, "Cannot delete an active task; stop it first.")
+    runner.cancel_queued(ws.task_id)
+    ws.clear_runtime_cache()
     shutil.rmtree(ws.root)
     return {"deleted": ws.task_id}
 
@@ -1361,175 +1353,6 @@ def get_config():
 def put_config(request: ConfigUpdateRequest):
     update_keys(request.updates, add_missing=True)
     return {"updated": list(request.updates.keys())}
-
-
-# ─── Legacy Single-Output Endpoints (Preserved for Existing API Callers & Tests) ───
-
-
-def prepare_input(source, existing, subtitles=None):
-    from core._1_ytdlp import (
-        download_video_ytdlp,
-        write_input_manifest,
-        sanitize_filename,
-        GENERATED_AUDIO_NAMES,
-        GENERATED_VIDEO_NAMES,
-    )
-    from core._2_import_subtitles import add_input_subtitles
-
-    if OUTPUT.exists() and any(OUTPUT.iterdir()):
-        if existing == "archive":
-            archive_output()
-        elif existing == "replace":
-            shutil.rmtree(OUTPUT)
-    OUTPUT.mkdir(exist_ok=True)
-    if urlparse(source).scheme in {"http", "https"}:
-        download_video_ytdlp(source, resolution=load_key("ytb_resolution"))
-    elif Path(source).suffix.lower() == ".srt":
-        subtitles = Path(source)
-    else:
-        source = Path(source)
-        name = sanitize_filename(source.stem) + source.suffix.lower()
-        if name.lower() in GENERATED_AUDIO_NAMES | GENERATED_VIDEO_NAMES:
-            name = "input_" + name
-        destination = OUTPUT / name
-        shutil.copy2(source, destination)
-        kind = (
-            "video"
-            if source.suffix.lower()[1:] in load_key("allowed_video_formats")
-            else "audio"
-        )
-        write_input_manifest(str(destination), kind)
-    if subtitles:
-        add_input_subtitles(subtitles.name, subtitles.read_bytes())
-
-
-@app.post("/input", status_code=202)
-def set_input(request: InputRequest):
-    """Prepare input in the background; poll /status before POST /run."""
-    with operation_lock:
-        require_idle()
-        parsed = urlparse(request.source)
-        if parsed.scheme in {"http", "https"}:
-            if not parsed.netloc:
-                raise HTTPException(422, "Invalid URL")
-            source = request.source
-        else:
-            source = Path(request.source).resolve()
-            if not source.is_file():
-                raise HTTPException(422, "Source file does not exist")
-            if source.is_relative_to(OUTPUT.resolve()):
-                raise HTTPException(
-                    422,
-                    "Source must be outside output/; use /run for an existing input.",
-                )
-            formats = load_key("allowed_video_formats") + load_key(
-                "allowed_audio_formats"
-            )
-            if source.suffix.lower() == ".srt":
-                source = subtitle_file(source)
-            elif source.suffix.lower()[1:] not in formats:
-                raise HTTPException(422, "Unsupported media format")
-            source = str(source)
-        subtitles = subtitle_file(request.subtitles) if request.subtitles else None
-        if OUTPUT.exists() and any(OUTPUT.iterdir()) and request.existing == "reject":
-            raise HTTPException(
-                409, "output/ is not empty; explicitly choose archive or replace."
-            )
-        runner.start(
-            [
-                (
-                    "Prepare input",
-                    lambda: prepare_input(source, request.existing, subtitles),
-                )
-            ]
-        )
-        return {"accepted": True}
-
-
-@app.post("/run", status_code=202)
-def run(request: RunRequest):
-    """Run or retry the shared pipeline. Parameters are saved to config.yaml."""
-    with operation_lock:
-        require_idle()
-        from core._1_ytdlp import find_media_file
-
-        try:
-            _, kind = find_media_file()
-        except ValueError as exc:
-            raise HTTPException(409, str(exc)) from exc
-        needs_dubbing = request.stage == "dubbing" or (
-            request.stage == "all" and request.dubbing
-        )
-        if needs_dubbing and kind in ("audio", "subtitle"):
-            raise HTTPException(
-                422, "Input without a video supports subtitles only, as in the UI."
-            )
-        if request.stage == "dubbing" and not all(
-            (OUTPUT / name).exists() for name in ("src.srt", "trans.srt")
-        ):
-            raise HTTPException(409, "Generate subtitles before starting dubbing.")
-        if request.target_language is not None:
-            update_key("target_language", request.target_language)
-        if request.source_language is not None:
-            update_key("whisper.language", request.source_language)
-        runner.start(get_steps(request.stage, request.dubbing))
-        return {"accepted": True}
-
-
-@app.get("/status")
-def status():
-    """In-memory execution state; output files survive server restarts."""
-    files = sorted(
-        p.name for p in OUTPUT.glob("*") if p.is_file() and not p.name.startswith(".")
-    )
-    return {
-        "state": runner.state,
-        "active": runner.is_active,
-        "step": runner.current_label or None,
-        "step_index": runner.current_step,
-        "total_steps": runner.total_steps,
-        "progress": runner.progress,
-        "error": runner.error_msg or None,
-        "pause_message": runner.pause_message or None,
-        "files": files,
-    }
-
-
-@app.post("/resume")
-def resume():
-    """Continue a paused task, such as the checkpoints of pause_before_translate and pause_after_translate."""
-    with operation_lock:
-        if runner.state != "paused":
-            raise HTTPException(409, "No task is paused.")
-        runner.resume()
-        return {"state": runner.state}
-
-
-@app.post("/stop")
-def stop():
-    """Cooperative stop: wait until active=false before another operation."""
-    with operation_lock:
-        runner.stop()
-        return {"state": runner.state}
-
-
-@app.get("/files/{name}")
-def file(name: str):
-    path = (OUTPUT / name).resolve()
-    if path.parent != OUTPUT.resolve() or name.startswith(".") or not path.is_file():
-        raise HTTPException(404, "Output file not found")
-    return FileResponse(path, filename=path.name)
-
-
-@app.post("/archive", status_code=202)
-def archive():
-    """Move output into history/ using the existing archive behavior."""
-    with operation_lock:
-        require_idle()
-        if not OUTPUT.exists() or not any(OUTPUT.iterdir()):
-            raise HTTPException(409, "No output to archive")
-        runner.start([("Archive output", archive_output)])
-        return {"accepted": True}
 
 
 @app.post("/api/tasks/{task_id}/open-dir")

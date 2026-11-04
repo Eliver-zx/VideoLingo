@@ -5,7 +5,7 @@ import requests
 from rich import print as rprint
 
 from core.asr_backend.audio_preprocess import audio_slice_wav
-from core.utils import check_cancel, load_key_or, update_key
+from core.utils import check_cancel, load_key_or, set_runtime_state as update_key
 
 UPLOAD_URL = "https://api.assemblyai.com/v2/upload"
 TRANSCRIPT_URL = "https://api.assemblyai.com/v2/transcript"
@@ -16,8 +16,14 @@ def configured_credentials() -> Tuple[str, str, str]:
     api_key = str(load_key_or("whisper.assembly_api_key", "") or "").strip()
     if not api_key or api_key.lower().startswith(("your_", "your ")):
         raise ValueError("Set whisper.assembly_api_key before using AssemblyAI ASR")
-    lang = str(load_key_or("whisper.assemblyai_lang", "") or load_key_or("whisper.language", "en") or "en").strip()
-    model = str(load_key_or("whisper.assemblyai_model", "universal") or "universal").strip()
+    lang = str(
+        load_key_or("whisper.assemblyai_lang", "")
+        or load_key_or("whisper.language", "en")
+        or "en"
+    ).strip()
+    model = str(
+        load_key_or("whisper.assemblyai_model", "universal") or "universal"
+    ).strip()
     return api_key, lang, model
 
 
@@ -39,21 +45,25 @@ def convert_assemblyai_response(
         current_words.append({"word": text, "start": start, "end": end})
 
         if text[-1] in ".!?。！？":
-            segments.append({
+            segments.append(
+                {
+                    "start": current_words[0]["start"],
+                    "end": current_words[-1]["end"],
+                    "text": " ".join(w["word"] for w in current_words),
+                    "words": current_words,
+                }
+            )
+            current_words = []
+
+    if current_words:
+        segments.append(
+            {
                 "start": current_words[0]["start"],
                 "end": current_words[-1]["end"],
                 "text": " ".join(w["word"] for w in current_words),
                 "words": current_words,
-            })
-            current_words = []
-
-    if current_words:
-        segments.append({
-            "start": current_words[0]["start"],
-            "end": current_words[-1]["end"],
-            "text": " ".join(w["word"] for w in current_words),
-            "words": current_words,
-        })
+            }
+        )
 
     detected_lang = response_data.get("language_code") or fallback_lang
     if not detected_lang or detected_lang == "auto":
@@ -79,9 +89,13 @@ def transcribe_audio_assembly(
     start_time = time.perf_counter()
 
     rprint("[cyan]🎤 Uploading audio slice to AssemblyAI...[/cyan]")
-    upload_resp = requests.post(UPLOAD_URL, headers=headers, data=audio_bytes, timeout=180)
+    upload_resp = requests.post(
+        UPLOAD_URL, headers=headers, data=audio_bytes, timeout=180
+    )
     if upload_resp.status_code >= 400:
-        raise RuntimeError(f"AssemblyAI upload failed (HTTP {upload_resp.status_code}): {upload_resp.text[:300]}")
+        raise RuntimeError(
+            f"AssemblyAI upload failed (HTTP {upload_resp.status_code}): {upload_resp.text[:300]}"
+        )
     audio_url = upload_resp.json().get("upload_url")
     if not audio_url:
         raise RuntimeError("AssemblyAI upload response did not include upload_url")
@@ -97,31 +111,45 @@ def transcribe_audio_assembly(
     else:
         transcript_params["language_detection"] = True
 
-    submit_resp = requests.post(TRANSCRIPT_URL, headers=headers, json=transcript_params, timeout=60)
+    submit_resp = requests.post(
+        TRANSCRIPT_URL, headers=headers, json=transcript_params, timeout=60
+    )
     if submit_resp.status_code >= 400:
-        raise RuntimeError(f"AssemblyAI submit failed (HTTP {submit_resp.status_code}): {submit_resp.text[:300]}")
+        raise RuntimeError(
+            f"AssemblyAI submit failed (HTTP {submit_resp.status_code}): {submit_resp.text[:300]}"
+        )
     transcript_id = submit_resp.json().get("id")
     if not transcript_id:
         raise RuntimeError("AssemblyAI transcript response did not include id")
 
-    rprint(f"[cyan]📝 AssemblyAI job submitted (id={transcript_id}), waiting for completion...[/cyan]")
+    rprint(
+        f"[cyan]📝 AssemblyAI job submitted (id={transcript_id}), waiting for completion...[/cyan]"
+    )
     poll_url = f"{TRANSCRIPT_URL}/{transcript_id}"
     while True:
         check_cancel()
         poll_resp = requests.get(poll_url, headers=headers, timeout=30)
         if poll_resp.status_code >= 400:
-            raise RuntimeError(f"AssemblyAI poll failed (HTTP {poll_resp.status_code}): {poll_resp.text[:300]}")
+            raise RuntimeError(
+                f"AssemblyAI poll failed (HTTP {poll_resp.status_code}): {poll_resp.text[:300]}"
+            )
         raw_response = poll_resp.json()
         status = raw_response.get("status")
         if status == "completed":
             break
         if status == "error":
-            error_msg = raw_response.get("error") or "Unknown AssemblyAI transcription error"
+            error_msg = (
+                raw_response.get("error") or "Unknown AssemblyAI transcription error"
+            )
             raise RuntimeError(f"AssemblyAI transcription error: {error_msg}")
         time.sleep(3)
 
-    parsed = convert_assemblyai_response(raw_response, start_time_offset=start, fallback_lang=lang)
+    parsed = convert_assemblyai_response(
+        raw_response, start_time_offset=start, fallback_lang=lang
+    )
     if parsed.get("language"):
         update_key("whisper.detected_language", parsed["language"])
-    rprint(f"[green]✓ AssemblyAI transcription completed in {time.perf_counter() - start_time:.2f}s[/green]")
+    rprint(
+        f"[green]✓ AssemblyAI transcription completed in {time.perf_counter() - start_time:.2f}s[/green]"
+    )
     return parsed

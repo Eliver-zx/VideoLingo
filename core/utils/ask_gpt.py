@@ -61,6 +61,22 @@ def _save_cache(
     log_title="default",
     reasoning_effort="none",
 ):
+    if log_title in ("None", None):
+        return
+    norm_effort = normalize_reasoning_effort(reasoning_effort)
+    if GPT_LOG_FOLDER == "output/gpt_log" and log_title != "error":
+        from core.workspace import get_active_workspace
+
+        ws = get_active_workspace()
+        ws.save_llm_cache(
+            log_title=str(log_title),
+            prompt=str(prompt),
+            model=str(model or ""),
+            reasoning_effort=norm_effort,
+            resp_type=str(resp_type or ""),
+            resp=resp,
+        )
+        return
     with LOCK:
         logs = []
         folder = _resolve_log_folder()
@@ -77,7 +93,7 @@ def _save_cache(
         logs.append(
             {
                 "model": model,
-                "reasoning_effort": normalize_reasoning_effort(reasoning_effort),
+                "reasoning_effort": norm_effort,
                 "prompt": prompt,
                 "resp_content": resp_content,
                 "resp_type": resp_type,
@@ -92,11 +108,26 @@ def _save_cache(
 
 
 def _load_cache(prompt, resp_type, log_title, model=None, reasoning_effort=None):
+    if log_title in ("None", None):
+        return False
     target_effort = (
         normalize_reasoning_effort(reasoning_effort)
         if reasoning_effort is not None
         else None
     )
+    if GPT_LOG_FOLDER == "output/gpt_log":
+        from core.workspace import get_active_workspace
+
+        ws = get_active_workspace()
+        hit, val = ws.load_llm_cache(
+            log_title=str(log_title),
+            prompt=str(prompt),
+            resp_type=resp_type,
+            model=model,
+            reasoning_effort=target_effort,
+        )
+        if hit:
+            return val
     with LOCK:
         folder = _resolve_log_folder()
         file = os.path.join(folder, f"{log_title}.json")

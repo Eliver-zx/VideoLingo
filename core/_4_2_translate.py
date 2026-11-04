@@ -4,7 +4,8 @@ import json
 import os
 import re
 import pandas as pd
-from core.translate_lines import LAST_DIRECT_BY_INDEX, translate_lines
+from core.concurrency import ContextThreadPoolExecutor
+from core.translate_lines import translate_lines
 from core._4_1_summarize import _get_term_index, search_things_to_note_in_prompt
 from core._6_gen_sub import align_timestamp
 from core.utils import check_cancel, check_file_exists, load_key, load_key_or
@@ -122,6 +123,23 @@ def get_after_content(chunks, chunk_index):
     )  # Get first 3 lines
 
 
+class ChunkTranslateResult(tuple):
+    """3-tuple (index, english_result, translation) carrying `.direct_lines`."""
+
+    direct_lines: list[str] | None
+
+    def __new__(
+        cls,
+        index: int,
+        english_result: str,
+        translation: str,
+        direct_lines: list[str] | None = None,
+    ):
+        obj = super().__new__(cls, (index, english_result, translation))
+        obj.direct_lines = direct_lines
+        return obj
+
+
 # 🔍 Translate a single chunk
 def translate_chunk(chunk, chunks, theme_prompt, i):
     previous_content_prompt = get_previous_content(chunks, i)
@@ -138,7 +156,7 @@ def translate_chunk(chunk, chunks, theme_prompt, i):
     )
     search_scope = "\n".join(part for part in (chunk, prev_str, after_str) if part)
     things_to_note_prompt = search_things_to_note_in_prompt(search_scope)
-    translation, english_result = translate_lines(
+    res = translate_lines(
         chunk,
         previous_content_prompt,
         after_content_prompt,
@@ -146,7 +164,9 @@ def translate_chunk(chunk, chunks, theme_prompt, i):
         theme_prompt,
         i,
     )
-    return i, english_result, translation
+    translation, english_result = res
+    direct_lines = getattr(res, "direct_lines", None)
+    return ChunkTranslateResult(i, english_result, translation, direct_lines)
 
 
 def _translation_cache_fingerprint() -> str:
@@ -250,7 +270,6 @@ def translate_all():
             f"[cyan]♻️ Reusing cached raw translations from `{ws.db_path}`[/cyan]"
         )
     else:
-        LAST_DIRECT_BY_INDEX.clear()
         if ws.has_terms():
             term_data = ws.load_terms()
         elif os.path.exists(term_path):
@@ -269,7 +288,7 @@ def translate_all():
             transient=True,
         ) as progress:
             task = progress.add_task("[cyan]Translating chunks...", total=len(chunks))
-            with concurrent.futures.ThreadPoolExecutor(
+            with ContextThreadPoolExecutor(
                 max_workers=load_key("max_workers")
             ) as executor:
                 futures = []
@@ -302,7 +321,7 @@ def translate_all():
                     f"Translation line count mismatch in chunk {i}: expected {len(chunk_lines)}, got {len(trans_lines)}"
                 )
             trans_text.extend(trans_lines)
-            direct_chunk = LAST_DIRECT_BY_INDEX.get(i)
+            direct_chunk = getattr(results[i], "direct_lines", None)
             if direct_chunk and len(direct_chunk) == len(chunk_lines):
                 direct_lines_all.extend(direct_chunk)
             else:

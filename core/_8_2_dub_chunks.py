@@ -1,5 +1,4 @@
 import datetime
-import json
 import os
 import re
 import pandas as pd
@@ -8,7 +7,6 @@ from core.asr_backend.audio_preprocess import get_audio_duration
 from core.tts_backend.estimate_duration import init_estimator, estimate_duration
 from core.utils import load_key, rprint
 from core.utils.models import (
-    _3_UTTERANCES_JSON,
     _8_1_AUDIO_TASK,
     _RAW_AUDIO_FILE,
     resolve_task_path,
@@ -187,31 +185,49 @@ def gen_dub_chunks():
     rprint("[✂️ Processing] Processing cutoffs...")
     df = process_cutoffs(df)
 
-    rprint("[📝 Reading] Loading transcript files...")
-    with open(resolve_task_path(TRANS_SRT), "r", encoding="utf-8") as f_trans:
-        content = f_trans.read()
-    with open(resolve_task_path(SRC_SRT), "r", encoding="utf-8") as f_src:
-        ori_content = f_src.read()
+    rprint("[📝 Reading] Loading transcript cues...")
+    utt_list = ws.load_utterances() if TRANS_SRT == "output/trans.srt" else []
+    utterance_cues_by_id = {}
+    utterance_by_id = {}
+    if isinstance(utt_list, list) and utt_list:
+        for pos, u in enumerate(utt_list, 1):
+            if not isinstance(u, dict):
+                continue
+            utterance_by_id[pos] = u
+            cues = u.get("sub_cues")
+            if isinstance(cues, list) and cues:
+                utterance_cues_by_id[pos] = cues
+            else:
+                utterance_cues_by_id[pos] = [
+                    {
+                        "src": str(u.get("src") or ""),
+                        "tgt": str(u.get("tts_text") or u.get("tgt") or ""),
+                    }
+                ]
 
-    # Process subtitle content
     content_lines = []
     ori_content_lines = []
+    trans_srt_path = resolve_task_path(TRANS_SRT)
+    src_srt_path = resolve_task_path(SRC_SRT)
+    if os.path.isfile(trans_srt_path) and os.path.isfile(src_srt_path):
+        with open(trans_srt_path, "r", encoding="utf-8") as f_trans:
+            content = f_trans.read()
+        with open(src_srt_path, "r", encoding="utf-8") as f_src:
+            ori_content = f_src.read()
 
-    # Process translated subtitles
-    for block in content.strip().split("\n\n"):
-        lines = [line.strip() for line in block.split("\n") if line.strip()]
-        if len(lines) >= 3:
-            text = " ".join(lines[2:])
-            text = clean_line(text)
-            content_lines.append(text)
+        for block in content.strip().split("\n\n"):
+            lines = [line.strip() for line in block.split("\n") if line.strip()]
+            if len(lines) >= 3:
+                text = " ".join(lines[2:])
+                text = clean_line(text)
+                content_lines.append(text)
 
-    # Process source subtitles (same structure)
-    for block in ori_content.strip().split("\n\n"):
-        lines = [line.strip() for line in block.split("\n") if line.strip()]
-        if len(lines) >= 3:
-            text = " ".join(lines[2:])
-            text = clean_line(text)
-            ori_content_lines.append(text)
+        for block in ori_content.strip().split("\n\n"):
+            lines = [line.strip() for line in block.split("\n") if line.strip()]
+            if len(lines) >= 3:
+                text = " ".join(lines[2:])
+                text = clean_line(text)
+                ori_content_lines.append(text)
 
     # Match processing
     df["lines"] = None
@@ -225,25 +241,6 @@ def gen_dub_chunks():
         text = re.sub(r"\([^)]*\)|（[^）]*）", "", text)
         text = re.sub(r"[()（）]", "", text)
         return re.sub(r"[^\w\s]|[\s]", "", text)
-
-    utterance_cues_by_id = {}
-    utt_list = ws.load_utterances()
-    if not utt_list:
-        utterances_path = resolve_task_path(_3_UTTERANCES_JSON)
-        if os.path.isfile(utterances_path):
-            try:
-                with open(utterances_path, "r", encoding="utf-8") as f:
-                    utt_list = json.load(f)
-            except Exception:
-                utt_list = []
-    if isinstance(utt_list, list):
-        for pos, u in enumerate(utt_list, 1):
-            if (
-                isinstance(u, dict)
-                and isinstance(u.get("sub_cues"), list)
-                and u["sub_cues"]
-            ):
-                utterance_cues_by_id[pos] = u["sub_cues"]
 
     for pos_idx in range(len(df)):
         row = df.iloc[pos_idx]
@@ -284,20 +281,54 @@ def gen_dub_chunks():
                 else (row_num + 1)
             )
             cues = []
-            for uid in range(row_num, max(row_num + 1, next_num)):
-                if uid in utterance_cues_by_id:
-                    cues.extend(utterance_cues_by_id[uid])
+            span_uids = [
+                uid
+                for uid in range(row_num, max(row_num + 1, next_num))
+                if uid in utterance_cues_by_id
+            ]
+            for uid in span_uids:
+                cues.extend(utterance_cues_by_id[uid])
             if cues:
                 spoken_single = clean_line(str(row.get("text", "")))
+                has_custom_tts = any(
+                    str(utterance_by_id[uid].get("tts_text") or "").strip()
+                    and str(utterance_by_id[uid].get("tts_text") or "").strip()
+                    != str(utterance_by_id[uid].get("tgt") or "").strip()
+                    for uid in span_uids
+                    if uid in utterance_by_id
+                )
                 if len(cues) == 1 and spoken_single:
                     df.at[pos_idx, "lines"] = [spoken_single]
+                elif has_custom_tts:
+                    custom_lines = [
+                        clean_line(
+                            str(
+                                utterance_by_id[uid].get("tts_text")
+                                or utterance_by_id[uid].get("tgt")
+                                or ""
+                            )
+                        )
+                        for uid in span_uids
+                        if uid in utterance_by_id
+                    ]
+                    df.at[pos_idx, "lines"] = [ln for ln in custom_lines if ln] or [
+                        spoken_single
+                    ]
                 else:
                     df.at[pos_idx, "lines"] = [
-                        clean_line(str(c.get("trans", c.get("text", "")))) for c in cues
+                        clean_line(str(c.get("tgt", c.get("trans", c.get("text", "")))))
+                        for c in cues
                     ]
-                df.at[pos_idx, "src_lines"] = [
-                    clean_line(str(c.get("src", ""))) for c in cues
-                ]
+                if len(df.at[pos_idx, "lines"]) != len(cues) and span_uids:
+                    df.at[pos_idx, "src_lines"] = [
+                        clean_line(str(utterance_by_id[uid].get("src", "")))
+                        for uid in span_uids
+                        if uid in utterance_by_id
+                    ]
+                else:
+                    df.at[pos_idx, "src_lines"] = [
+                        clean_line(str(c.get("src", ""))) for c in cues
+                    ]
                 last_idx = min(len(content_lines), last_idx + len(cues))
             else:
                 rprint(f"[❌ Error] Matching failed at line {pos_idx}:")

@@ -5,7 +5,7 @@ import requests
 from rich import print as rprint
 
 from core.asr_backend.audio_preprocess import audio_slice_wav
-from core.utils import check_cancel, load_key_or, update_key
+from core.utils import check_cancel, load_key_or, set_runtime_state as update_key
 
 DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 SAMPLE_RATE = 16000
@@ -23,7 +23,9 @@ def _adjust_time(ts: float, offset: float) -> float:
     return round(float(ts) + offset, 3) if offset else round(float(ts), 3)
 
 
-def deepgram2whisper(dg_json: Dict[str, Any], offset: float = 0.0, fallback_lang: str = "en") -> Dict[str, Any]:
+def deepgram2whisper(
+    dg_json: Dict[str, Any], offset: float = 0.0, fallback_lang: str = "en"
+) -> Dict[str, Any]:
     results = dg_json.get("results") or {}
     channels = results.get("channels") or []
     alt = (channels[0].get("alternatives") or [{}])[0] if channels else {}
@@ -45,22 +47,27 @@ def deepgram2whisper(dg_json: Dict[str, Any], offset: float = 0.0, fallback_lang
             utt_end = float(utt.get("end", utt_start))
             segment_words = [
                 {
-                    "word": str(w.get("punctuated_word") or w.get("word") or "").strip(),
+                    "word": str(
+                        w.get("punctuated_word") or w.get("word") or ""
+                    ).strip(),
                     "start": _adjust_time(w["start"], offset),
                     "end": _adjust_time(w["end"], offset),
                 }
                 for w in words
-                if "start" in w and "end" in w
+                if "start" in w
+                and "end" in w
                 and float(w["start"]) >= utt_start - 1e-3
                 and float(w["end"]) <= utt_end + 1e-3
                 and str(w.get("punctuated_word") or w.get("word") or "").strip()
             ]
-            segments.append({
-                "start": _adjust_time(utt_start, offset),
-                "end": _adjust_time(utt_end, offset),
-                "text": str(utt.get("transcript") or "").strip(),
-                "words": segment_words,
-            })
+            segments.append(
+                {
+                    "start": _adjust_time(utt_start, offset),
+                    "end": _adjust_time(utt_end, offset),
+                    "text": str(utt.get("transcript") or "").strip(),
+                    "words": segment_words,
+                }
+            )
     elif words:
         valid_words = [
             {
@@ -69,15 +76,22 @@ def deepgram2whisper(dg_json: Dict[str, Any], offset: float = 0.0, fallback_lang
                 "end": _adjust_time(w["end"], offset),
             }
             for w in words
-            if "start" in w and "end" in w and str(w.get("punctuated_word") or w.get("word") or "").strip()
+            if "start" in w
+            and "end" in w
+            and str(w.get("punctuated_word") or w.get("word") or "").strip()
         ]
         if valid_words:
-            segments.append({
-                "start": valid_words[0]["start"],
-                "end": valid_words[-1]["end"],
-                "text": str(alt.get("transcript") or " ".join(w["word"] for w in valid_words)).strip(),
-                "words": valid_words,
-            })
+            segments.append(
+                {
+                    "start": valid_words[0]["start"],
+                    "end": valid_words[-1]["end"],
+                    "text": str(
+                        alt.get("transcript")
+                        or " ".join(w["word"] for w in valid_words)
+                    ).strip(),
+                    "words": valid_words,
+                }
+            )
 
     return {
         "segments": segments,
@@ -113,7 +127,9 @@ def transcribe_audio_deepgram(
     else:
         params["detect_language"] = "true"
 
-    rprint(f"[cyan]🎤 Transcribing audio with Deepgram (model={model}, language={language})...[/cyan]")
+    rprint(
+        f"[cyan]🎤 Transcribing audio with Deepgram (model={model}, language={language})...[/cyan]"
+    )
     start_t = time.perf_counter()
     check_cancel()
     response = requests.post(
@@ -124,7 +140,9 @@ def transcribe_audio_deepgram(
         timeout=180,
     )
     if response.status_code >= 400:
-        raise RuntimeError(f"Deepgram ASR failed (HTTP {response.status_code}): {response.text[:300]}")
+        raise RuntimeError(
+            f"Deepgram ASR failed (HTTP {response.status_code}): {response.text[:300]}"
+        )
     dg_json = response.json()
 
     elapsed = time.perf_counter() - start_t

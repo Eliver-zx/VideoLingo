@@ -37,7 +37,7 @@ from whisperx.audio import (  # noqa: E402  # type: ignore[import-not-found]
     SAMPLE_RATE as _WHISPERX_SR,
 )
 from rich import print as rprint  # noqa: E402
-from core.utils import except_handler, load_key, update_key  # noqa: E402
+from core.utils import except_handler, load_key, set_runtime_state as update_key  # noqa: E402
 
 
 def _complete_model_directory(path):
