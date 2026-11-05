@@ -32,6 +32,7 @@ def extraction(directory, config, encoder=True, real_encoder_probe=False):
         "rprint": lambda *args: None,
         "_AUDIO_DIR": str(directory),
         "_RAW_AUDIO_FILE": str(directory / "raw.mp3"),
+        "resolve_task_path": lambda p: p,
         "load_key_or": lambda key, default: config.get(key, default),
     }
     names = {
@@ -94,6 +95,32 @@ def test_sample_rate_below_recognition_rate_is_rejected(tmp_path):
     namespace = extraction(tmp_path, {"audio.raw_sample_rate": 8000})
     with pytest.raises(ValueError):
         namespace["raw_audio_settings"]()
+
+
+def test_ffmpeg_has_encoder_raises_runtime_error_when_ffmpeg_missing(
+    tmp_path, monkeypatch
+):
+    namespace = extraction(tmp_path, {}, real_encoder_probe=True)
+    namespace["_ffmpeg_has_encoder"]._cache = {}
+
+    def raise_missing(*args, **kwargs):
+        raise FileNotFoundError(3, "系统找不到指定的路径。")
+
+    monkeypatch.setattr(subprocess, "run", raise_missing)
+    with pytest.raises(RuntimeError, match="FFmpeg executable not found in PATH"):
+        namespace["_ffmpeg_has_encoder"]("libmp3lame")
+
+
+def test_audio_preprocess_imports_resolve_task_path():
+    source = (ROOT / "core/asr_backend/audio_preprocess.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imported_names = {
+        alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == "core.utils.models"
+        for alias in node.names
+    }
+    assert "resolve_task_path" in imported_names
 
 
 def band_level(pcm_path, low, high):

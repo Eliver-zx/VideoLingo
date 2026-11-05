@@ -57,12 +57,46 @@ from core.workspace import (
 
 
 def _configure_utf8_console():
-    """Allow Rich and task threads to print Unicode on Windows."""
+    """Allow Rich and task threads to print Unicode on Windows and sanitize PATH for FFmpeg discovery."""
     os.environ.setdefault("PYTHONUTF8", "1")
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if callable(reconfigure):
             reconfigure(encoding="utf-8", errors="replace")
+    if os.name == "nt":
+        raw_parts = os.environ.get("PATH", "").split(os.pathsep)
+        cleaned_parts: list[str] = []
+        seen_lower: set[str] = set()
+        for part in raw_parts:
+            p = part.strip().strip('"').strip("'")
+            if not p:
+                continue
+            key = p.lower()
+            if key not in seen_lower:
+                seen_lower.add(key)
+                cleaned_parts.append(p)
+        user_home = Path.home()
+        local_appdata = Path(
+            os.environ.get("LOCALAPPDATA") or (user_home / "AppData" / "Local")
+        )
+        candidates = [
+            Path(sys.executable).resolve().parent / "Library" / "bin",
+            Path(sys.prefix).resolve() / "Library" / "bin",
+            local_appdata / "Microsoft" / "WinGet" / "Links",
+            user_home / "scoop" / "shims",
+            Path("C:/ProgramData/chocolatey/bin"),
+            user_home / ".local" / "bin",
+        ]
+        winget_pkgs = local_appdata / "Microsoft" / "WinGet" / "Packages"
+        if winget_pkgs.is_dir():
+            for ff_exe in winget_pkgs.glob("*FFmpeg*/*/bin/ffmpeg.exe"):
+                candidates.append(ff_exe.parent)
+        for cand in candidates:
+            c_str = str(cand)
+            if cand.is_dir() and c_str.lower() not in seen_lower:
+                seen_lower.add(c_str.lower())
+                cleaned_parts.insert(0, c_str)
+        os.environ["PATH"] = os.pathsep.join(cleaned_parts)
 
 
 _configure_utf8_console()

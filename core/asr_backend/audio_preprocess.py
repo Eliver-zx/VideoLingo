@@ -1,7 +1,9 @@
 import math
 import os
+from pathlib import Path
 import re
 import subprocess
+import sys
 from typing import Dict, List, Tuple
 import pandas as pd
 from pydub import AudioSegment
@@ -9,11 +11,54 @@ from core.utils import load_key_or, set_runtime_state as update_key
 from core.utils.models import (
     _AUDIO_DIR,
     _RAW_AUDIO_FILE,
+    resolve_task_path,
 )
 from core.workspace import get_active_workspace
 from pydub.silence import detect_silence
 from pydub.utils import mediainfo
 from rich import print as rprint
+
+
+def _ensure_windows_ffmpeg_path() -> None:
+    """Sanitize quoted PATH entries on Windows and prepend common FFmpeg locations."""
+    if os.name != "nt":
+        return
+    raw_parts = os.environ.get("PATH", "").split(os.pathsep)
+    cleaned_parts: list[str] = []
+    seen_lower: set[str] = set()
+    for part in raw_parts:
+        p = part.strip().strip('"').strip("'")
+        if not p:
+            continue
+        key = p.lower()
+        if key not in seen_lower:
+            seen_lower.add(key)
+            cleaned_parts.append(p)
+    user_home = Path.home()
+    local_appdata = Path(
+        os.environ.get("LOCALAPPDATA") or (user_home / "AppData" / "Local")
+    )
+    candidates = [
+        Path(sys.executable).resolve().parent / "Library" / "bin",
+        Path(sys.prefix).resolve() / "Library" / "bin",
+        local_appdata / "Microsoft" / "WinGet" / "Links",
+        user_home / "scoop" / "shims",
+        Path("C:/ProgramData/chocolatey/bin"),
+        user_home / ".local" / "bin",
+    ]
+    winget_pkgs = local_appdata / "Microsoft" / "WinGet" / "Packages"
+    if winget_pkgs.is_dir():
+        for ff_exe in winget_pkgs.glob("*FFmpeg*/*/bin/ffmpeg.exe"):
+            candidates.append(ff_exe.parent)
+    for cand in candidates:
+        c_str = str(cand)
+        if cand.is_dir() and c_str.lower() not in seen_lower:
+            seen_lower.add(c_str.lower())
+            cleaned_parts.insert(0, c_str)
+    os.environ["PATH"] = os.pathsep.join(cleaned_parts)
+
+
+_ensure_windows_ffmpeg_path()
 
 
 def audio_slice_wav(path, start=None, end=None, sample_rate=16000):
@@ -63,9 +108,14 @@ def _ffmpeg_has_encoder(encoder_name: str) -> bool:
             errors="replace",
             timeout=10,
         )
-        found = encoder_name in result.stdout
+        found = encoder_name in (result.stdout or "")
         cache[encoder_name] = found
         return found
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "FFmpeg executable not found in PATH. Please install FFmpeg "
+            "(e.g. `winget install Gyan.FFmpeg` or `conda install ffmpeg`) and restart."
+        ) from exc
     except Exception:
         return False
 
@@ -88,7 +138,7 @@ def raw_audio_settings():
 
 def _raw_audio_command(input_file: str):
     sample_rate, bitrate = raw_audio_settings()
-    raw_out = globals().get("resolve_task_path", lambda p: p)(_RAW_AUDIO_FILE)
+    raw_out = resolve_task_path(_RAW_AUDIO_FILE)
     if _ffmpeg_has_encoder("libmp3lame"):
         return [
             "ffmpeg",
@@ -165,9 +215,8 @@ def normalize_audio_volume(
 
 
 def convert_video_to_audio(video_file: str):
-    resolve = globals().get("resolve_task_path", lambda p: p)
-    audio_dir = resolve(_AUDIO_DIR)
-    raw_file = resolve(_RAW_AUDIO_FILE)
+    audio_dir = resolve_task_path(_AUDIO_DIR)
+    raw_file = resolve_task_path(_RAW_AUDIO_FILE)
     os.makedirs(audio_dir, exist_ok=True)
     if not os.path.exists(raw_file):
         rprint("[blue]🎬➡️🎵 Converting to high quality audio with FFmpeg ......[/blue]")
@@ -180,9 +229,8 @@ def convert_video_to_audio(video_file: str):
 
 
 def prepare_audio_for_asr(audio_file: str):
-    resolve = globals().get("resolve_task_path", lambda p: p)
-    audio_dir = resolve(_AUDIO_DIR)
-    raw_file = resolve(_RAW_AUDIO_FILE)
+    audio_dir = resolve_task_path(_AUDIO_DIR)
+    raw_file = resolve_task_path(_RAW_AUDIO_FILE)
     os.makedirs(audio_dir, exist_ok=True)
     if not os.path.exists(raw_file):
         rprint("[blue]🎵 Preparing uploaded audio for ASR with FFmpeg ......[/blue]")
