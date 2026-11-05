@@ -1,6 +1,5 @@
 import math
 import os
-from pathlib import Path
 import re
 import subprocess
 from typing import Dict, List, Tuple
@@ -8,12 +7,10 @@ import pandas as pd
 from pydub import AudioSegment
 from core.utils import load_key_or, set_runtime_state as update_key
 from core.utils.models import (
-    _2_CLEANED_CHUNKS,
     _AUDIO_DIR,
     _RAW_AUDIO_FILE,
-    resolve_task_path,
 )
-from core.workspace import TaskWorkspace, get_active_workspace
+from core.workspace import get_active_workspace
 from pydub.silence import detect_silence
 from pydub.utils import mediainfo
 from rich import print as rprint
@@ -26,7 +23,7 @@ def audio_slice_wav(path, start=None, end=None, sample_rate=16000):
         for value in (start, end)
     ):
         raise ValueError("Audio interval must contain finite non-negative times")
-    cmd = ["ffmpeg", "-v", "error"]
+    cmd = ["ffmpeg", "-nostdin", "-v", "error"]
     if start is not None:
         cmd += ["-ss", str(start)]
     cmd += ["-i", str(path)]
@@ -51,11 +48,24 @@ def audio_slice_wav(path, start=None, end=None, sample_rate=16000):
 
 def _ffmpeg_has_encoder(encoder_name: str) -> bool:
     """Check if the current ffmpeg installation supports a given audio encoder."""
+    cache = getattr(_ffmpeg_has_encoder, "_cache", None)
+    if cache is None:
+        cache = {}
+        setattr(_ffmpeg_has_encoder, "_cache", cache)
+    if encoder_name in cache:
+        return cache[encoder_name]
     try:
         result = subprocess.run(
-            ["ffmpeg", "-encoders"], capture_output=True, text=True, timeout=10
+            ["ffmpeg", "-nostdin", "-encoders"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
         )
-        return encoder_name in result.stdout
+        found = encoder_name in result.stdout
+        cache[encoder_name] = found
+        return found
     except Exception:
         return False
 
@@ -82,6 +92,7 @@ def _raw_audio_command(input_file: str):
     if _ffmpeg_has_encoder("libmp3lame"):
         return [
             "ffmpeg",
+            "-nostdin",
             "-y",
             "-i",
             input_file,
@@ -96,7 +107,7 @@ def _raw_audio_command(input_file: str):
             "-ar",
             str(sample_rate),
             "-ac",
-            "1",
+            "2",
             "-metadata",
             "encoding=UTF-8",
             raw_out,
@@ -110,6 +121,7 @@ def _raw_audio_command(input_file: str):
     )
     return [
         "ffmpeg",
+        "-nostdin",
         "-y",
         "-i",
         input_file,
@@ -121,7 +133,7 @@ def _raw_audio_command(input_file: str):
         "-ar",
         str(sample_rate),
         "-ac",
-        "1",
+        "2",
         "-f",
         "wav",
         raw_out,
@@ -181,15 +193,26 @@ def prepare_audio_for_asr(audio_file: str):
 
 
 def get_audio_duration(audio_file: str) -> float:
-    """Get the duration of an audio file using ffmpeg."""
-    cmd = ["ffmpeg", "-i", audio_file]
+    """Get the duration of an audio file using soundfile with an FFmpeg fallback."""
+    try:
+        import soundfile as sf
+
+        info = sf.info(str(audio_file))
+        if info.duration > 0:
+            return float(info.duration)
+    except Exception:
+        pass
+
+    cmd = ["ffmpeg", "-nostdin", "-i", str(audio_file)]
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     _, stderr = process.communicate()
-    output = stderr.decode("utf-8", errors="ignore")
+    output = stderr.decode("utf-8", errors="replace")
 
     try:
-        duration_str = [line for line in output.split("\n") if "Duration" in line][0]
-        duration_parts = duration_str.split("Duration: ")[1].split(",")[0].split(":")
+        duration_str = [line for line in output.splitlines() if "Duration:" in line][0]
+        duration_parts = (
+            duration_str.split("Duration: ")[1].split(",")[0].strip().split(":")
+        )
         duration = (
             float(duration_parts[0]) * 3600
             + float(duration_parts[1]) * 60
@@ -197,7 +220,7 @@ def get_audio_duration(audio_file: str) -> float:
         )
     except Exception as e:
         print(f"[red]❌ Error: Failed to get audio duration: {e}[/red]")
-        duration = 0
+        duration = 0.0
     return duration
 
 
@@ -385,8 +408,6 @@ def process_transcription(result: Dict) -> pd.DataFrame:
 
 
 def save_results(df: pd.DataFrame):
-    cleaned_path = resolve_task_path(_2_CLEANED_CHUNKS)
-
     # Remove rows where 'text' is empty
     initial_rows = len(df)
     df = pd.DataFrame(df[df["text"].str.len() > 0]).copy()
@@ -413,15 +434,7 @@ def save_results(df: pd.DataFrame):
         }
         for _, row in df.iterrows()
     ]
-    ws = (
-        get_active_workspace()
-        if str(_2_CLEANED_CHUNKS).startswith("output/")
-        else TaskWorkspace(
-            Path(cleaned_path).parent.parent
-            if Path(cleaned_path).parent.name == "log"
-            else Path(cleaned_path).parent
-        )
-    )
+    ws = get_active_workspace()
     ws.save_words(word_records)
     rprint(f"[green]📊 Saved {len(word_records)} words to {ws.db_path}[/green]")
 

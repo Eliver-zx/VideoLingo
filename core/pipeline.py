@@ -8,15 +8,12 @@ from pathlib import Path
 from core.task_runner import TaskRunner
 from core.utils.config_utils import load_key, load_key_or
 from core.utils.models import (
-    _4_1_TERMINOLOGY,
-    _4_2_TRANSLATION,
-    _5_SPLIT_SUB,
     _10_DUB_TRUNCATED,
     _TEXT_DONE_MARKER,
     _AUDIO_DONE_MARKER,
     resolve_task_path,
 )
-from core.workspace import workspace_for_path
+from core.workspace import get_active_workspace
 
 
 VALID_TTS_METHODS = (
@@ -77,32 +74,29 @@ DUBBING_STEPS = [
 
 
 # These messages are translation keys as well
-REVIEW_TERMINOLOGY = "Terminology is ready for review. Edit `output/log/terminology.json` if needed, then press Resume to start translating."
-INVALID_TERMINOLOGY = "`output/log/terminology.json` can not be read after your edit. Fix it, then press Resume."
-REVIEW_TRANSLATION = "Translation is ready for review. Edit the `Translation` column of `output/log/translation_results.xlsx` if needed, without changing the `Source` column or the number of rows. Save and close the file, then press Resume."
-INVALID_TRANSLATION = "`output/log/translation_results.xlsx` can not be used after your edit. Keep the rows and the `Source` column as they were, leave no translation empty, and close the file. Then press Resume."
+REVIEW_TERMINOLOGY = "Terminology is ready for review. Edit the terminology in the workbench if needed, then press Resume to start translating."
+INVALID_TERMINOLOGY = (
+    "Terminology can not be read after your edit. Fix it, then press Resume."
+)
+REVIEW_TRANSLATION = "Translation is ready for review. Edit the translated lines in the workbench if needed, then press Resume."
+INVALID_TRANSLATION = "Translation can not be used after your edit. Leave no translation empty, then press Resume."
 
 
 def terminology_error():
-    """What is wrong with the terminology file, or None when the translation can use it."""
-    term_path = Path(resolve_task_path(_4_1_TERMINOLOGY))
-    ws = workspace_for_path(term_path)
-    if term_path.is_file():
-        try:
-            terminology = json.loads(term_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
-            return str(e)
-        terms = terminology.get("terms") if isinstance(terminology, dict) else None
-    elif ws.has_terms():
-        terminology = ws.load_terms()
-        terms = terminology.get("terms") if isinstance(terminology, dict) else None
-    else:
+    """What is wrong with the terminology in the workspace database, or None when the translation can use it."""
+    ws = get_active_workspace()
+    if not ws.has_terms():
         return f"Missing terminology in {ws.db_path}"
+    terminology = ws.load_terms()
+    terms = terminology.get("terms") if isinstance(terminology, dict) else None
     if not isinstance(terms, list):
         return "`terms` must be a list"
     for term in terms:
-        if not isinstance(term, dict) or not all(
-            isinstance(term.get(key), str) for key in ("src", "tgt", "note")
+        if (
+            not isinstance(term, dict)
+            or not all(isinstance(term.get(key), str) for key in ("src", "tgt", "note"))
+            or not term.get("src", "").strip()
+            or not term.get("tgt", "").strip()
         ):
             return f"Each term needs the texts `src`, `tgt` and `note`: {term}"
     return None
@@ -111,12 +105,10 @@ def terminology_error():
 def review_terminology():
     """Optional checkpoint `pause_before_translate`: the task waits until the user resumes it."""
     runner = TaskRunner._current
-    trans_path = Path(resolve_task_path(_4_2_TRANSLATION))
-    ws = workspace_for_path(trans_path)
+    ws = get_active_workspace()
     if (
         runner is None
         or not load_key("pause_before_translate")
-        or trans_path.exists()
         or ws.has_translations()
     ):
         return
@@ -127,22 +119,13 @@ def review_terminology():
         error = terminology_error()
         if error is None:
             return
-        print(f"⚠️ {_4_1_TERMINOLOGY}: {error}")
+        print(f"⚠️ terminology: {error}")
         message = INVALID_TERMINOLOGY
 
 
 def read_translation():
     """The source lines and the translated lines of the translation results, empty cells as ''."""
-    trans_path = Path(resolve_task_path(_4_2_TRANSLATION))
-    ws = workspace_for_path(trans_path)
-    if trans_path.is_file():
-        import pandas as pd
-
-        df = pd.read_excel(trans_path)
-        return [
-            ["" if pd.isna(value) else str(value).strip() for value in df[column]]
-            for column in ("Source", "Translation")
-        ]
+    ws = get_active_workspace()
     utts = ws.load_utterances()
     if not utts:
         raise FileNotFoundError(f"No utterances found in {ws.db_path}")
@@ -156,11 +139,8 @@ def translation_error(source, translation):
     """What is wrong with the edited translation results, or None when the subtitles can use them."""
     try:
         edited_source, edited_translation = read_translation()
-    except Exception as e:  # locked by the spreadsheet program, no longer a spreadsheet, a missing column
+    except Exception as e:
         return f"{type(e).__name__}: {e}"
-    trans_path = Path(resolve_task_path(_4_2_TRANSLATION))
-    if trans_path.is_file() and edited_source != source:
-        return "the rows or the `Source` column have changed"
     if len(edited_translation) == len(translation):
         for row, (before, after) in enumerate(zip(translation, edited_translation), 2):
             if before and not after:
@@ -177,12 +157,10 @@ def translation_error(source, translation):
 def review_translation():
     """Optional checkpoint `pause_after_translate`: the task waits until the user resumes it."""
     runner = TaskRunner._current
-    split_sub_path = Path(resolve_task_path(_5_SPLIT_SUB))
-    ws = workspace_for_path(split_sub_path)
+    ws = get_active_workspace()
     if (
         runner is None
         or not load_key_or("pause_after_translate", False)
-        or split_sub_path.exists()
         or ws.has_sub_cues()
     ):
         return
@@ -194,7 +172,7 @@ def review_translation():
         error = translation_error(source, translation)
         if error is None:
             return
-        print(f"⚠️ {_4_2_TRANSLATION}: {error}")
+        print(f"⚠️ translation: {error}")
         message = INVALID_TRANSLATION
 
 

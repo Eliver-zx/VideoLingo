@@ -6,6 +6,7 @@ import copy
 import csv
 from datetime import datetime, timezone
 import errno
+import gc
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ import platform
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import threading
 import time
@@ -45,8 +47,8 @@ STAGE_ORDER: tuple[str, ...] = (
 _ACTIVE_TASK_DIR: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
     "_ACTIVE_TASK_DIR", default=None
 )
-# Track (resolved_db_path, st_ino) for SQLite databases that have already applied WAL and DDL.
-_INITIALIZED_DB_INODES: set[tuple[Path, int]] = set()
+# Track (resolved_db_path, st_ino, birthtime_ns) for initialized SQLite databases.
+_INITIALIZED_DB_INODES: set[tuple[Path, int, int]] = set()
 _INIT_DB_LOCK = threading.Lock()
 # In-memory mirror of runtime task attributes keyed by resolved workspace root path for fast read access.
 _RUNTIME_STATE_BY_WS: dict[Path, dict[str, Any]] = {}
@@ -57,6 +59,56 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
+def replace_with_retry(src: str | Path, dst: str | Path, attempts: int = 5) -> None:
+    """Retry os.replace on transient Windows NTFS PermissionError locks."""
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(0.05 * (i + 1))
+
+
+def rmtree_robust(
+    path: str | Path, *, ignore_errors: bool = False, attempts: int = 5
+) -> None:
+    """Remove a directory tree cleanly on Windows where Defender or SQLite WAL handles may briefly lock files."""
+    target = Path(path)
+    if not target.exists():
+        return
+    with _INIT_DB_LOCK:
+        target_resolved = target.resolve()
+        for entry in [
+            e
+            for e in _INITIALIZED_DB_INODES
+            if e[0] == target_resolved or target_resolved in e[0].parents
+        ]:
+            _INITIALIZED_DB_INODES.discard(entry)
+    gc.collect()
+
+    def _onerror(func, err_path, _exc_info):
+        with contextlib.suppress(OSError):
+            os.chmod(err_path, stat.S_IWRITE)
+            func(err_path)
+
+    for i in range(attempts):
+        if not target.exists():
+            return
+        try:
+            shutil.rmtree(target, onerror=_onerror)
+            return
+        except OSError:
+            if i == attempts - 1:
+                if ignore_errors:
+                    shutil.rmtree(target, ignore_errors=True)
+                    return
+                raise
+            gc.collect()
+            time.sleep(0.05 * (i + 1))
+
+
 def _atomic_write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}.{threading.get_ident()}")
@@ -65,7 +117,7 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
             json.dump(payload, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, path)
+        replace_with_retry(tmp_path, path)
     finally:
         if tmp_path.exists():
             with contextlib.suppress(OSError):
@@ -156,6 +208,8 @@ def probe_media_metadata(media_path: str | Path) -> dict[str, Any]:
         "duration_sec": 0.0,
         "has_audio": False,
         "has_video": False,
+        "codec_name": "",
+        "pix_fmt": "",
     }
     if not p.is_file():
         return info
@@ -165,14 +219,20 @@ def probe_media_metadata(media_path: str | Path) -> dict[str, Any]:
         "-v",
         "error",
         "-show_entries",
-        "format=duration:stream=index,codec_type,width,height:stream_tags=rotate:stream_side_data=rotation",
+        "format=duration:stream=index,codec_type,codec_name,pix_fmt,width,height:stream_tags=rotate:stream_side_data=rotation",
         "-of",
         "json",
         str(p),
     ]
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, check=True, timeout=15
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
+            timeout=15,
         )
         data = json.loads(proc.stdout or "{}")
     except Exception:
@@ -195,6 +255,8 @@ def probe_media_metadata(media_path: str | Path) -> dict[str, Any]:
             info["has_video"] = True
             info["width"] = width
             info["height"] = height
+            info["codec_name"] = str(stream.get("codec_name") or "").lower()
+            info["pix_fmt"] = str(stream.get("pix_fmt") or "").lower()
             rot = 0
             tag_rot = (stream.get("tags") or {}).get("rotate")
             if tag_rot is not None:
@@ -256,18 +318,6 @@ class TaskWorkspace:
     @property
     def db_path(self) -> Path:
         return self.root / "project.sqlite"
-
-    @property
-    def words_path(self) -> Path:
-        return self.log_dir / "words.json"
-
-    @property
-    def terms_path(self) -> Path:
-        return self.log_dir / "terms.json"
-
-    @property
-    def utterances_path(self) -> Path:
-        return self.log_dir / "utterances.json"
 
     @property
     def raw_audio_path(self) -> Path:
@@ -608,24 +658,38 @@ class TaskWorkspace:
             """
         )
 
+    @staticmethod
+    def _db_stat_signature(resolved_db: Path) -> tuple[Path, int, int] | None:
+        try:
+            st = resolved_db.stat()
+        except OSError:
+            return None
+        if st.st_size <= 0:
+            return None
+        birthtime_ns = getattr(st, "st_birthtime_ns", None)
+        if birthtime_ns is None:
+            birthtime = getattr(st, "st_birthtime", None)
+            if birthtime is not None:
+                birthtime_ns = int(birthtime * 1e9)
+            else:
+                birthtime_ns = st.st_ctime_ns if os.name == "nt" else 0
+        if st.st_ino == 0 and birthtime_ns == 0:
+            return None
+        return (resolved_db, st.st_ino, int(birthtime_ns))
+
     def _ensure_db_initialized(self, conn: sqlite3.Connection) -> None:
         resolved_db = self.db_path.resolve()
-        try:
-            ino = resolved_db.stat().st_ino
-        except OSError:
-            ino = 0
-        cache_key = (resolved_db, ino)
-        if ino and cache_key in _INITIALIZED_DB_INODES:
+        sig = self._db_stat_signature(resolved_db)
+        if sig is not None and sig in _INITIALIZED_DB_INODES:
             return
         with _INIT_DB_LOCK:
-            if ino and cache_key in _INITIALIZED_DB_INODES:
+            sig = self._db_stat_signature(resolved_db)
+            if sig is not None and sig in _INITIALIZED_DB_INODES:
                 return
             self._ensure_schema(conn)
-            try:
-                ino = resolved_db.stat().st_ino
-                _INITIALIZED_DB_INODES.add((resolved_db, ino))
-            except OSError:
-                pass
+            sig = self._db_stat_signature(resolved_db)
+            if sig is not None:
+                _INITIALIZED_DB_INODES.add(sig)
 
     @contextlib.contextmanager
     def _db(self, *, write: bool = False):
@@ -875,9 +939,6 @@ class TaskWorkspace:
                 """,
                 (ts,),
             )
-        if self.words_path.is_file():
-            with contextlib.suppress(OSError):
-                self.words_path.unlink()
 
     def load_words(self) -> list[dict[str, Any]]:
         with self._db(write=False) as conn:
@@ -887,12 +948,6 @@ class TaskWorkspace:
                 ).fetchall()
                 if rows:
                     return [json.loads(r["payload_json"]) for r in rows]
-        if self.words_path.is_file():
-            with open(self.words_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list) and data:
-                self.save_words(data)
-                return data
         return []
 
     def has_words(self) -> bool:
@@ -901,15 +956,11 @@ class TaskWorkspace:
                 row = conn.execute("SELECT 1 FROM words LIMIT 1").fetchone()
                 if row is not None:
                     return True
-        return self.words_path.is_file()
+        return False
 
     def get_words_mtime(self) -> float:
         mt = self.get_kv_mtime("words_saved")
-        if mt > 0:
-            return mt
-        if self.words_path.is_file():
-            return os.path.getmtime(self.words_path)
-        return 0.0
+        return mt if mt > 0 else 0.0
 
     def save_terms(
         self,
@@ -989,10 +1040,6 @@ class TaskWorkspace:
                     ts,
                 ),
             )
-        for p in (self.terms_path, self.log_dir / "terminology.json"):
-            if p.is_file():
-                with contextlib.suppress(OSError):
-                    p.unlink()
 
     def load_terms(self) -> dict[str, Any]:
         with self._db(write=False) as conn:
@@ -1022,17 +1069,6 @@ class TaskWorkspace:
                         for r in term_rows
                     ]
                     return {"summary": summary_str, "terms": norm_terms}
-
-        for candidate in (self.terms_path, self.log_dir / "terminology.json"):
-            if candidate.is_file():
-                mt = os.path.getmtime(candidate)
-                with open(candidate, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    summary_str = str(data.get("summary") or data.get("theme") or "")
-                    raw_terms = data.get("terms") or []
-                    self.save_terms(summary_str, raw_terms, mtime=mt)
-                    return self.load_terms()
         return {"summary": "", "terms": []}
 
     def has_terms(self) -> bool:
@@ -1046,18 +1082,11 @@ class TaskWorkspace:
                 t_row = conn.execute("SELECT 1 FROM terms LIMIT 1").fetchone()
                 if t_row is not None:
                     return True
-        return (
-            self.terms_path.is_file() or (self.log_dir / "terminology.json").is_file()
-        )
+        return False
 
     def get_terms_mtime(self) -> float:
         mt = self.get_kv_mtime("terms_meta")
-        if mt > 0:
-            return mt
-        for p in (self.terms_path, self.log_dir / "terminology.json"):
-            if p.is_file():
-                return os.path.getmtime(p)
-        return 0.0
+        return mt if mt > 0 else 0.0
 
     def set_terms_mtime(self, mtime: float) -> None:
         meta = self.get_kv("terms_meta")
@@ -1155,9 +1184,6 @@ class TaskWorkspace:
                     """,
                     (k, json.dumps(v), ts),
                 )
-        if self.utterances_path.is_file():
-            with contextlib.suppress(OSError):
-                self.utterances_path.unlink()
         return next_rev
 
     def load_utterances(self) -> list[dict[str, Any]]:
@@ -1168,13 +1194,6 @@ class TaskWorkspace:
                 ).fetchall()
                 if rows:
                     return [json.loads(r["payload_json"]) for r in rows]
-        if self.utterances_path.is_file():
-            mt = os.path.getmtime(self.utterances_path)
-            with open(self.utterances_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list) and data:
-                self.save_utterances(data, mtime=mt)
-                return data
         return []
 
     def has_utterances(self) -> bool:
@@ -1183,7 +1202,7 @@ class TaskWorkspace:
                 row = conn.execute("SELECT 1 FROM utterances LIMIT 1").fetchone()
                 if row is not None:
                     return True
-        return self.utterances_path.is_file()
+        return False
 
     def has_translations(self) -> bool:
         if bool(self.get_kv("translations_saved", False)):
@@ -1199,11 +1218,7 @@ class TaskWorkspace:
 
     def get_utterances_mtime(self) -> float:
         mt = self.get_kv_mtime("utterances_saved")
-        if mt > 0:
-            return mt
-        if self.utterances_path.is_file():
-            return os.path.getmtime(self.utterances_path)
-        return 0.0
+        return mt if mt > 0 else 0.0
 
     def get_utterances_revision(self) -> int:
         return int(self.get_kv("utterances_revision", 0) or 0)
@@ -1334,23 +1349,19 @@ class TaskWorkspace:
             )
         )
 
-    def is_step_done(self, target_path: str | Path) -> bool:
-        s = str(target_path).replace("\\", "/")
-        name = Path(s).name
-        if name in {"cleaned_chunks.xlsx", "words.json"}:
+    def is_step_done(self, step: str | Path) -> bool:
+        key = Path(str(step).replace("\\", "/")).name
+        if key == "asr":
             return self.has_words()
-        if name in {"split_by_nlp.txt", "split_by_meaning.txt", "utterances.json"}:
+        if key == "split":
             return self.has_utterances()
-        if name in {"terminology.json", "terms.json"}:
+        if key == "summarize":
             return self.has_terms()
-        if name == "translation_results.xlsx":
+        if key == "translate":
             return self.has_translations()
-        if name in {
-            "translation_results_for_subtitles.xlsx",
-            "translation_results_remerged.xlsx",
-        }:
+        if key == "sub_split":
             return self.has_sub_cues()
-        if name == "tts_tasks.xlsx":
+        if key == "dub_tasks":
             if not self.has_dub_chunks():
                 return False
             dub_mtime = self.get_kv_mtime("dub_tasks_saved")
@@ -1412,12 +1423,6 @@ class TaskWorkspace:
                     assert conn is not None
                     conn.execute("DELETE FROM words")
                     conn.execute("DELETE FROM task_kv WHERE key = 'words_saved'")
-            paths_to_remove.extend(
-                [
-                    self.words_path,
-                    self.log_dir / "cleaned_chunks.xlsx",
-                ]
-            )
         elif stage == "split":
             if self.db_path.is_file():
                 with self._db(write=True) as conn:
@@ -1426,25 +1431,12 @@ class TaskWorkspace:
                     conn.execute(
                         "DELETE FROM task_kv WHERE key IN ('utterances_saved', 'utterances_revision', 'translations_saved', 'sub_cues_saved', 'sub_split_cfg', 'sub_split_rev')"
                     )
-            paths_to_remove.extend(
-                [
-                    self.utterances_path,
-                    self.log_dir / "split_by_nlp.txt",
-                    self.log_dir / "split_by_meaning.txt",
-                ]
-            )
         elif stage == "summarize":
             if self.db_path.is_file():
                 with self._db(write=True) as conn:
                     assert conn is not None
                     conn.execute("DELETE FROM terms")
                     conn.execute("DELETE FROM task_kv WHERE key = 'terms_meta'")
-            paths_to_remove.extend(
-                [
-                    self.terms_path,
-                    self.log_dir / "terminology.json",
-                ]
-            )
         elif stage == "translate":
             if self.db_path.is_file():
                 utts = self.load_utterances()
@@ -1461,12 +1453,6 @@ class TaskWorkspace:
                     conn.execute(
                         "DELETE FROM task_kv WHERE key IN ('translation_cache_fp', 'translations_saved', 'sub_cues_saved', 'sub_split_cfg', 'sub_split_rev')"
                     )
-            paths_to_remove.extend(
-                [
-                    self.log_dir / "translation_results.xlsx",
-                    self.log_dir / "translation_raw.csv",
-                ]
-            )
         elif stage == "sub_split":
             if self.db_path.is_file():
                 utts = self.load_utterances()
@@ -1482,8 +1468,6 @@ class TaskWorkspace:
                     self.trans_srt_path,
                     self.bi_srt_path,
                     self.bi_ass_path,
-                    self.log_dir / "translation_results_for_subtitles.xlsx",
-                    self.log_dir / "translation_results_remerged.xlsx",
                     self.root / ".subtitle_done",
                 ]
             )
@@ -1499,7 +1483,6 @@ class TaskWorkspace:
                     )
             paths_to_remove.extend(
                 [
-                    self.audio_dir / "tts_tasks.xlsx",
                     self.log_dir / "dub_truncated.json",
                     self.dub_srt_path,
                     self.root / ".dubbing_done",
@@ -1530,7 +1513,7 @@ class TaskWorkspace:
                     p.unlink()
         for d in dirs_to_clear:
             if d.is_dir():
-                shutil.rmtree(d, ignore_errors=True)
+                rmtree_robust(d, ignore_errors=True)
                 d.mkdir(parents=True, exist_ok=True)
 
 
@@ -1651,7 +1634,7 @@ def delete_glossary_domain(domain: str, base_dir: str | Path | None = None) -> b
     d_dir = domain_dir_path(safe, base_dir)
     if not d_dir.is_dir():
         return False
-    shutil.rmtree(d_dir)
+    rmtree_robust(d_dir)
     return True
 
 
@@ -1786,7 +1769,7 @@ def save_global_glossary(
             )
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp_path, p)
+    replace_with_retry(tmp_path, p)
 
 
 def promote_terms_to_global(

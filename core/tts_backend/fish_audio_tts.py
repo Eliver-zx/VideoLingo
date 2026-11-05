@@ -36,14 +36,19 @@ def stable_reference(task_df):
         clip = AudioSegment.from_file(path)
         if len(audio) + len(clip) > MAX_REFERENCE_SECONDS * 1000:
             if not texts:  # one line that is longer than the limit
-                audio, texts = clip[:MAX_REFERENCE_SECONDS * 1000], [str(row['origin'])]
+                audio, texts = (
+                    clip[: MAX_REFERENCE_SECONDS * 1000],
+                    [str(row["origin"])],
+                )
             break
         audio += clip
-        texts.append(str(row['origin']))
+        texts.append(str(row["origin"]))
         if len(audio) >= MIN_REFERENCE_SECONDS * 1000:
             break
     if not texts:
-        raise FileNotFoundError(f"No reference audio of the video in {_AUDIO_REFERS_DIR}")
+        raise FileNotFoundError(
+            f"No reference audio of the video in {_AUDIO_REFERS_DIR}"
+        )
     return _wav_bytes(audio), " ".join(texts)
 
 
@@ -59,8 +64,13 @@ def _with_length(wav):
     data = wav.find(b"data", 12, 200)
     if wav[:4] != b"RIFF" or data < 0:
         return wav
-    return (wav[:4] + struct.pack("<I", len(wav) - 8) + wav[8:data + 4]
-            + struct.pack("<I", len(wav) - data - 8) + wav[data + 8:])
+    return (
+        wav[:4]
+        + struct.pack("<I", len(wav) - 8)
+        + wav[8 : data + 4]
+        + struct.pack("<I", len(wav) - data - 8)
+        + wav[data + 8 :]
+    )
 
 
 @except_handler("Failed to generate audio using Fish Audio", retry=3, delay=1)
@@ -76,7 +86,9 @@ def fish_audio_tts(text, save_as, number=None, task_df=None):
     if mode == "preset":
         payload["reference_id"] = voice_id_of(settings.get("voice_id"))
         if not payload["reference_id"]:
-            raise ValueError("Fish Audio: the mode `preset` needs a voice id (fish_audio.voice_id)")
+            raise ValueError(
+                "Fish Audio: the mode `preset` needs a voice id (fish_audio.voice_id)"
+            )
     else:
         audio, reference_text = stable_reference(task_df)
         payload["references"] = [{"audio": audio, "text": reference_text}]
@@ -86,11 +98,20 @@ def fish_audio_tts(text, save_as, number=None, task_df=None):
         "Content-Type": "application/msgpack",  # JSON cannot carry the reference audio
         "model": settings.get("model") or DEFAULT_MODEL,
     }
-    response = requests.post(API_URL, headers=headers, data=msgpack.packb(payload, use_bin_type=True), timeout=180)
+    response = requests.post(
+        API_URL,
+        headers=headers,
+        data=msgpack.packb(payload, use_bin_type=True),
+        timeout=180,
+    )
     if response.status_code != 200:
-        raise ValueError(f"Fish Audio request failed: HTTP {response.status_code} {response.text[:200]}")
+        raise ValueError(
+            f"Fish Audio request failed: HTTP {response.status_code} {response.text[:200]}"
+        )
     if len(response.content) <= 44:
-        raise ValueError(f"Fish Audio request failed: HTTP 200 without audio ({len(response.content)} bytes)")
+        raise ValueError(
+            f"Fish Audio request failed: HTTP 200 without audio ({len(response.content)} bytes)"
+        )
 
     Path(save_as).parent.mkdir(parents=True, exist_ok=True)
     with open(save_as, "wb") as f:
@@ -99,6 +120,11 @@ def fish_audio_tts(text, save_as, number=None, task_df=None):
 
 
 if __name__ == "__main__":
-    import pandas as pd
-    from core.utils.models import _8_1_AUDIO_TASK
-    fish_audio_tts("你好，欢迎使用 VideoLingo！", "test.wav", 1, pd.read_excel(_8_1_AUDIO_TASK))
+    from core.workspace import get_active_workspace
+
+    fish_audio_tts(
+        "你好，欢迎使用 VideoLingo！",
+        "test.wav",
+        1,
+        get_active_workspace().load_dub_tasks_df(),
+    )

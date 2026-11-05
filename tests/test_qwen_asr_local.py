@@ -1261,3 +1261,49 @@ def test_compatibility_character_uses_all_its_token_timestamps():
     assert qwen.attach_words("㍿", [("株式", 0, 1), ("会社", 1, 2)], offset=5) == [
         {"word": "㍿", "start": 5.0, "end": 7.0}
     ]
+
+
+def test_sharded_weights_and_quoted_model_dir_validation(monkeypatch, tmp_path):
+    """Sharded checkpoints must have all weight_map shards + tokenizer/preprocessor configs; quoted model_dir is stripped."""
+    import json
+
+    monkeypatch.setattr(qwen, "load_key", lambda key: f'  "{tmp_path}"  ')
+    downloads = []
+    fake_hf = SimpleNamespace(
+        snapshot_download=lambda repo_id, local_dir: downloads.append(
+            (repo_id, local_dir)
+        )
+    )
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hf)
+    model_dir = tmp_path / "Qwen3-ASR-1.7B"
+    model_dir.mkdir(parents=True)
+    (model_dir / "config.json").write_text("{}", encoding="utf-8")
+    (model_dir / "model-00001-of-00002.safetensors").write_bytes(b"s1")
+    # Sharded filename present before model.safetensors.index.json is downloaded -> incomplete
+    assert not qwen._has_complete_weights(model_dir)
+    (model_dir / "model.safetensors.index.json").write_text(
+        json.dumps(
+            {
+                "weight_map": {
+                    "layer.0": "model-00001-of-00002.safetensors",
+                    "layer.1": "model-00002-of-00002.safetensors",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Missing shard 2 -> incomplete
+    assert not qwen._has_complete_weights(model_dir)
+    qwen._model_source("Qwen/Qwen3-ASR-1.7B")
+    assert len(downloads) == 1
+
+    # Add shard 2, still missing tokenizer_config.json & preprocessor_config.json -> incomplete
+    (model_dir / "model-00002-of-00002.safetensors").write_bytes(b"s2")
+    assert not qwen._has_complete_weights(model_dir)
+
+    (model_dir / "tokenizer_config.json").write_text("{}", encoding="utf-8")
+    (model_dir / "preprocessor_config.json").write_text("{}", encoding="utf-8")
+    assert qwen._has_complete_weights(model_dir)
+    downloads.clear()
+    assert qwen._model_source("Qwen/Qwen3-ASR-1.7B") == str(model_dir.resolve())
+    assert downloads == []

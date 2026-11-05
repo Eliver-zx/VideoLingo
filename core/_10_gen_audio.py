@@ -15,7 +15,6 @@ from core.concurrency import ContextThreadPoolExecutor
 
 from core.utils import check_cancel, load_key, rprint
 from core.utils.models import (
-    _8_1_AUDIO_TASK,
     _10_DUB_TRUNCATED,
     _AUDIO_SEGS_DIR,
     _AUDIO_TMP_DIR,
@@ -23,7 +22,7 @@ from core.utils.models import (
 )
 from core.asr_backend.audio_preprocess import get_audio_duration
 from core.tts_backend.tts_main import tts_main
-from core.workspace import workspace_for_path
+from core.workspace import get_active_workspace
 
 console = Console()
 
@@ -52,6 +51,7 @@ def adjust_audio_speed(input_file: str, output_file: str, speed_factor: float) -
     atempo = speed_factor
     cmd = [
         "ffmpeg",
+        "-nostdin",
         "-i",
         input_file,
         "-filter:a",
@@ -217,10 +217,12 @@ def process_chunk(
     max_speed: float | None = None,
 ) -> tuple[float, bool]:
     """Process audio chunk and calculate speed factor"""
-    chunk_durs = chunk_df["real_dur"].sum()
-    tol_durs = chunk_df["tol_dur"].sum()
-    durations = tol_durs - chunk_df.iloc[-1]["tolerance"]
-    all_gaps = chunk_df["gap"].sum() - chunk_df.iloc[-1]["gap"]
+    chunk_durs = float(sum(chunk_df["real_dur"].tolist()))
+    tol_durs = float(sum(chunk_df["tol_dur"].tolist()))
+    durations = tol_durs - float(chunk_df["tolerance"].tolist()[-1])
+    all_gaps = float(sum(chunk_df["gap"].tolist())) - float(
+        chunk_df["gap"].tolist()[-1]
+    )
 
     keep_gaps = True
     speed_var_error = 0.1
@@ -245,7 +247,7 @@ def process_chunk(
     if max_speed is not None:
         speed_factor = min(speed_factor, max(max_speed, min_speed))
 
-    return round(speed_factor, 3), keep_gaps
+    return round(float(speed_factor), 3), keep_gaps
 
 
 def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
@@ -378,11 +380,8 @@ def gen_audio() -> None:
     os.makedirs(resolve_task_path(_AUDIO_SEGS_DIR), exist_ok=True)
 
     # 📝 Step2: Load task records
-    audio_task_path = resolve_task_path(_8_1_AUDIO_TASK)
-    ws = workspace_for_path(audio_task_path)
+    ws = get_active_workspace()
     tasks_df = ws.load_dub_tasks_df()
-    if tasks_df.empty and os.path.exists(audio_task_path):
-        tasks_df = pd.read_excel(audio_task_path)
     rprint("[green]📊 Loaded task records successfully[/green]")
 
     # 🔊 Step3: Generate TTS audio

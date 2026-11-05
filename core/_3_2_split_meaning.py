@@ -1,5 +1,4 @@
 from difflib import SequenceMatcher
-import os
 import re
 from core.prompts import get_split_prompt
 from core.task_runner import StopTask
@@ -14,11 +13,6 @@ from core.utils import (  # noqa: F401
 from rich.console import Console
 from rich.table import Table
 from core.utils.config_utils import get_text_joiner
-from core.utils.models import (
-    _3_1_SPLIT_BY_NLP,  # noqa: F401
-    _3_2_SPLIT_BY_MEANING,
-    resolve_task_path,
-)
 
 console = Console()
 
@@ -174,35 +168,13 @@ def split_sentence(
     return best_split
 
 
-@check_file_exists(_3_2_SPLIT_BY_MEANING)
+@check_file_exists("split")
 def split_sentences_by_meaning():
     """Keep complete sentences from _3_1_split_nlp intact for translation;
     short subtitle line splitting is performed after translation in _5_split_sub."""
-    from core.workspace import workspace_for_path
+    from core.workspace import get_active_workspace
 
-    meaning_path = resolve_task_path(_3_2_SPLIT_BY_MEANING)
-    nlp_path = resolve_task_path(_3_1_SPLIT_BY_NLP)
-    ws = workspace_for_path(meaning_path)
-    if not ws.has_utterances():
-        for candidate in (meaning_path, nlp_path):
-            if os.path.exists(candidate):
-                with open(candidate, "r", encoding="utf-8") as f:
-                    lines = [ln.strip() for ln in f if ln.strip()]
-                if lines:
-                    ws.save_utterances(
-                        [
-                            {
-                                "id": i,
-                                "word_span": [0, 0],
-                                "start": 0.0,
-                                "end": 0.0,
-                                "gap_after": 0.0,
-                                "src": ln,
-                            }
-                            for i, ln in enumerate(lines)
-                        ]
-                    )
-                    break
+    ws = get_active_workspace()
     if not ws.has_utterances():
         raise FileNotFoundError(
             f"Missing utterances in workspace database: {ws.db_path}"

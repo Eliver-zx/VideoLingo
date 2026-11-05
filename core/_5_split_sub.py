@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import inspect
 import math
-import os
 import re
 from typing import Any, List, Tuple
 
-import pandas as pd
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -34,15 +32,7 @@ from core.utils import (  # noqa: F401
     rprint,
 )
 from core.utils.config_utils import get_text_joiner
-from core.utils.models import (  # noqa: F401
-    _2_CLEANED_CHUNKS,
-    _3_2_SPLIT_BY_MEANING,
-    _4_2_TRANSLATION,
-    _5_REMERGED,
-    _5_SPLIT_SUB,
-    resolve_task_path,
-)
-from core.workspace import workspace_for_path
+from core.workspace import get_active_workspace
 
 console = Console()
 
@@ -85,8 +75,6 @@ _BREAK_CONJUNCTIONS = {
     "by",
     "about",
 }
-
-_LAST_SPLIT_CONFIG_BY_PATH: dict[str, tuple[float, float]] = {}
 
 
 def calc_len(text: str) -> float:
@@ -862,10 +850,7 @@ def _partition_word_span_for_cues(
 
 
 def split_for_sub_main():
-    split_sub_path = resolve_task_path(_5_SPLIT_SUB)
-    trans_path = resolve_task_path(_4_2_TRANSLATION)
-    abs_split_path = os.path.abspath(split_sub_path)
-    ws = workspace_for_path(split_sub_path)
+    ws = get_active_workspace()
 
     try:
         subtitle_set = load_key("subtitle")
@@ -877,10 +862,8 @@ def split_for_sub_main():
     utterances = ws.load_utterances()
     if utterances and ws.has_sub_cues():
         try:
-            prev_cfg = _LAST_SPLIT_CONFIG_BY_PATH.get(abs_split_path)
-            if prev_cfg is None and isinstance(
-                utterances[0].get("sub_split_config"), dict
-            ):
+            prev_cfg = None
+            if isinstance(utterances[0].get("sub_split_config"), dict):
                 cfg_d = utterances[0]["sub_split_config"]
                 prev_cfg = (
                     float(cfg_d.get("max_length", -1)),
@@ -889,12 +872,6 @@ def split_for_sub_main():
             saved_rev = ws.get_kv("sub_split_rev")
             rev_matches = (
                 saved_rev is not None and int(saved_rev) == ws.get_utterances_revision()
-            )
-            cues_mtime = ws.get_kv_mtime("sub_cues_saved")
-            trans_file_newer = (
-                os.path.exists(trans_path)
-                and cues_mtime > 0
-                and os.path.getmtime(trans_path) > cues_mtime
             )
             config_matches = prev_cfg == (MAX_SUB_LENGTH, TARGET_SUB_MULTIPLIER)
             all_cues = [
@@ -905,7 +882,6 @@ def split_for_sub_main():
             ]
             if (
                 rev_matches
-                and not trans_file_newer
                 and config_matches
                 and all_cues
                 and all(
@@ -929,35 +905,12 @@ def split_for_sub_main():
 
     console.print("[bold green]🚀 Start splitting subtitles...[/bold green]")
 
-    if utterances and not (
-        os.path.exists(trans_path)
-        and ws.get_utterances_mtime() > 0
-        and os.path.getmtime(trans_path) > ws.get_utterances_mtime()
-    ):
-        src = [str(u.get("src") or "") for u in utterances]
-        trans = [str(u.get("tgt") or "") for u in utterances]
-    elif os.path.exists(trans_path):
-        df = pd.read_excel(trans_path)
-        src = [str(x) for x in df["Source"].fillna("").tolist()]
-        trans = [str(x) for x in df["Translation"].fillna("").tolist()]
-        utterances = [
-            {
-                "id": f"u_{i:04d}",
-                "index": i,
-                "word_span": [0, 0],
-                "start": 0.0,
-                "end": 0.0,
-                "gap_after": 0.0,
-                "src": s,
-                "tgt": t,
-                "tts_text": t,
-            }
-            for i, (s, t) in enumerate(zip(src, trans))
-        ]
-    else:
+    if not utterances:
         raise FileNotFoundError(
             f"No translated utterances found in workspace database: {ws.db_path}"
         )
+    src = [str(u.get("src") or "") for u in utterances]
+    trans = [str(u.get("tgt") or "") for u in utterances]
 
     if find_subtitle_file():
         console.print(
@@ -980,10 +933,6 @@ def split_for_sub_main():
             ]
         rev = ws.save_utterances(utterances)
         ws.set_kv("sub_split_rev", rev)
-        _LAST_SPLIT_CONFIG_BY_PATH[abs_split_path] = (
-            MAX_SUB_LENGTH,
-            TARGET_SUB_MULTIPLIER,
-        )
         return
 
     orig_src = src.copy()
@@ -1054,8 +1003,6 @@ def split_for_sub_main():
             break
 
         src, trans = split_src, split_trans
-
-    _LAST_SPLIT_CONFIG_BY_PATH[abs_split_path] = (MAX_SUB_LENGTH, TARGET_SUB_MULTIPLIER)
 
     if len(origin_indices) != len(split_src):
         origin_indices = [min(i, len(orig_src) - 1) for i in range(len(split_src))]

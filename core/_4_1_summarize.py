@@ -21,14 +21,13 @@ from core.utils import (
     load_key_or,
     rprint,
 )
-from core.utils.models import _3_2_SPLIT_BY_MEANING, _4_1_TERMINOLOGY, resolve_task_path
 from core.workspace import (
     DEFAULT_GLOSSARY_DOMAIN,
     GLOBAL_GLOSSARY_CSV,
     domain_dict_json_path,
     domain_terms_csv_path,
+    get_active_workspace,
     load_global_glossary,
-    workspace_for_path,
 )
 
 try:
@@ -351,21 +350,12 @@ def split_summary_chunks(
 
 def combine_chunks() -> str:
     """Combine sentence lines from workspace utterances into a single text string."""
-    meaning_path = resolve_task_path(_3_2_SPLIT_BY_MEANING)
-    ws = workspace_for_path(meaning_path)
+    ws = get_active_workspace()
     utts = ws.load_utterances()
-    if utts:
-        sentences = [
-            str(u.get("src") or "").strip()
-            for u in utts
-            if str(u.get("src") or "").strip()
-        ]
-        return " ".join(sentences)
-    if os.path.exists(meaning_path):
-        with open(meaning_path, "r", encoding="utf-8") as file:
-            sentences = [line.strip() for line in file if line.strip()]
-        return " ".join(sentences)
-    return ""
+    sentences = [
+        str(u.get("src") or "").strip() for u in utts if str(u.get("src") or "").strip()
+    ]
+    return " ".join(sentences)
 
 
 def _normalize_aliases(raw_aliases: Any, src: str = "") -> list[str]:
@@ -1212,9 +1202,7 @@ def _get_term_index() -> dict:
     """Return the cached term index, rebuilding automatically if any source file or workspace DB changed."""
     global _CACHED_INDEX_KEY, _CACHED_INDEX_DATA
 
-    term_json_path = resolve_task_path(_4_1_TERMINOLOGY)
-    ws = workspace_for_path(term_json_path)
-    terms_contract_path = str(Path(term_json_path).with_name("terms.json"))
+    ws = get_active_workspace()
     use_global = _should_load_domain_glossary()
     domain_csv, domain_dict = _active_domain_paths() if use_global else (None, None)
     abs_domain_csv = os.path.abspath(domain_csv) if domain_csv else ""
@@ -1223,14 +1211,10 @@ def _get_term_index() -> dict:
     domain_dict_mtime = _file_mtime(abs_domain_dict) if abs_domain_dict else None
     abs_db = os.path.abspath(str(ws.db_path))
     db_terms_mtime = ws.get_terms_mtime() if ws.has_terms() else None
-    abs_json = os.path.abspath(term_json_path)
-    abs_terms_contract = os.path.abspath(terms_contract_path)
     abs_global = os.path.abspath(GLOBAL_GLOSSARY_PATH)
     abs_xlsx = os.path.abspath(CUSTOM_TERMS_PATH)
     abs_csv = os.path.abspath(OPTIONAL_CSV_TERMS_PATH)
     abs_map = os.path.abspath(OPTIONAL_JSON_TERMS_PATH)
-    json_mtime = _file_mtime(abs_json)
-    contract_mtime = _file_mtime(abs_terms_contract)
     global_mtime = _file_mtime(abs_global)
     xlsx_mtime = _file_mtime(abs_xlsx)
     csv_mtime = _file_mtime(abs_csv)
@@ -1243,10 +1227,6 @@ def _get_term_index() -> dict:
         domain_dict_mtime,
         abs_db,
         db_terms_mtime,
-        abs_json,
-        json_mtime,
-        abs_terms_contract,
-        contract_mtime,
         abs_global,
         global_mtime,
         abs_xlsx,
@@ -1286,16 +1266,6 @@ def _get_term_index() -> dict:
                         ),
                     }
 
-        def _merge_json_terms(file_path: str) -> None:
-            if not os.path.exists(file_path):
-                return
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except Exception:
-                return
-            _merge_term_items(data.get("terms", []) if isinstance(data, dict) else [])
-
         def _merge_ws_terms() -> None:
             if ws.has_terms():
                 _merge_term_items(ws.load_terms().get("terms", []))
@@ -1314,18 +1284,13 @@ def _get_term_index() -> dict:
             if m is not None
         ]
         latest_custom_mtime = max(custom_mtimes) if custom_mtimes else 0.0
-        task_mtimes = [
-            m
-            for m in (db_terms_mtime, json_mtime, contract_mtime)
-            if m is not None and m > 0
-        ]
-        latest_task_mtime = max(task_mtimes) if task_mtimes else 0.0
-        json_is_newer = bool(task_mtimes) and latest_task_mtime > latest_custom_mtime
+        latest_task_mtime = (
+            db_terms_mtime if db_terms_mtime and db_terms_mtime > 0 else 0.0
+        )
+        db_is_newer = latest_task_mtime > latest_custom_mtime
 
-        if not json_is_newer:
+        if not db_is_newer:
             _merge_ws_terms()
-            _merge_json_terms(terms_contract_path)
-            _merge_json_terms(term_json_path)
             for item in custom_list:
                 key = item["src"].lower()
                 prev = merged_by_src.get(key, {})
@@ -1341,14 +1306,6 @@ def _get_term_index() -> dict:
             for item in custom_list:
                 merged_by_src[item["src"].lower()] = dict(item)
             _merge_ws_terms()
-            if contract_mtime is not None and (
-                json_mtime is None or contract_mtime >= json_mtime
-            ):
-                _merge_json_terms(term_json_path)
-                _merge_json_terms(terms_contract_path)
-            else:
-                _merge_json_terms(terms_contract_path)
-                _merge_json_terms(term_json_path)
 
         index_data = _build_term_index(list(merged_by_src.values()))
         _CACHED_INDEX_KEY = cache_key
@@ -1694,23 +1651,13 @@ def _consolidate_terms_with_llm(
 
 
 # Kept on a retry, so that the edits of `pause_before_translate` are not overwritten
-@check_file_exists(_4_1_TERMINOLOGY)
+@check_file_exists("summarize")
 def get_summary():
-    meaning_path = resolve_task_path(_3_2_SPLIT_BY_MEANING)
-    term_json_path = resolve_task_path(_4_1_TERMINOLOGY)
-    ws = workspace_for_path(term_json_path)
+    ws = get_active_workspace()
     utts = ws.load_utterances()
-    if utts:
-        sentences = [
-            str(u.get("src") or "").strip()
-            for u in utts
-            if str(u.get("src") or "").strip()
-        ]
-    elif os.path.exists(meaning_path):
-        with open(meaning_path, "r", encoding="utf-8") as f:
-            sentences = [line.strip() for line in f if line.strip()]
-    else:
-        sentences = []
+    sentences = [
+        str(u.get("src") or "").strip() for u in utts if str(u.get("src") or "").strip()
+    ]
 
     custom_terms_list = load_custom_terms()
     custom_terms_json = {"terms": custom_terms_list}

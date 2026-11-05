@@ -16,6 +16,7 @@ from core.utils.subtitle_style import (
     get_burn_mode,
     get_optimal_video_encoder_args,
     get_subtitle_filters as _default_get_subtitle_filters,
+    wrap_gpu_subtitle_filter,
 )
 from core.workspace import probe_media_metadata
 
@@ -135,17 +136,15 @@ def merge_video_audio():
     )
 
     input_video = sub_video if can_reuse_sub_video else VIDEO_FILE
-    cmd = ["ffmpeg", "-y", "-i", input_video]
-    if has_background:
-        cmd.extend(["-i", background_file])
-    cmd.extend(["-i", normalized_dub_audio])
+    use_gpu = bool(load_key("ffmpeg_gpu"))
 
     filters = []
+    hw_input_args: list[str] = []
     need_burn_filter = burn_subtitles and not can_reuse_sub_video
     if need_burn_filter:
         meta = probe_media_metadata(VIDEO_FILE)
-        TARGET_WIDTH = int(meta.get("display_width") or 0)
-        TARGET_HEIGHT = int(meta.get("display_height") or 0)
+        TARGET_WIDTH = int(meta.get("display_width") or meta.get("width") or 0)
+        TARGET_HEIGHT = int(meta.get("display_height") or meta.get("height") or 0)
         if TARGET_WIDTH <= 0 or TARGET_HEIGHT <= 0:
             video = cv2.VideoCapture(VIDEO_FILE)
             TARGET_WIDTH = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -175,6 +174,9 @@ def merge_video_audio():
                 display_height=TARGET_HEIGHT,
             )
             subtitle_filter = f"ass='{escape_ffmpeg_filter_path(dub_ass_path)}'"
+        hw_input_args, subtitle_filter = wrap_gpu_subtitle_filter(
+            subtitle_filter, use_gpu, video_meta=meta
+        )
         filters.append(f"[0:v]{subtitle_filter}[v]")
     elif can_reuse_sub_video:
         rprint(
@@ -184,6 +186,10 @@ def merge_video_audio():
         rprint(
             "[bold yellow]Subtitles are not burned in: the dubbed audio is merged into the original video.[/bold yellow]"
         )
+    cmd = ["ffmpeg", "-nostdin", "-y", *hw_input_args, "-i", input_video]
+    if has_background:
+        cmd.extend(["-i", background_file])
+    cmd.extend(["-i", normalized_dub_audio])
     if has_background:
         filters.append(
             "[1:a][2:a]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]"
@@ -203,40 +209,13 @@ def merge_video_audio():
             "[a]" if has_background else "1:a",
         ]
     )
-    use_gpu = bool(load_key("ffmpeg_gpu"))
-    audio_output = ["-c:a", "aac", "-b:a", "192k", dub_video]
+    audio_output = ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", dub_video]
 
     if need_burn_filter:
         if use_gpu:
             rprint("[bold green]Using GPU acceleration...[/bold green]")
         encoder = get_optimal_video_encoder_args(use_gpu)
-        try:
-            subprocess.run(cmd + encoder + audio_output, check=True)
-        except subprocess.CalledProcessError:
-            # Fallback if the system ffmpeg build lacks libass (`subtitles` filter)
-            rprint(
-                "[yellow]⚠️ Subtitle burn-in filter failed (libass unavailable); muxing video with dubbed audio without burning subtitles...[/yellow]"
-            )
-            fallback_cmd = ["ffmpeg", "-y", "-i", VIDEO_FILE]
-            if has_background:
-                fallback_cmd.extend(["-i", background_file])
-            fallback_cmd.extend(["-i", normalized_dub_audio])
-            if has_background:
-                fallback_cmd.extend(
-                    [
-                        "-filter_complex",
-                        "[1:a][2:a]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]",
-                    ]
-                )
-            fallback_cmd.extend(
-                ["-map", "0:v:0", "-map", "[a]" if has_background else "1:a"]
-            )
-            try:
-                subprocess.run(
-                    fallback_cmd + ["-c:v", "copy"] + audio_output, check=True
-                )
-            except subprocess.CalledProcessError:
-                subprocess.run(fallback_cmd + encoder + audio_output, check=True)
+        subprocess.run(cmd + encoder + audio_output, check=True)
     else:
         try:
             # The picture is not touched, so it is copied as it is

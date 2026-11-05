@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import ipaddress
 from threading import Lock
 from urllib.parse import urlparse
@@ -104,7 +105,14 @@ def _save_cache(
         tmp_file = f"{file}.tmp.{os.getpid()}"
         with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(logs, f, ensure_ascii=False, indent=4)
-        os.replace(tmp_file, file)
+        for attempt in range(5):
+            try:
+                os.replace(tmp_file, file)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
 
 
 def _load_cache(prompt, resp_type, log_title, model=None, reasoning_effort=None):

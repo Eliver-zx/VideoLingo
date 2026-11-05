@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage=false
 """Unit tests for target-first subtitle splitting, timeline alignment, and cloud ASR backends."""
 
 import pandas as pd
@@ -315,25 +316,24 @@ def test_cloud_asr_cache_keys_and_credential_checks(tmp_path, monkeypatch):
 # ------------------------------------------------------------------
 
 
-def test_split_sentences_by_meaning_preserves_full_sentences(tmp_path, monkeypatch):
+def test_split_sentences_by_meaning_preserves_full_sentences(tmp_path):
     import core._3_2_split_meaning as meaning
-    from core.workspace import TaskWorkspace
+    from core.workspace import TaskWorkspace, workspace_context
 
-    nlp_txt = tmp_path / "split_by_nlp.txt"
-    meaning_txt = tmp_path / "split_by_meaning.txt"
-    monkeypatch.setattr(meaning, "_3_1_SPLIT_BY_NLP", str(nlp_txt))
-    monkeypatch.setattr(meaning, "_3_2_SPLIT_BY_MEANING", str(meaning_txt))
+    ws = TaskWorkspace(tmp_path)
+    with workspace_context(ws):
+        with pytest.raises(FileNotFoundError):
+            meaning.split_sentences_by_meaning()
 
-    with pytest.raises(FileNotFoundError):
+        ws.save_utterances(
+            [
+                {"id": "u_0000", "src": "First complete sentence here."},
+                {"id": "u_0001", "src": "Second complete sentence here."},
+            ]
+        )
         meaning.split_sentences_by_meaning()
 
-    nlp_txt.write_text(
-        "First complete sentence here.\nSecond complete sentence here.\n",
-        encoding="utf-8",
-    )
-    meaning.split_sentences_by_meaning()
-
-    assert [u["src"] for u in TaskWorkspace(tmp_path).load_utterances()] == [
+    assert [u["src"] for u in ws.load_utterances()] == [
         "First complete sentence here.",
         "Second complete sentence here.",
     ]
@@ -342,30 +342,22 @@ def test_split_sentences_by_meaning_preserves_full_sentences(tmp_path, monkeypat
 def test_split_for_sub_main_multi_pass_remerged_no_none_and_mtime_skip(
     tmp_path, monkeypatch
 ):
-    import os
-    import time
     import core._5_split_sub as module
-    from core.workspace import TaskWorkspace
-
-    trans_xlsx = tmp_path / "translation_results.xlsx"
-    split_xlsx = tmp_path / "translation_results_for_subtitles.xlsx"
-    remerged_xlsx = tmp_path / "translation_results_remerged.xlsx"
+    from core.workspace import TaskWorkspace, workspace_context
 
     orig_sources = ["word " * 25, "short line"]
     orig_translations = [
         "这是一段非常非常长的需要切分很多次的字幕文本内容测试" * 2,
         "短字幕",
     ]
-    pd.DataFrame(
-        {
-            "Source": orig_sources,
-            "Translation": orig_translations,
-        }
-    ).to_excel(trans_xlsx, index=False)
+    ws = TaskWorkspace(tmp_path)
+    ws.save_utterances(
+        [
+            {"id": f"u_{i:04d}", "src": s, "tgt": t, "tts_text": t}
+            for i, (s, t) in enumerate(zip(orig_sources, orig_translations))
+        ]
+    )
 
-    monkeypatch.setattr(module, "_4_2_TRANSLATION", str(trans_xlsx))
-    monkeypatch.setattr(module, "_5_SPLIT_SUB", str(split_xlsx))
-    monkeypatch.setattr(module, "_5_REMERGED", str(remerged_xlsx))
     monkeypatch.setattr(module, "find_subtitle_file", lambda: None)
 
     settings = {
@@ -388,31 +380,29 @@ def test_split_for_sub_main_multi_pass_remerged_no_none_and_mtime_skip(
 
     monkeypatch.setattr(module, "split_sentence", fake_split)
 
-    module.split_for_sub_main()
-    first_calls = call_count["n"]
-    assert first_calls >= 2  # Multi-pass split occurred
+    with workspace_context(ws):
+        module.split_for_sub_main()
+        first_calls = call_count["n"]
+        assert first_calls >= 2  # Multi-pass split occurred
 
-    ws = TaskWorkspace(tmp_path)
-    utts = ws.load_utterances()
-    assert [u["src"].strip() for u in utts] == [s.strip() for s in orig_sources]
-    assert [u["tgt"] for u in utts] == orig_translations
+        utts = ws.load_utterances()
+        assert [u["src"].strip() for u in utts] == [s.strip() for s in orig_sources]
+        assert [u["tgt"] for u in utts] == orig_translations
 
-    # Second run when outputs are up-to-date and within max_length should skip
-    module.split_for_sub_main()
-    assert call_count["n"] == first_calls
+        # Second run when outputs are up-to-date and within max_length should skip
+        module.split_for_sub_main()
+        assert call_count["n"] == first_calls
 
-    # Tightening subtitle.max_length invalidates the skip even without touching _4_2_TRANSLATION mtime
-    settings["subtitle"]["max_length"] = 20
-    module.split_for_sub_main()
-    after_tighten_calls = call_count["n"]
-    assert after_tighten_calls > first_calls
+        # Tightening subtitle.max_length invalidates the skip
+        settings["subtitle"]["max_length"] = 20
+        module.split_for_sub_main()
+        after_tighten_calls = call_count["n"]
+        assert after_tighten_calls > first_calls
 
-    # Touching _4_2_TRANSLATION with a newer mtime also invalidates the skip
-    future_time = ws.get_kv_mtime("sub_cues_saved") + 10.0
-    os.utime(trans_xlsx, (future_time, future_time))
-    time.sleep(0.01)
-    module.split_for_sub_main()
-    assert call_count["n"] > after_tighten_calls
+        # Updating utterances revision invalidates the skip
+        ws.save_utterances(utts)
+        module.split_for_sub_main()
+        assert call_count["n"] > after_tighten_calls
 
 
 def test_align_timestamp_recomputes_duration_after_gap_and_overlap_smoothing():
@@ -577,6 +567,7 @@ def test_native_scnet_forward_and_adapter_contract(tmp_path, monkeypatch):
     adapter = scnet_vl.SCNetSeparatorAdapter(
         model_filename="tiny_scnet.ckpt", model_dir=str(tmp_path)
     )
+    assert adapter.num_overlap == 2
 
     wav = torch.randn((2, 3000), dtype=torch.float32) * 0.2
     _, outputs = adapter.separate_tensor(wav, 44100)
@@ -594,6 +585,7 @@ def test_refer_audio_uses_selected_audio_separator_backend_and_refreshes_on_newe
     import numpy as np
     import core._9_refer_audio as refer
     from core.asr_backend import demucs_vl
+    from core.workspace import TaskWorkspace, workspace_context
 
     refers = tmp_path / "refers"
     vocal_file = tmp_path / "vocal.mp3"
@@ -615,16 +607,15 @@ def test_refer_audio_uses_selected_audio_separator_backend_and_refreshes_on_newe
         "demucs_audio",
         lambda model_key=None: called.append(model_key or "configured"),
     )
-    monkeypatch.setattr(
-        refer.pd,
-        "read_excel",
-        lambda path: pd.DataFrame(
+    ws = TaskWorkspace(tmp_path)
+    ws.save_dub_tasks(
+        [
             {
-                "number": [1],
-                "start_time": ["00:00:00,000"],
-                "end_time": ["00:00:01,000"],
+                "number": 1,
+                "start_time": "00:00:00,000",
+                "end_time": "00:00:01,000",
             }
-        ),
+        ]
     )
     read_calls = []
     monkeypatch.setattr(
@@ -636,21 +627,22 @@ def test_refer_audio_uses_selected_audio_separator_backend_and_refreshes_on_newe
         ),
     )
 
-    refer.extract_refer_audio_main()
-    assert called == ["configured"]
-    assert len(read_calls) == 1
-    assert (refers / "1.wav").exists()
+    with workspace_context(ws):
+        refer.extract_refer_audio_main()
+        assert called == ["configured"]
+        assert len(read_calls) == 1
+        assert (refers / "1.wav").exists()
 
-    # Second call with unchanged vocal.mp3 skips re-extraction
-    refer.extract_refer_audio_main()
-    assert len(read_calls) == 1
+        # Second call with unchanged vocal.mp3 skips re-extraction
+        refer.extract_refer_audio_main()
+        assert len(read_calls) == 1
 
-    # Updating vocal.mp3 (e.g. after switching vocal_separation_model) triggers re-extraction
-    future = os.path.getmtime(refers / "1.wav") + 10.0
-    os.utime(vocal_file, (future, future))
-    time.sleep(0.01)
-    refer.extract_refer_audio_main()
-    assert len(read_calls) == 2
+        # Updating vocal.mp3 (e.g. after switching vocal_separation_model) triggers re-extraction
+        future = os.path.getmtime(refers / "1.wav") + 10.0
+        os.utime(vocal_file, (future, future))
+        time.sleep(0.01)
+        refer.extract_refer_audio_main()
+        assert len(read_calls) == 2
 
 
 def test_cache_key_differentiates_vocal_separation_models_when_demucs_enabled(tmp_path):

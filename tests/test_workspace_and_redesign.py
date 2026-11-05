@@ -165,7 +165,7 @@ def test_acoustic_pause_prompt_internal_commas_and_long_sentence_split():
 
 
 def test_many_to_one_aliases_in_glossary_and_global_promotion(tmp_path: Path):
-    """terms.json aliases match multi-word ASR variants (e.g. 'pie torch' -> 'PyTorch') and promote to global CSV."""
+    """Task terms aliases match multi-word ASR variants (e.g. 'pie torch' -> 'PyTorch') and promote to global CSV."""
     ws = TaskWorkspace(tmp_path / "output")
     ws.ensure_dirs()
     terms = [
@@ -199,7 +199,7 @@ def test_many_to_one_aliases_in_glossary_and_global_promotion(tmp_path: Path):
 def test_proportional_subtitle_split_reruns_on_max_length_increase(
     tmp_path: Path, monkeypatch
 ):
-    """Step 5 records (max_length, multiplier) in utterances.json and re-runs when max_length increases."""
+    """Step 5 records (max_length, multiplier) in project.sqlite utterances and re-runs when max_length increases."""
     root_cfg = Path(__file__).resolve().parents[1] / "config.yaml"
     (tmp_path / "config.yaml").write_text(
         root_cfg.read_text(encoding="utf-8"), encoding="utf-8"
@@ -683,12 +683,12 @@ def test_threadpool_workers_inherit_workspace_and_config_overrides(tmp_path: Pat
         ),
     ):
         with ContextThreadPoolExecutor(max_workers=2) as pool:
-            f_path = pool.submit(resolve_task_path, "output/log/terminology.json")
+            f_path = pool.submit(resolve_task_path, "output/trans.srt")
             f_lang = pool.submit(config_utils.load_key, "target_language")
             resolved_in_child = f_path.result()
             lang_in_child = f_lang.result()
 
-    assert Path(resolved_in_child) == (ws.log_dir / "terminology.json")
+    assert Path(resolved_in_child) == (ws.root / "trans.srt")
     assert lang_in_child == "Español"
 
 
@@ -725,10 +725,6 @@ def test_multi_task_isolation_fix_source_and_inline_tts_text_flow(
         {"idx": 3, "text": "torch", "punct_after": ".", "start": 1.5, "end": 2.6},
     ]
     ws_a.save_words(words_a)
-    pd.DataFrame(words_a).to_excel(ws_a.log_dir / "cleaned_chunks.xlsx", index=False)
-    (ws_a.log_dir / "split_by_meaning.txt").write_text(
-        "We use pie torch.\n", encoding="utf-8"
-    )
     ws_a.save_utterances(
         [
             {
@@ -763,10 +759,7 @@ def test_multi_task_isolation_fix_source_and_inline_tts_text_flow(
         assert chunks == ["We use PyTorch."]
         assert ws_a.load_utterances()[0]["src"] == "We use PyTorch."
 
-    # Prepare translation_results.xlsx in task_a, then edit src, tgt, and tts_text via FastAPI
-    pd.DataFrame(
-        [{"Source": "We use PyTorch.", "Translation": "我们使用PyTorch。"}]
-    ).to_excel(ws_a.log_dir / "translation_results.xlsx", index=False)
+    # Edit src, tgt, and tts_text via FastAPI
     client = TestClient(api.app)
     res_edit = client.put(
         "/api/tasks/task_a/utterances",
@@ -864,10 +857,6 @@ def test_sentence_initial_fix_source_and_global_glossary_cache_invalidation(
     ]
     ws.save_words(words)
     df_words = pd.DataFrame(words)
-    df_words.to_excel(ws.log_dir / "cleaned_chunks.xlsx", index=False)
-    (ws.log_dir / "split_by_meaning.txt").write_text(
-        "Gnats streams messages.\n", encoding="utf-8"
-    )
     ws.save_utterances(
         [
             {
@@ -909,16 +898,12 @@ def test_sentence_initial_fix_source_and_global_glossary_cache_invalidation(
         fp_after = _4_2_translate._translation_cache_fingerprint()
         assert fp_after != fp_before
 
-        # split_chunks_by_chars must apply global glossary fix_source even when task terms.json is empty
+        # split_chunks_by_chars must apply global glossary fix_source even when task terms are empty
         chunks = _4_2_translate.split_chunks_by_chars()
         assert chunks == ["NATS streams messages."]
         utts = ws.load_utterances()
         assert utts[0]["src"] == "NATS streams messages."
         assert utts[0]["src_raw"] == "Gnats streams messages"
-
-        pd.DataFrame(
-            [{"Source": "NATS streams messages.", "Translation": "NATS流式传输消息。"}]
-        ).to_excel(ws.log_dir / "translation_results.xlsx", index=False)
 
         _5_split_sub.split_for_sub_main()
         stamps = _6_gen_sub.get_sentence_timestamps(
@@ -1195,7 +1180,7 @@ def test_review_fixes_large_dict_fix_source_paused_invalidate_domain_mtime_and_h
     """Regression test for the 5 code review findings:
     1. >500 dict.json fix_source consistency in load_custom_terms() & _get_kb_index() preserves fix_source.
     2. Stage 03 invalidate while runner is paused stops the paused runner and succeeds (200 instead of 409).
-    3. Switching task glossary_domain via PUT /api/tasks/{id}/terms without terms payload does not bump terms.json mtime.
+    3. Switching task glossary_domain via PUT /api/tasks/{id}/terms without terms payload does not bump terms mtime.
     4. Headerless .xlsx import preserves the first data row instead of swallowing it as header.
     """
     import io
@@ -1313,7 +1298,7 @@ def test_review_fixes_large_dict_fix_source_paused_invalidate_domain_mtime_and_h
     )
     assert res_dom_only.status_code == 200
     assert ws.get_terms_mtime() == old_mtime
-    # Because terms.json mtime was NOT bumped above excel_dom/terms.csv mtime, domain CSV ("K8s容器编排") wins!
+    # Because terms mtime was NOT bumped above excel_dom/terms.csv mtime, domain CSV ("K8s容器编排") wins!
     with (
         workspace_context(ws),
         config_utils.task_config_context({"glossary_domain": "excel_dom"}),
@@ -1966,12 +1951,11 @@ def test_stage_04_utterance_editor_sqlite_persistence_and_webui_controls(
     assert "这是配音专享词" in (ws.audio_dir / "trans_subs_for_audio.srt").read_text(
         encoding="utf-8"
     )
-    assert not (ws.log_dir / "utterances.json").exists()
     assert ws.db_path.is_file()
 
 
 def test_sqlite_only_step11_and_dubbing_chunk_invalidation(tmp_path: Path):
-    """Step 11 loads dub_tasks directly from project.sqlite without tts_tasks.xlsx; editing utterances invalidates stale dubbing."""
+    """Step 11 loads dub_tasks directly from project.sqlite; editing utterances invalidates stale dubbing."""
     ws = TaskWorkspace(tmp_path / "task_dub_sqlite")
     ws.ensure_dirs()
     seg_wav = ws.segs_dir / "1_0.wav"
@@ -1979,7 +1963,7 @@ def test_sqlite_only_step11_and_dubbing_chunk_invalidation(tmp_path: Path):
         str(seg_wav), format="wav"
     )
 
-    # 1. Step 8.1 writes initial dub_tasks without 'lines' / 'cut_off' -> is_step_done(tts_tasks.xlsx) must be False
+    # 1. Step 8.1 writes initial dub_tasks without 'lines' / 'cut_off' -> is_step_done("dub_tasks") must be False
     ws.save_dub_tasks(
         [
             {
@@ -1994,7 +1978,7 @@ def test_sqlite_only_step11_and_dubbing_chunk_invalidation(tmp_path: Path):
     )
     assert ws.has_dub_tasks() is True
     assert ws.has_dub_chunks() is False
-    assert ws.is_step_done(ws.audio_dir / "tts_tasks.xlsx") is False
+    assert ws.is_step_done("dub_tasks") is False
 
     # 2. Step 8.2 / Step 10 writes full dub_tasks with 'lines', 'cut_off', and 'new_sub_times'
     ws.save_dub_tasks(
@@ -2014,14 +1998,11 @@ def test_sqlite_only_step11_and_dubbing_chunk_invalidation(tmp_path: Path):
         ]
     )
     assert ws.has_dub_chunks() is True
-    assert ws.is_step_done(ws.audio_dir / "tts_tasks.xlsx") is True
-    assert not (ws.audio_dir / "tts_tasks.xlsx").exists()
+    assert ws.is_step_done("dub_tasks") is True
 
     # 3. Step 11 load_and_flatten_data and create_srt_subtitle work purely from project.sqlite
     with workspace_context(ws):
-        df, lines, new_sub_times = _11_merge_audio.load_and_flatten_data(
-            str(ws.audio_dir / "tts_tasks.xlsx")
-        )
+        df, lines, new_sub_times = _11_merge_audio.load_and_flatten_data()
         assert len(df) == 1
         assert lines == ["你好世界"]
         assert new_sub_times == [[0.0, 0.5]]
@@ -2163,3 +2144,103 @@ def test_concurrent_workspace_isolation_runtime_state_and_sqlite_llm_cache(
     ws_b_recreated = TaskWorkspace(tmp_path / "task_b")
     ws_b_recreated.ensure_dirs()
     assert ws_b_recreated.get_runtime_state("whisper.detected_language") is None
+
+
+def test_windows_nvenc_cuda_filter_and_ntfs_resilience(tmp_path: Path, monkeypatch):
+    """Verify RTX 2070 NVENC VBV args, scale_cuda+hwdownload subtitle filter wrapping, PermissionError retry, and quoted Windows paths."""
+    import os
+    from core.utils import subtitle_style
+    from core.workspace import replace_with_retry, rmtree_robust
+
+    # 1. NVENC encoder args (CQ 23 + 6000k maxrate + 12000k bufsize + spatial/temporal AQ + lookahead 20)
+    monkeypatch.setattr(subtitle_style.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        subtitle_style,
+        "_available_ffmpeg_encoders",
+        lambda: frozenset({"h264_nvenc", "libx264"}),
+    )
+    nvenc_args = subtitle_style.get_optimal_video_encoder_args(use_gpu=True)
+    assert nvenc_args[:2] == ["-c:v", "h264_nvenc"]
+    assert nvenc_args[nvenc_args.index("-cq") + 1] == "23"
+    assert nvenc_args[nvenc_args.index("-maxrate") + 1] == "6000k"
+    assert nvenc_args[nvenc_args.index("-bufsize") + 1] == "12000k"
+    assert "-spatial-aq" in nvenc_args and "-temporal-aq" in nvenc_args
+
+    # 2. CUDA decode + scale_cuda NV12->YUV420P pre-conversion before libass
+    monkeypatch.setattr(
+        subtitle_style,
+        "_available_ffmpeg_filters",
+        lambda: frozenset({"scale_cuda", "hwdownload", "ass"}),
+    )
+    in_args, vf = subtitle_style.wrap_gpu_subtitle_filter(
+        "ass='output/bi.ass'",
+        use_gpu=True,
+        video_meta={"rotation": 0, "codec_name": "h264", "pix_fmt": "yuv420p"},
+    )
+    assert in_args == [
+        "-hwaccel",
+        "cuda",
+        "-hwaccel_output_format",
+        "cuda",
+        "-thread_queue_size",
+        "1024",
+    ]
+    assert (
+        vf == "scale_cuda=format=yuv420p,hwdownload,format=yuv420p,ass='output/bi.ass'"
+    )
+
+    # Rotated videos (-autorotate CPU transpose) and RTX 2070 non-NVDEC streams (AV1, 10-bit H.264) fall back to -hwaccel auto
+    for incompatible_meta in (
+        {"rotation": 90, "codec_name": "h264", "pix_fmt": "yuv420p"},
+        {"rotation": 0, "codec_name": "av1", "pix_fmt": "yuv420p"},
+        {"rotation": 0, "codec_name": "h264", "pix_fmt": "yuv420p10le"},
+    ):
+        in_fallback, vf_fallback = subtitle_style.wrap_gpu_subtitle_filter(
+            "ass='output/bi.ass'",
+            use_gpu=True,
+            video_meta=incompatible_meta,
+        )
+        assert in_fallback == ["-hwaccel", "auto", "-thread_queue_size", "1024"]
+        assert vf_fallback == "ass='output/bi.ass'"
+
+    # Fallback when scale_cuda is absent in FFmpeg build
+    monkeypatch.setattr(
+        subtitle_style,
+        "_available_ffmpeg_filters",
+        lambda: frozenset({"ass"}),
+    )
+    in_args_cpu, vf_cpu = subtitle_style.wrap_gpu_subtitle_filter(
+        "ass='output/bi.ass'", use_gpu=True
+    )
+    assert in_args_cpu == ["-hwaccel", "auto", "-thread_queue_size", "1024"]
+    assert vf_cpu == "ass='output/bi.ass'"
+
+    # 3. replace_with_retry survives transient Windows NTFS PermissionError
+    src = tmp_path / "src.tmp"
+    dst = tmp_path / "dst.json"
+    src.write_text("ok", encoding="utf-8")
+    real_replace = os.replace
+    attempts = []
+
+    def flaky_replace(a, b):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise PermissionError(5, "Access is denied")
+        return real_replace(a, b)
+
+    monkeypatch.setattr(os, "replace", flaky_replace)
+    replace_with_retry(src, dst)
+    assert len(attempts) == 3 and dst.read_text(encoding="utf-8") == "ok"
+    monkeypatch.setattr(os, "replace", real_replace)
+
+    # 4. Quoted Windows 'Copy as path' string normalization in api._clean_user_path and rmtree_robust
+    video_file = tmp_path / "demo_clip.mp4"
+    video_file.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    assert api._clean_user_path(f'  "{video_file}"  ') == str(video_file)
+    ro_dir = tmp_path / "ro_ws"
+    ro_dir.mkdir()
+    ro_file = ro_dir / "locked.sqlite"
+    ro_file.write_bytes(b"sqlite")
+    os.chmod(ro_file, 0o444)
+    rmtree_robust(ro_dir)
+    assert not ro_dir.exists()

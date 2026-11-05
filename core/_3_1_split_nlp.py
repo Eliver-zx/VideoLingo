@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import concurrent.futures
 from difflib import SequenceMatcher
-import os
 import re
 from typing import Any
 import unicodedata
 
-import pandas as pd
 
 from core.concurrency import ContextThreadPoolExecutor
 from core.prompts import get_punctuation_prompt
@@ -21,13 +19,7 @@ from core.utils import (
     load_key_or,
     rprint,
 )
-from core.utils.models import (  # noqa: F401
-    _2_CLEANED_CHUNKS,
-    _3_1_SPLIT_BY_NLP,
-    _3_2_SPLIT_BY_MEANING,
-    resolve_task_path,
-)
-from core.workspace import workspace_for_path  # noqa: F401
+from core.workspace import get_active_workspace
 
 CHUNK_WORDS = 400
 OVERLAP_WORDS = 60
@@ -984,8 +976,7 @@ def _build_utterances_from_sentences(
 
 
 def split_by_spacy():
-    cleaned_path = resolve_task_path(_2_CLEANED_CHUNKS)
-    ws = workspace_for_path(cleaned_path)
+    ws = get_active_workspace()
 
     if ws.has_utterances():
         rprint(
@@ -1000,32 +991,6 @@ def split_by_spacy():
     )
 
     word_dicts: list[dict[str, Any]] = ws.load_words()
-    if not word_dicts and os.path.exists(cleaned_path):
-        chunks = pd.read_excel(cleaned_path)
-        for _idx, row in chunks.iterrows():
-            raw_txt = str(row.get("text", "")).strip('"').strip()
-            if not raw_txt:
-                continue
-            start_raw = row.get("start")
-            end_raw = row.get("end")
-            spk_raw = row.get("speaker_id")
-            word_dicts.append(
-                {
-                    "idx": len(word_dicts),
-                    "text": raw_txt,
-                    "punct_after": "",
-                    "start": 0.0
-                    if start_raw is None or bool(pd.isna(start_raw))
-                    else float(start_raw),
-                    "end": 0.0
-                    if end_raw is None or bool(pd.isna(end_raw))
-                    else float(end_raw),
-                    "speaker": None
-                    if spk_raw is None or bool(pd.isna(spk_raw))
-                    else spk_raw,
-                }
-            )
-
     words = [str(w.get("text", "")).strip('"').strip() for w in word_dicts]
     sentences = restore_and_split_words(words, language=language, word_dicts=word_dicts)
 

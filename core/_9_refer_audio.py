@@ -5,14 +5,13 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from core.utils import rprint
 from core.utils.models import (
-    _8_1_AUDIO_TASK,
     _AUDIO_REFERS_DIR,
     _AUDIO_SEGS_DIR,  # noqa: F401
     _RAW_AUDIO_FILE,
     _VOCAL_AUDIO_FILE,
     resolve_task_path,
 )
-from core.workspace import workspace_for_path
+from core.workspace import get_active_workspace
 import pandas as pd
 import soundfile as sf
 
@@ -38,7 +37,6 @@ def extract_refer_audio_main():
     raw_audio_file = resolve_task_path(_RAW_AUDIO_FILE)
     vocal_audio_file = resolve_task_path(_VOCAL_AUDIO_FILE)
     refers_dir = resolve_task_path(_AUDIO_REFERS_DIR)
-    audio_task_file = resolve_task_path(_8_1_AUDIO_TASK)
     reference_audio = raw_audio_file
     try:
         from core.asr_backend.demucs_vl import demucs_audio, separation_backend_package
@@ -89,11 +87,8 @@ def extract_refer_audio_main():
     # Create output directory
     os.makedirs(refers_dir, exist_ok=True)
 
-    # Read task records from workspace DB (or fallback Excel file) and audio data
-    ws = workspace_for_path(audio_task_file)
+    ws = get_active_workspace()
     df = ws.load_dub_tasks_df()
-    if df.empty:
-        df = pd.read_excel(audio_task_file)
     data, sr = sf.read(reference_audio)
 
     with Progress(

@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage=false
 """Native PyTorch SCNet (Sparse Compression Network) vocal separator.
 
 Architecture from:
@@ -6,7 +7,6 @@ and ZFTurbo/Music-Source-Separation-Training (`SCNet-large_starrytong_fixed.ckpt
 """
 
 import math
-import os
 import tempfile
 import urllib.request
 from collections import deque
@@ -73,9 +73,20 @@ class DualPathRNN(nn.Module):
         self.hidden_size = d_model * expand
         self.bidirectional = bidirectional
         self.lstm_layers = nn.ModuleList(
-            [LSTM(d_model, self.hidden_size, num_layers=1, bidirectional=bidirectional, batch_first=True) for _ in range(2)]
+            [
+                LSTM(
+                    d_model,
+                    self.hidden_size,
+                    num_layers=1,
+                    bidirectional=bidirectional,
+                    batch_first=True,
+                )
+                for _ in range(2)
+            ]
         )
-        self.linear_layers = nn.ModuleList([nn.Linear(self.hidden_size * 2, d_model) for _ in range(2)])
+        self.linear_layers = nn.ModuleList(
+            [nn.Linear(self.hidden_size * 2, d_model) for _ in range(2)]
+        )
         self.norm_layers = nn.ModuleList([nn.GroupNorm(1, d_model) for _ in range(2)])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -102,10 +113,16 @@ class SeparationNet(nn.Module):
         super().__init__()
         self.num_layers = num_layers
         self.dp_modules = nn.ModuleList(
-            [DualPathRNN(channels * (2 if i % 2 == 1 else 1), expand) for i in range(num_layers)]
+            [
+                DualPathRNN(channels * (2 if i % 2 == 1 else 1), expand)
+                for i in range(num_layers)
+            ]
         )
         self.feature_conversion = nn.ModuleList(
-            [FeatureConversion(channels * 2, inverse=(i % 2 == 1)) for i in range(num_layers)]
+            [
+                FeatureConversion(channels * 2, inverse=(i % 2 == 1))
+                for i in range(num_layers)
+            ]
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -116,7 +133,9 @@ class SeparationNet(nn.Module):
 
 
 class ConvolutionModule(nn.Module):
-    def __init__(self, channels: int, depth: int = 2, compress: int = 4, kernel: int = 3):
+    def __init__(
+        self, channels: int, depth: int = 2, compress: int = 4, kernel: int = 3
+    ):
         super().__init__()
         self.depth = abs(depth)
         hidden_size = int(channels / compress)
@@ -127,7 +146,13 @@ class ConvolutionModule(nn.Module):
                 nn.GroupNorm(1, channels),
                 nn.Conv1d(channels, hidden_size * 2, kernel, padding=padding),
                 nn.GLU(1),
-                nn.Conv1d(hidden_size, hidden_size, kernel, padding=padding, groups=hidden_size),
+                nn.Conv1d(
+                    hidden_size,
+                    hidden_size,
+                    kernel,
+                    padding=padding,
+                    groups=hidden_size,
+                ),
                 nn.GroupNorm(1, hidden_size),
                 Swish(),
                 nn.Conv1d(hidden_size, channels, 1),
@@ -141,11 +166,17 @@ class ConvolutionModule(nn.Module):
 
 
 class FusionLayer(nn.Module):
-    def __init__(self, channels: int, kernel_size: int = 3, stride: int = 1, padding: int = 1):
+    def __init__(
+        self, channels: int, kernel_size: int = 3, stride: int = 1, padding: int = 1
+    ):
         super().__init__()
-        self.conv = nn.Conv2d(channels * 2, channels * 2, kernel_size, stride=stride, padding=padding)
+        self.conv = nn.Conv2d(
+            channels * 2, channels * 2, kernel_size, stride=stride, padding=padding
+        )
 
-    def forward(self, x: torch.Tensor, skip: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, skip: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         if skip is not None:
             x = x + skip
         x = x.repeat(1, 2, 1, 1)
@@ -154,7 +185,12 @@ class FusionLayer(nn.Module):
 
 
 class SDlayer(nn.Module):
-    def __init__(self, channels_in: int, channels_out: int, band_configs: Dict[str, Dict[str, float]]):
+    def __init__(
+        self,
+        channels_in: int,
+        channels_out: int,
+        band_configs: Dict[str, Dict[str, float]],
+    ):
         super().__init__()
         self.convs = nn.ModuleList()
         self.strides: List[int] = []
@@ -162,7 +198,9 @@ class SDlayer(nn.Module):
         for config in band_configs.values():
             kernel = int(config["kernel"])
             stride = int(config["stride"])
-            self.convs.append(nn.Conv2d(channels_in, channels_out, (kernel, 1), (stride, 1), (0, 0)))
+            self.convs.append(
+                nn.Conv2d(channels_in, channels_out, (kernel, 1), (stride, 1), (0, 0))
+            )
             self.strides.append(stride)
             self.kernels.append(kernel)
         self.SR_low = float(band_configs["low"]["SR"])
@@ -177,11 +215,17 @@ class SDlayer(nn.Module):
         ]
         outputs: List[torch.Tensor] = []
         original_lengths: List[int] = []
-        for conv, stride, kernel, (start, end) in zip(self.convs, self.strides, self.kernels, splits):
+        for conv, stride, kernel, (start, end) in zip(
+            self.convs, self.strides, self.kernels, splits
+        ):
             extracted = x[:, :, start:end, :]
             original_lengths.append(end - start)
             current_length = extracted.shape[2]
-            total_padding = (kernel - stride) if stride == 1 else ((stride - current_length % stride) % stride)
+            total_padding = (
+                (kernel - stride)
+                if stride == 1
+                else ((stride - current_length % stride) % stride)
+            )
             pad_left = total_padding // 2
             pad_right = total_padding - pad_left
             padded = F.pad(extracted, (0, 0, pad_left, pad_right))
@@ -190,16 +234,28 @@ class SDlayer(nn.Module):
 
 
 class SUlayer(nn.Module):
-    def __init__(self, channels_in: int, channels_out: int, band_configs: Dict[str, Dict[str, float]]):
+    def __init__(
+        self,
+        channels_in: int,
+        channels_out: int,
+        band_configs: Dict[str, Dict[str, float]],
+    ):
         super().__init__()
         self.convtrs = nn.ModuleList(
             [
-                nn.ConvTranspose2d(channels_in, channels_out, (int(cfg["kernel"]), 1), (int(cfg["stride"]), 1))
+                nn.ConvTranspose2d(
+                    channels_in,
+                    channels_out,
+                    (int(cfg["kernel"]), 1),
+                    (int(cfg["stride"]), 1),
+                )
                 for cfg in band_configs.values()
             ]
         )
 
-    def forward(self, x: torch.Tensor, lengths: List[int], origin_lengths: List[int]) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, lengths: List[int], origin_lengths: List[int]
+    ) -> torch.Tensor:
         splits = [
             (0, lengths[0]),
             (lengths[0], lengths[0] + lengths[1]),
@@ -226,10 +282,16 @@ class SDblock(nn.Module):
     ):
         super().__init__()
         self.SDlayer = SDlayer(channels_in, channels_out, band_configs)
-        self.conv_modules = nn.ModuleList([ConvolutionModule(channels_out, depth, **conv_config) for depth in depths])
-        self.globalconv = nn.Conv2d(channels_out, channels_out, kernel_size, 1, (kernel_size - 1) // 2)
+        self.conv_modules = nn.ModuleList(
+            [ConvolutionModule(channels_out, depth, **conv_config) for depth in depths]
+        )
+        self.globalconv = nn.Conv2d(
+            channels_out, channels_out, kernel_size, 1, (kernel_size - 1) // 2
+        )
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, List[int], List[int]]:
+    def forward(
+        self, x: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, List[int], List[int]]:
         bands, original_lengths = self.SDlayer(x)
         bands = [
             F.gelu(
@@ -269,7 +331,11 @@ class SCNet(nn.Module):
         self.dims = list(dims)
         band_keys = ["low", "mid", "high"]
         self.band_configs = {
-            band_keys[i]: {"SR": band_SR[i], "stride": band_stride[i], "kernel": band_kernel[i]}
+            band_keys[i]: {
+                "SR": band_SR[i],
+                "stride": band_stride[i],
+                "kernel": band_kernel[i],
+            }
             for i in range(len(band_keys))
         }
         self.hop_length = hop_size
@@ -300,13 +366,17 @@ class SCNet(nn.Module):
                     FusionLayer(channels=dims[index + 1]),
                     SUlayer(
                         channels_in=dims[index + 1],
-                        channels_out=dims[index] if index != 0 else dims[index] * len(sources),
+                        channels_out=dims[index]
+                        if index != 0
+                        else dims[index] * len(sources),
                         band_configs=self.band_configs,
                     ),
                 ),
             )
 
-        self.separation_net = SeparationNet(channels=dims[-1], expand=expand, num_layers=num_dplayer)
+        self.separation_net = SeparationNet(
+            channels=dims[-1], expand=expand, num_layers=num_dplayer
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         b = x.shape[0]
@@ -320,7 +390,10 @@ class SCNet(nn.Module):
         x = torch.stft(x, **self.stft_config, return_complex=True)
         x = torch.view_as_real(x)
         x = x.permute(0, 3, 1, 2).reshape(
-            x.shape[0] // self.audio_channels, x.shape[3] * self.audio_channels, x.shape[1], x.shape[2]
+            x.shape[0] // self.audio_channels,
+            x.shape[3] * self.audio_channels,
+            x.shape[1],
+            x.shape[2],
         )
 
         b, _c, fr, t = x.shape
@@ -350,7 +423,9 @@ class SCNet(nn.Module):
         return x[:, :, :, :-padding]
 
 
-def _windowing_array(chunk_size: int, fade_size: int, device: torch.device) -> torch.Tensor:
+def _windowing_array(
+    chunk_size: int, fade_size: int, device: torch.device
+) -> torch.Tensor:
     fadein = torch.linspace(0.0, 1.0, fade_size, device=device)
     fadeout = torch.linspace(1.0, 0.0, fade_size, device=device)
     window = torch.ones(chunk_size, device=device)
@@ -359,15 +434,20 @@ def _windowing_array(chunk_size: int, fade_size: int, device: torch.device) -> t
     return window
 
 
+from core.workspace import replace_with_retry as _replace_with_retry
+
+
 def _download_checkpoint(url: str, target_path: Path) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     if target_path.exists() and target_path.stat().st_size > 0:
         return
-    with tempfile.NamedTemporaryFile(dir=str(target_path.parent), delete=False, suffix=".part") as tmp:
+    with tempfile.NamedTemporaryFile(
+        dir=str(target_path.parent), delete=False, suffix=".part"
+    ) as tmp:
         tmp_path = Path(tmp.name)
     try:
         urllib.request.urlretrieve(url, str(tmp_path))
-        os.replace(tmp_path, target_path)
+        _replace_with_retry(tmp_path, target_path)
     except Exception:
         tmp_path.unlink(missing_ok=True)
         raise
@@ -379,15 +459,28 @@ class SCNetSeparatorAdapter:
     samplerate = 44100
     audio_channels = 2
     chunk_size = 485100  # 11s * 44100
-    num_overlap = 4
+    num_overlap = 2
 
-    def __init__(self, model_filename: str = "SCNet-large_starrytong_fixed.ckpt", model_dir: Optional[str] = None):
-        cache_dir = Path(model_dir or "./_model_cache")
+    def __init__(
+        self,
+        model_filename: str = "SCNet-large_starrytong_fixed.ckpt",
+        model_dir: Optional[str] = None,
+    ):
+        cleaned_dir = (
+            str(model_dir or "./_model_cache").strip().strip("\"'") or "./_model_cache"
+        )
+        cache_dir = Path(cleaned_dir)
         ckpt_path = cache_dir / model_filename
         if not ckpt_path.exists():
             _download_checkpoint(SCNET_LARGE_URL, ckpt_path)
 
-        device_name = "cuda" if is_cuda_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+        device_name = (
+            "cuda"
+            if is_cuda_available()
+            else "mps"
+            if torch.backends.mps.is_available()
+            else "cpu"
+        )
         self.device = torch.device(device_name)
         self.model = SCNet(**SCNET_LARGE_CONFIG)  # type: ignore[arg-type]
 
@@ -430,7 +523,9 @@ class SCNetSeparatorAdapter:
                 seg_len = part.shape[-1]
                 pad_mode = "reflect" if seg_len > chunk_size // 2 else "constant"
                 if seg_len < chunk_size:
-                    part = F.pad(part, (0, chunk_size - seg_len), mode=pad_mode, value=0.0)
+                    part = F.pad(
+                        part, (0, chunk_size - seg_len), mode=pad_mode, value=0.0
+                    )
 
                 pred = self.model(part.unsqueeze(0).to(self.device))[0].cpu().float()
 
@@ -450,5 +545,7 @@ class SCNetSeparatorAdapter:
             estimated = estimated[..., border:-border]
         estimated = estimated[..., :length_init] * std + mean
 
-        outputs = {source: estimated[idx] for idx, source in enumerate(self.model.sources)}
+        outputs = {
+            source: estimated[idx] for idx, source in enumerate(self.model.sources)
+        }
         return wav, outputs

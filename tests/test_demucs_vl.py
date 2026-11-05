@@ -3,6 +3,7 @@
 Real FFmpeg, the real Demucs reader/writer helpers and the app's own decoders are used, so
 the MP3 encoder-delay handling that shifted word timestamps ~60 ms late is exercised.
 """
+
 import os
 import subprocess
 from types import SimpleNamespace
@@ -24,7 +25,9 @@ def lag(reference, other):
     """Samples by which `other` is late relative to `reference` (FFT cross-correlation)."""
     n = min(len(reference), len(other))
     size = 1 << (2 * n - 1).bit_length()
-    corr = np.fft.irfft(np.fft.rfft(other[:n], size) * np.conj(np.fft.rfft(reference[:n], size)), size)
+    corr = np.fft.irfft(
+        np.fft.rfft(other[:n], size) * np.conj(np.fft.rfft(reference[:n], size)), size
+    )
     k = int(np.argmax(corr))
     return k if k < size // 2 else k - size
 
@@ -38,10 +41,34 @@ def raw_mp3(tmp_path, monkeypatch):
     source = np.zeros(48000 * 20, dtype=np.float32)
     for start in rng.integers(0, len(source) - 4800, 60):
         length = int(rng.integers(800, 4800))
-        source[start:start + length] += rng.normal(0, 0.25, length).astype(np.float32)
+        source[start : start + length] += rng.normal(0, 0.25, length).astype(np.float32)
     source.astype("<f4").tofile("source.f32")
-    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "f32le", "-ar", "48000", "-ac", "1", "-i", "source.f32",
-                    "-c:a", "libmp3lame", "-b:a", "128k", "-ar", "32000", "-ac", "1", _RAW_AUDIO_FILE], check=True)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "f32le",
+            "-ar",
+            "48000",
+            "-ac",
+            "1",
+            "-i",
+            "source.f32",
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "128k",
+            "-ar",
+            "32000",
+            "-ac",
+            "1",
+            _RAW_AUDIO_FILE,
+        ],
+        check=True,
+    )
 
 
 @pytest.fixture
@@ -55,9 +82,18 @@ def fake_demucs(monkeypatch):
 
         def separate_tensor(self, wav, sr=None):
             calls["input"] = (tuple(wav.shape), sr)
-            return wav, {"vocals": wav * 0.8, "drums": wav * 0.1, "bass": wav * 0.05, "other": wav * 0.05}
+            return wav, {
+                "vocals": wav * 0.8,
+                "drums": wav * 0.1,
+                "bass": wav * 0.05,
+                "other": wav * 0.05,
+            }
 
-    monkeypatch.setattr(demucs_vl, "get_model", lambda name: SimpleNamespace(samplerate=44100, audio_channels=2))
+    monkeypatch.setattr(
+        demucs_vl,
+        "get_model",
+        lambda name: SimpleNamespace(samplerate=44100, audio_channels=2),
+    )
     monkeypatch.setattr(demucs_vl, "PreloadedSeparator", Separator)
     return calls
 
@@ -81,7 +117,15 @@ def test_vocal_stays_aligned_through_asr_normalization(raw_mp3, fake_demucs):
     # _2_asr re-exports vocal.mp3 through pydub before alignment.
     demucs_vl.demucs_audio()
     normalize_audio_volume(_VOCAL_AUDIO_FILE, _VOCAL_AUDIO_FILE, format="mp3")
-    assert abs(lag(load_audio_segment(_RAW_AUDIO_FILE, 0, 20), load_audio_segment(_VOCAL_AUDIO_FILE, 0, 20))) <= 1
+    assert (
+        abs(
+            lag(
+                load_audio_segment(_RAW_AUDIO_FILE, 0, 20),
+                load_audio_segment(_VOCAL_AUDIO_FILE, 0, 20),
+            )
+        )
+        <= 1
+    )
 
 
 def test_reference_clips_read_vocal_without_delay(raw_mp3, fake_demucs):
@@ -91,12 +135,15 @@ def test_reference_clips_read_vocal_without_delay(raw_mp3, fake_demucs):
     data, sr = sf.read(_VOCAL_AUDIO_FILE)
     assert sr == 44100
     raw = load_audio_segment(_RAW_AUDIO_FILE, 0, 20)
-    vocal = np.interp(np.arange(len(raw)) * sr / SR, np.arange(len(data)), data.mean(axis=1)).astype(np.float32)
+    vocal = np.interp(
+        np.arange(len(raw)) * sr / SR, np.arange(len(data)), data.mean(axis=1)
+    ).astype(np.float32)
     assert abs(lag(raw, vocal)) <= 1
 
 
 def test_stem_falls_back_to_wav_without_libmp3lame(tmp_path, monkeypatch):
     import torch
+
     monkeypatch.setattr(demucs_vl, "_ffmpeg_has_encoder", lambda name: False)
     path = tmp_path / "vocal.mp3"
     writer = demucs_vl.StemWriter(path, 44100, 2)
@@ -109,7 +156,9 @@ def test_long_audio_is_separated_in_chunks(raw_mp3, fake_demucs, monkeypatch):
     """Chunks with context on both sides give the same stems as one pass (#517)."""
     demucs_vl.demucs_audio()
     samples = fake_demucs["input"][0][1]
-    whole = [open(stem, "rb").read() for stem in (_VOCAL_AUDIO_FILE, _BACKGROUND_AUDIO_FILE)]
+    whole = [
+        open(stem, "rb").read() for stem in (_VOCAL_AUDIO_FILE, _BACKGROUND_AUDIO_FILE)
+    ]
     for stem in (_VOCAL_AUDIO_FILE, _BACKGROUND_AUDIO_FILE):
         os.remove(stem)
 
@@ -127,11 +176,19 @@ def test_long_audio_is_separated_in_chunks(raw_mp3, fake_demucs, monkeypatch):
 
     # 6 s chunks of a 20 s track, each with up to 1 s of context on both sides
     assert shapes == [7 * 44100, 8 * 44100, 8 * 44100, samples - 17 * 44100]
-    assert [open(stem, "rb").read() for stem in (_VOCAL_AUDIO_FILE, _BACKGROUND_AUDIO_FILE)] == whole
-    assert sorted(os.listdir("output/audio")) == ["background.mp3", "raw.mp3", "vocal.mp3"]
+    assert [
+        open(stem, "rb").read() for stem in (_VOCAL_AUDIO_FILE, _BACKGROUND_AUDIO_FILE)
+    ] == whole
+    assert sorted(os.listdir("output/audio")) == [
+        "background.mp3",
+        "raw.mp3",
+        "vocal.mp3",
+    ]
 
 
-def test_audio_separator_stems_are_sample_aligned_with_raw(raw_mp3, tmp_path, monkeypatch):
+def test_audio_separator_stems_are_sample_aligned_with_raw(
+    raw_mp3, tmp_path, monkeypatch
+):
     """Non-Demucs models (mdx, scnet, mel_band_roformer) preserve <= 1 sample alignment."""
     import sys
     import types
@@ -180,3 +237,16 @@ def test_audio_separator_stems_are_sample_aligned_with_raw(raw_mp3, tmp_path, mo
         assert abs(len(decoded) - len(raw)) <= SR // 100
 
 
+def test_demucs_audio_releases_cuda_cache_after_chunks_and_in_finally(
+    raw_mp3, fake_demucs, monkeypatch
+):
+    """CUDA cache is emptied after each separated chunk and in the finally block of demucs_audio()."""
+    import torch
+
+    emptied = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: emptied.append(1))
+
+    demucs_vl.demucs_audio()
+    # At least 1 chunk empty_cache + 1 finally empty_cache
+    assert len(emptied) >= 2

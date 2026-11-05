@@ -1,6 +1,31 @@
 """Conservative speech boundaries; keep pauses and the original sample timeline."""
 
+from contextlib import contextmanager
+import os
+
 SPEECH_PADDING_SECONDS = 1.0
+
+
+@contextmanager
+def _unicode_safe_jit_load(torch_mod):
+    """Route torch.jit.load file paths through Python's binary stream so Windows non-ASCII paths never hit C++ ANSI fopen."""
+    jit = getattr(torch_mod, "jit", None)
+    orig_load = getattr(jit, "load", None)
+    if jit is None or orig_load is None:
+        yield
+        return
+
+    def _stream_load(f, *args, **kwargs):
+        if isinstance(f, (str, os.PathLike)):
+            with open(f, "rb") as fp:
+                return orig_load(fp, *args, **kwargs)
+        return orig_load(f, *args, **kwargs)
+
+    jit.load = _stream_load
+    try:
+        yield
+    finally:
+        jit.load = orig_load
 
 
 def _speech_regions(audio, sample_rate):
@@ -14,10 +39,15 @@ def _speech_regions(audio, sample_rate):
         torch.set_num_threads(1)
         from silero_vad import load_silero_vad, get_speech_timestamps
 
-        model = load_silero_vad()
+        with _unicode_safe_jit_load(torch):
+            model = load_silero_vad()
         return get_speech_timestamps(
-            torch.from_numpy(audio), model, sampling_rate=sample_rate,
-            threshold=0.35, min_speech_duration_ms=100, speech_pad_ms=0,
+            torch.from_numpy(audio),
+            model,
+            sampling_rate=sample_rate,
+            threshold=0.35,
+            min_speech_duration_ms=100,
+            speech_pad_ms=0,
             progress_tracking_callback=lambda _: check_cancel(),
         )
     finally:
@@ -41,6 +71,10 @@ def trim_speech_windows(audio, windows, sample_rate=16000):
         if not speech:
             trimmed.append((start, end))
             continue
-        trimmed.append((max(start, speech[0]["start"] - padding),
-                        min(end, speech[-1]["end"] + padding)))
+        trimmed.append(
+            (
+                max(start, speech[0]["start"] - padding),
+                min(end, speech[-1]["end"] + padding),
+            )
+        )
     return trimmed

@@ -5,16 +5,12 @@ from rich.console import Console
 from rich.panel import Panel
 from core.utils import get_joiner, load_key, load_key_or, rprint  # noqa: F401
 from core.utils.models import (
-    _2_CLEANED_CHUNKS,
-    _3_2_SPLIT_BY_MEANING,
-    _5_REMERGED,
-    _5_SPLIT_SUB,
     _AUDIO_DIR,
     _OUTPUT_DIR,
     resolve_task_path,
 )
 from core.utils.subtitle_style import build_ass_from_srt_pair, get_burn_mode
-from core.workspace import get_active_workspace, workspace_for_path
+from core.workspace import get_active_workspace
 
 console = Console()
 
@@ -378,28 +374,18 @@ def gen_source_subtitles():
     from core._1_ytdlp import find_subtitle_file
     from core._5_split_sub import split_source_lines
 
-    cleaned_path = resolve_task_path(_2_CLEANED_CHUNKS)
-    meaning_path = resolve_task_path(_3_2_SPLIT_BY_MEANING)
     out_dir = resolve_task_path(_OUTPUT_DIR)
-    ws = workspace_for_path(cleaned_path)
+    ws = get_active_workspace()
 
     words = ws.load_words()
-    if words:
-        df_text = pd.DataFrame(words)
-    else:
-        df_text = pd.read_excel(cleaned_path)
-        df_text["text"] = df_text["text"].str.strip('"').str.strip()
+    df_text = (
+        pd.DataFrame(words) if words else pd.DataFrame(columns=["text", "start", "end"])
+    )
 
     utts = ws.load_utterances()
-    if utts:
-        lines = [
-            str(u.get("src") or "").strip()
-            for u in utts
-            if str(u.get("src") or "").strip()
-        ]
-    else:
-        with open(meaning_path, "r", encoding="utf-8") as f:
-            lines = [line.strip() for line in f if line.strip()]
+    lines = [
+        str(u.get("src") or "").strip() for u in utts if str(u.get("src") or "").strip()
+    ]
 
     # The subtitles of the user keep their lines
     df_source = pd.DataFrame(
@@ -423,45 +409,37 @@ def clean_translation(x):
 
 
 def align_timestamp_main():
-    cleaned_path = resolve_task_path(_2_CLEANED_CHUNKS)
-    split_sub_path = resolve_task_path(_5_SPLIT_SUB)
-    remerged_path = resolve_task_path(_5_REMERGED)
     out_dir = resolve_task_path(_OUTPUT_DIR)
     audio_dir = resolve_task_path(_AUDIO_DIR)
-    ws = workspace_for_path(cleaned_path)
+    ws = get_active_workspace()
 
     words = ws.load_words()
-    if words:
-        df_text = pd.DataFrame(words)
-    else:
-        df_text = pd.read_excel(cleaned_path)
-        df_text["text"] = df_text["text"].str.strip('"').str.strip()
+    df_text = (
+        pd.DataFrame(words) if words else pd.DataFrame(columns=["text", "start", "end"])
+    )
 
     utts = ws.load_utterances()
-    if utts:
-        cue_rows = []
-        for u in utts:
-            cues = u.get("sub_cues")
-            if isinstance(cues, list) and cues:
-                for c in cues:
-                    cue_rows.append(
-                        {
-                            "Source": str(c.get("src") or ""),
-                            "Translation": str(
-                                c.get("tgt", c.get("trans", c.get("text", ""))) or ""
-                            ),
-                        }
-                    )
-            else:
+    cue_rows = []
+    for u in utts:
+        cues = u.get("sub_cues")
+        if isinstance(cues, list) and cues:
+            for c in cues:
                 cue_rows.append(
                     {
-                        "Source": str(u.get("src") or ""),
-                        "Translation": str(u.get("tgt") or ""),
+                        "Source": str(c.get("src") or ""),
+                        "Translation": str(
+                            c.get("tgt", c.get("trans", c.get("text", ""))) or ""
+                        ),
                     }
                 )
-        df_translate = pd.DataFrame(cue_rows)
-    else:
-        df_translate = pd.read_excel(split_sub_path)
+        else:
+            cue_rows.append(
+                {
+                    "Source": str(u.get("src") or ""),
+                    "Translation": str(u.get("tgt") or ""),
+                }
+            )
+    df_translate = pd.DataFrame(cue_rows, columns=["Source", "Translation"])
     df_translate["Translation"] = df_translate["Translation"].apply(clean_translation)
 
     align_timestamp(
@@ -488,21 +466,16 @@ def align_timestamp_main():
     )
 
     # for audio: keep full punctuation (for_display=False) so TTS preserves natural prosody pauses
-    if utts:
-        df_translate_for_audio = pd.DataFrame(
-            [
-                {
-                    "Source": str(u.get("src") or "").strip(),
-                    "Translation": str(u.get("tts_text") or u.get("tgt") or "").strip(),
-                }
-                for u in utts
-            ]
-        )
-    else:
-        df_translate_for_audio = pd.read_excel(remerged_path)
-        df_translate_for_audio["Translation"] = (
-            df_translate_for_audio["Translation"].fillna("").astype(str).str.strip()
-        )
+    df_translate_for_audio = pd.DataFrame(
+        [
+            {
+                "Source": str(u.get("src") or "").strip(),
+                "Translation": str(u.get("tts_text") or u.get("tgt") or "").strip(),
+            }
+            for u in utts
+        ],
+        columns=["Source", "Translation"],
+    )
 
     align_timestamp(
         df_text,

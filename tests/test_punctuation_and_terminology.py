@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
 import pandas as pd
 import pytest
 
 from core.task_runner import StopTask
+from core.workspace import TaskWorkspace, workspace_context
 
 
 # ------------------------------------------------------------------
@@ -111,20 +111,19 @@ def test_overlapping_windows_do_not_force_sentence_breaks_at_chunk_boundaries(
 
 
 def test_split_by_spacy_writes_both_nlp_and_meaning_files(monkeypatch, tmp_path):
-    """split_by_spacy writes to both _3_1_SPLIT_BY_NLP and _3_2_SPLIT_BY_MEANING."""
+    """split_by_spacy persists words and utterances into project.sqlite."""
     import core._3_1_split_nlp as split_nlp
 
-    cleaned_xlsx = tmp_path / "cleaned_chunks.xlsx"
-    nlp_txt = tmp_path / "split_by_nlp.txt"
-    meaning_txt = tmp_path / "split_by_meaning.txt"
+    ws = TaskWorkspace(tmp_path)
+    ws.save_words(
+        [
+            {"idx": i, "text": w, "start": float(i), "end": float(i) + 0.4}
+            for i, w in enumerate(
+                ['"Hello"', '"world"', '"this"', '"is"', '"a"', '"test"']
+            )
+        ]
+    )
 
-    pd.DataFrame(
-        {"text": ['"Hello"', '"world"', '"this"', '"is"', '"a"', '"test"']}
-    ).to_excel(cleaned_xlsx, index=False)
-
-    monkeypatch.setattr(split_nlp, "_2_CLEANED_CHUNKS", str(cleaned_xlsx))
-    monkeypatch.setattr(split_nlp, "_3_1_SPLIT_BY_NLP", str(nlp_txt))
-    monkeypatch.setattr(split_nlp, "_3_2_SPLIT_BY_MEANING", str(meaning_txt))
     monkeypatch.setattr(split_nlp, "get_source_language", lambda: "en")
     monkeypatch.setattr(split_nlp, "load_key_or", lambda k, d=None: 1)
     monkeypatch.setattr(
@@ -133,12 +132,9 @@ def test_split_by_spacy_writes_both_nlp_and_meaning_files(monkeypatch, tmp_path)
         lambda *args, **kwargs: {"restored": "Hello world. this is a test."},
     )
 
-    # Call split_by_spacy directly (it persists words and utterances into project.sqlite)
-    split_nlp.split_by_spacy()
+    with workspace_context(ws):
+        split_nlp.split_by_spacy()
 
-    from core.workspace import TaskWorkspace
-
-    ws = TaskWorkspace(tmp_path)
     assert [u["src"] for u in ws.load_utterances()] == [
         "Hello world.",
         "this is a test.",
@@ -204,7 +200,7 @@ def test_search_things_to_note_matches_exact_stem_and_asr_fuzzy_variants_in_long
     even inside a 1500-char multi-sentence translation chunk."""
     import core._4_1_summarize as summarize
 
-    term_json = tmp_path / "terminology.json"
+    ws = TaskWorkspace(tmp_path)
     custom_xlsx = tmp_path / "custom_terms.xlsx"
     pd.DataFrame(
         {
@@ -214,20 +210,14 @@ def test_search_things_to_note_matches_exact_stem_and_asr_fuzzy_variants_in_long
         }
     ).to_excel(custom_xlsx, index=False)
 
-    term_json.write_text(
-        json.dumps(
-            {
-                "theme": "Game dev talk",
-                "terms": [
-                    {"src": "Destiny", "tgt": "命运", "note": "游戏名"},
-                    {"src": "shader pipeline", "tgt": "着色器管线", "note": "图形学"},
-                ],
-            }
-        ),
-        encoding="utf-8",
+    ws.save_terms(
+        "Game dev talk",
+        [
+            {"src": "Destiny", "tgt": "命运", "note": "游戏名"},
+            {"src": "shader pipeline", "tgt": "着色器管线", "note": "图形学"},
+        ],
     )
 
-    monkeypatch.setattr(summarize, "_4_1_TERMINOLOGY", str(term_json))
     monkeypatch.setattr(summarize, "CUSTOM_TERMS_PATH", str(custom_xlsx))
     monkeypatch.setattr(
         summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "none.csv")
@@ -247,7 +237,8 @@ def test_search_things_to_note_matches_exact_stem_and_asr_fuzzy_variants_in_long
     )
     assert len(chunk) > 1200
 
-    prompt = summarize.search_things_to_note_in_prompt(chunk)
+    with workspace_context(ws):
+        prompt = summarize.search_things_to_note_in_prompt(chunk)
     assert prompt is not None
     assert '"Bungie": "Bungie 工作室"' in prompt
     assert '"shader pipeline": "着色器管线"' in prompt
@@ -262,25 +253,19 @@ def test_short_terms_and_lookalikes_do_not_trigger_false_positives(
     'program'), and lookalikes ('faster' vs 'raster', 'severe' vs 'server') must not false-match."""
     import core._4_1_summarize as summarize
 
-    term_json = tmp_path / "terminology.json"
-    term_json.write_text(
-        json.dumps(
-            {
-                "theme": "Tech",
-                "terms": [
-                    {"src": "AI", "tgt": "人工智能", "note": ""},
-                    {"src": "UI", "tgt": "界面", "note": ""},
-                    {"src": "RAM", "tgt": "内存", "note": ""},
-                    {"src": "ID", "tgt": "标识", "note": ""},
-                    {"src": "raster", "tgt": "光栅", "note": ""},
-                    {"src": "server", "tgt": "服务器", "note": ""},
-                    {"src": "model", "tgt": "模型", "note": ""},
-                ],
-            }
-        ),
-        encoding="utf-8",
+    ws = TaskWorkspace(tmp_path)
+    ws.save_terms(
+        "Tech",
+        [
+            {"src": "AI", "tgt": "人工智能", "note": ""},
+            {"src": "UI", "tgt": "界面", "note": ""},
+            {"src": "RAM", "tgt": "内存", "note": ""},
+            {"src": "ID", "tgt": "标识", "note": ""},
+            {"src": "raster", "tgt": "光栅", "note": ""},
+            {"src": "server", "tgt": "服务器", "note": ""},
+            {"src": "model", "tgt": "模型", "note": ""},
+        ],
     )
-    monkeypatch.setattr(summarize, "_4_1_TERMINOLOGY", str(term_json))
     monkeypatch.setattr(summarize, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
     monkeypatch.setattr(summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
     monkeypatch.setattr(
@@ -288,66 +273,55 @@ def test_short_terms_and_lookalikes_do_not_trigger_false_positives(
     )
 
     sentence = "He said that building this program in dark mode runs faster despite a severe issue."
-    assert summarize.search_things_to_note_in_prompt(sentence) is None
+    with workspace_context(ws):
+        assert summarize.search_things_to_note_in_prompt(sentence) is None
 
 
 def test_term_index_cache_invalidates_when_terminology_json_is_edited(
     monkeypatch, tmp_path
 ):
-    """When user edits terminology.json during pause_before_translate, mtime changes and cache reloads."""
+    """When user edits task terms during pause_before_translate, mtime changes and cache reloads."""
     import core._4_1_summarize as summarize
 
-    term_json = tmp_path / "terminology.json"
-    monkeypatch.setattr(summarize, "_4_1_TERMINOLOGY", str(term_json))
+    ws = TaskWorkspace(tmp_path)
     monkeypatch.setattr(summarize, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
     monkeypatch.setattr(summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
     monkeypatch.setattr(
         summarize, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json")
     )
 
-    term_json.write_text(
-        json.dumps(
-            {"theme": "t", "terms": [{"src": "OpenGL", "tgt": "旧译名", "note": "n1"}]}
-        ),
-        encoding="utf-8",
-    )
-    first_prompt = summarize.search_things_to_note_in_prompt("We use OpenGL here.")
-    assert first_prompt is not None and '"OpenGL": "旧译名"' in first_prompt
+    ws.save_terms("t", [{"src": "OpenGL", "tgt": "旧译名", "note": "n1"}])
+    with workspace_context(ws):
+        first_prompt = summarize.search_things_to_note_in_prompt("We use OpenGL here.")
+        assert first_prompt is not None and '"OpenGL": "旧译名"' in first_prompt
 
-    # Simulate user editing terminology.json with updated mtime
-    term_json.write_text(
-        json.dumps(
-            {
-                "theme": "t",
-                "terms": [{"src": "OpenGL", "tgt": "新译名_已修改", "note": "n2"}],
-            }
-        ),
-        encoding="utf-8",
-    )
-    st = os.stat(term_json)
-    os.utime(term_json, (st.st_atime, st.st_mtime + 2.0))
+        # Simulate user editing task terms with updated mtime
+        ws.save_terms("t", [{"src": "OpenGL", "tgt": "新译名_已修改", "note": "n2"}])
+        ws.set_terms_mtime(ws.get_terms_mtime() + 2.0)
 
-    second_prompt = summarize.search_things_to_note_in_prompt("We use OpenGL here.")
-    assert second_prompt is not None and '"OpenGL": "新译名_已修改"' in second_prompt
+        second_prompt = summarize.search_things_to_note_in_prompt("We use OpenGL here.")
+        assert (
+            second_prompt is not None and '"OpenGL": "新译名_已修改"' in second_prompt
+        )
 
 
 def test_get_summary_merges_chunks_and_custom_terms_consistently(monkeypatch, tmp_path):
     """Multi-chunk extraction runs concurrently and unifies cross-chunk variants with earlier chunk winning."""
     import core._4_1_summarize as summarize
 
-    meaning_txt = tmp_path / "split_by_meaning.txt"
-    term_json = tmp_path / "terminology.json"
+    ws = TaskWorkspace(tmp_path)
     custom_xlsx = tmp_path / "custom_terms.xlsx"
 
-    meaning_txt.write_text(
-        "Sentence one in chunk zero.\nSentence two in chunk one.\n", encoding="utf-8"
+    ws.save_utterances(
+        [
+            {"id": 0, "src": "Sentence one in chunk zero."},
+            {"id": 1, "src": "Sentence two in chunk one."},
+        ]
     )
     pd.DataFrame(
         {"src": ["Vulkan"], "tgt": ["Vulkan 接口"], "note": ["图形API"]}
     ).to_excel(custom_xlsx, index=False)
 
-    monkeypatch.setattr(summarize, "_3_2_SPLIT_BY_MEANING", str(meaning_txt))
-    monkeypatch.setattr(summarize, "_4_1_TERMINOLOGY", str(term_json))
     monkeypatch.setattr(summarize, "CUSTOM_TERMS_PATH", str(custom_xlsx))
     monkeypatch.setattr(summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
     monkeypatch.setattr(
@@ -379,11 +353,10 @@ def test_get_summary_merges_chunks_and_custom_terms_consistently(monkeypatch, tm
 
     monkeypatch.setattr(summarize, "ask_gpt", fake_ask_gpt)
 
-    getattr(summarize.get_summary, "__wrapped__")()
+    with workspace_context(ws):
+        getattr(summarize.get_summary, "__wrapped__")()
 
-    from core.workspace import TaskWorkspace
-
-    saved = TaskWorkspace(tmp_path).load_terms()
+    saved = ws.load_terms()
     assert "Chunk 0 theme." in saved["summary"]
     terms_by_src = {t["src"]: t["tgt"] for t in saved["terms"]}
     assert terms_by_src["Vulkan"] == "Vulkan 接口"
@@ -400,50 +373,31 @@ def test_get_summary_merges_chunks_and_custom_terms_consistently(monkeypatch, tm
 def test_translate_all_reuses_raw_cache_and_invalidates_on_terminology_change(
     monkeypatch, tmp_path
 ):
-    """If translation_raw.csv matches _3_2_SPLIT_BY_MEANING and fingerprint, LLM is skipped;
-    if terminology.json changes, cache is invalidated."""
+    """If project.sqlite utterances match fingerprint, LLM is skipped;
+    if task terms change, cache is invalidated."""
     import core._4_2_translate as translate
 
-    meaning_txt = tmp_path / "split_by_meaning.txt"
-    term_json = tmp_path / "terminology.json"
-    raw_csv = tmp_path / "translation_raw.csv"
-    cleaned_xlsx = tmp_path / "cleaned_chunks.xlsx"
-    out_xlsx = tmp_path / "translation_results.xlsx"
+    ws = TaskWorkspace(tmp_path)
+    ws.save_words(
+        [
+            {"idx": 0, "text": "Hello", "start": 0.0, "end": 0.4},
+            {"idx": 1, "text": "world.", "start": 0.5, "end": 0.9},
+            {"idx": 2, "text": "How", "start": 1.0, "end": 1.4},
+            {"idx": 3, "text": "are", "start": 1.5, "end": 1.9},
+            {"idx": 4, "text": "you?", "start": 2.0, "end": 2.5},
+        ]
+    )
+    ws.save_terms("test", [])
 
-    meaning_txt.write_text("Hello world.\nHow are you?\n", encoding="utf-8")
-    term_json.write_text('{"theme": "test", "terms": []}', encoding="utf-8")
-
-    monkeypatch.setattr(translate, "_3_2_SPLIT_BY_MEANING", str(meaning_txt))
-    monkeypatch.setattr(translate, "_4_1_TERMINOLOGY", str(term_json))
-    monkeypatch.setattr(translate, "_4_2_TRANSLATION_RAW", str(raw_csv))
-    monkeypatch.setattr(translate, "_2_CLEANED_CHUNKS", str(cleaned_xlsx))
-    monkeypatch.setattr(translate, "_4_2_TRANSLATION", str(out_xlsx))
     monkeypatch.setattr(
         translate, "load_key", lambda k: 10.0 if k == "min_trim_duration" else 2
     )
     monkeypatch.setattr(translate, "load_key_or", lambda k, d=None: "zh")
-
-    fp = translate._translation_cache_fingerprint()
-    pd.DataFrame(
-        {
-            "Source": ["Hello world.", "How are you?"],
-            "Translation": ["你好，世界。", "你好吗？"],
-            "Fingerprint": [fp, fp],
-        }
-    ).to_csv(raw_csv, index=False, encoding="utf-8-sig")
-    pd.DataFrame(
-        {
-            "text": ["Hello", "world.", "How", "are", "you?"],
-            "start": [0.0, 0.5, 1.0, 1.5, 2.0],
-            "end": [0.4, 0.9, 1.4, 1.9, 2.5],
-        }
-    ).to_excel(cleaned_xlsx, index=False)
-
     monkeypatch.setattr(
         translate,
         "translate_chunk",
         lambda *args, **kwargs: pytest.fail(
-            "Should have reused translation_raw.csv without calling LLM"
+            "Should have reused SQLite utterance translation cache without calling LLM"
         ),
     )
     monkeypatch.setattr(
@@ -452,39 +406,46 @@ def test_translate_all_reuses_raw_cache_and_invalidates_on_terminology_change(
         lambda df_text, df_trans, *a, **kw: df_trans.assign(duration=[1.0, 1.5]),
     )
 
-    getattr(translate.translate_all, "__wrapped__")()
-
-    from core.workspace import TaskWorkspace
-
-    utts = TaskWorkspace(tmp_path).load_utterances()
-    assert [u["src"] for u in utts] == ["Hello world.", "How are you?"]
-    assert [u["tgt"] for u in utts] == ["你好，世界。", "你好吗？"]
-
-    # Now modify terms in workspace -> fingerprint changes -> cache must return None
-    TaskWorkspace(tmp_path).save_terms(
-        "updated", [{"src": "world", "tgt": "天下", "note": ""}]
-    )
-    new_fp = translate._translation_cache_fingerprint()
-    assert new_fp != fp
-    assert (
-        translate._load_cached_raw_translation(
-            ["Hello world.", "How are you?"], fingerprint=new_fp
+    with workspace_context(ws):
+        fp = translate._translation_cache_fingerprint()
+        ws.save_utterances(
+            [
+                {"id": 0, "src": "Hello world."},
+                {"id": 1, "src": "How are you?"},
+            ]
         )
-        is None
-    )
-    # Legacy cache without Fingerprint column must be rejected when fingerprint is required
-    pd.DataFrame(
-        {
-            "Source": ["Hello world.", "How are you?"],
-            "Translation": ["旧缓存1", "旧缓存2"],
-        }
-    ).to_csv(raw_csv, index=False, encoding="utf-8-sig")
-    assert (
-        translate._load_cached_raw_translation(
-            ["Hello world.", "How are you?"], fingerprint=new_fp
+        ws.save_translation_cache(
+            fp,
+            [
+                ("Hello world.", "你好，世界。"),
+                ("How are you?", "你好吗？"),
+            ],
         )
-        is None
-    )
+
+        getattr(translate.translate_all, "__wrapped__")()
+
+        utts = ws.load_utterances()
+        assert [u["src"] for u in utts] == ["Hello world.", "How are you?"]
+        assert [u["tgt"] for u in utts] == ["你好，世界。", "你好吗？"]
+
+        # Now modify terms in workspace -> fingerprint changes -> cache must return None
+        ws.save_terms("updated", [{"src": "world", "tgt": "天下", "note": ""}])
+        ws.set_terms_mtime(ws.get_terms_mtime() + 2.0)
+        new_fp = translate._translation_cache_fingerprint()
+        assert new_fp != fp
+        assert (
+            translate._load_cached_raw_translation(
+                ["Hello world.", "How are you?"], fingerprint=new_fp
+            )
+            is None
+        )
+        # Empty fingerprint must be rejected
+        assert (
+            translate._load_cached_raw_translation(
+                ["Hello world.", "How are you?"], fingerprint=""
+            )
+            is None
+        )
 
 
 def test_generate_shared_prompt_formats_list_and_string_context_cleanly():
@@ -638,27 +599,21 @@ def test_symbol_terms_do_not_pollute_stem_ngram_map_and_aliases_appear_in_prompt
     matched terms with aliases must include '(also transcribed as: ...)' in Points to Note."""
     import core._4_1_summarize as summarize
 
-    term_json = tmp_path / "terminology.json"
-    term_json.write_text(
-        json.dumps(
+    ws = TaskWorkspace(tmp_path)
+    ws.save_terms(
+        "Software engineering",
+        [
+            {"src": ".NET", "tgt": ".NET 框架", "note": "微软平台"},
+            {"src": "C#", "tgt": "C# 语言", "note": "编程语言"},
+            {"src": "C++", "tgt": "C++ 语言", "note": "系统语言"},
             {
-                "theme": "Software engineering",
-                "terms": [
-                    {"src": ".NET", "tgt": ".NET 框架", "note": "微软平台"},
-                    {"src": "C#", "tgt": "C# 语言", "note": "编程语言"},
-                    {"src": "C++", "tgt": "C++ 语言", "note": "系统语言"},
-                    {
-                        "src": "Kubernetes",
-                        "tgt": "K8s 容器编排",
-                        "aliases": ["cooper netties"],
-                        "note": "云原生系统",
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
+                "src": "Kubernetes",
+                "tgt": "K8s 容器编排",
+                "aliases": ["cooper netties"],
+                "note": "云原生系统",
+            },
+        ],
     )
-    monkeypatch.setattr(summarize, "_4_1_TERMINOLOGY", str(term_json))
     monkeypatch.setattr(
         summarize, "GLOBAL_GLOSSARY_PATH", str(tmp_path / "no_global.csv")
     )
@@ -668,31 +623,32 @@ def test_symbol_terms_do_not_pollute_stem_ngram_map_and_aliases_appear_in_prompt
         summarize, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json")
     )
 
-    # Everyday 'net' and 'c' must NOT trigger .NET, C#, or C++
-    assert (
-        summarize.search_things_to_note_in_prompt(
-            "The fishing net caught a fish in section c with a net profit."
+    with workspace_context(ws):
+        # Everyday 'net' and 'c' must NOT trigger .NET, C#, or C++
+        assert (
+            summarize.search_things_to_note_in_prompt(
+                "The fishing net caught a fish in section c with a net profit."
+            )
+            is None
         )
-        is None
-    )
 
-    # Exact symbol match must trigger .NET and C++
-    sym_prompt = summarize.search_things_to_note_in_prompt(
-        "We migrated the backend from .NET to C++ yesterday."
-    )
-    assert sym_prompt is not None
-    assert '".NET"' in sym_prompt
-    assert '"C++"' in sym_prompt
-    assert '"C#"' not in sym_prompt
+        # Exact symbol match must trigger .NET and C++
+        sym_prompt = summarize.search_things_to_note_in_prompt(
+            "We migrated the backend from .NET to C++ yesterday."
+        )
+        assert sym_prompt is not None
+        assert '".NET"' in sym_prompt
+        assert '"C++"' in sym_prompt
+        assert '"C#"' not in sym_prompt
 
-    # Alias match must surface the alias in Points to Note so LLM links 'cooper netties' -> 'Kubernetes'
-    alias_prompt = summarize.search_things_to_note_in_prompt(
-        "We deployed the cluster on cooper netties in production."
-    )
-    assert alias_prompt is not None
-    assert '"Kubernetes"' in alias_prompt
-    assert "cooper netties" in alias_prompt
-    assert "also transcribed as" in alias_prompt
+        # Alias match must surface the alias in Points to Note so LLM links 'cooper netties' -> 'Kubernetes'
+        alias_prompt = summarize.search_things_to_note_in_prompt(
+            "We deployed the cluster on cooper netties in production."
+        )
+        assert alias_prompt is not None
+        assert '"Kubernetes"' in alias_prompt
+        assert "cooper netties" in alias_prompt
+        assert "also transcribed as" in alias_prompt
 
 
 def test_merge_terminology_results_unifies_llm_variants_into_canonical_aliases():
@@ -747,21 +703,15 @@ def test_multiword_fuzzy_guards_and_longest_span_suppression(monkeypatch, tmp_pa
     and Longest-Span Suppression must suppress 'Compendium' when covered by 'Data Compendium'."""
     import core._4_1_summarize as summarize
 
-    term_json = tmp_path / "terminology.json"
-    term_json.write_text(
-        json.dumps(
-            {
-                "theme": "Destiny 2 weapon guide",
-                "terms": [
-                    {"src": "Heat weapons", "tgt": "热量武器", "note": "武器机制"},
-                    {"src": "Data Compendium", "tgt": "数据汇编", "note": "社区表格"},
-                    {"src": "Compendium", "tgt": "汇编", "note": "简称"},
-                ],
-            }
-        ),
-        encoding="utf-8",
+    ws = TaskWorkspace(tmp_path)
+    ws.save_terms(
+        "Destiny 2 weapon guide",
+        [
+            {"src": "Heat weapons", "tgt": "热量武器", "note": "武器机制"},
+            {"src": "Data Compendium", "tgt": "数据汇编", "note": "社区表格"},
+            {"src": "Compendium", "tgt": "汇编", "note": "简称"},
+        ],
     )
-    monkeypatch.setattr(summarize, "_4_1_TERMINOLOGY", str(term_json))
     monkeypatch.setattr(
         summarize, "GLOBAL_GLOSSARY_PATH", str(tmp_path / "no_global.csv")
     )
@@ -771,19 +721,20 @@ def test_multiword_fuzzy_guards_and_longest_span_suppression(monkeypatch, tmp_pa
         summarize, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json")
     )
 
-    # "rate weapons" and "and compendium" must NOT fuzzy-match "Heat weapons" or "Data Compendium"
-    false_pos = summarize.search_things_to_note_in_prompt(
-        "High fire rate weapons are strong here."
-    )
-    assert false_pos is None
+    with workspace_context(ws):
+        # "rate weapons" and "and compendium" must NOT fuzzy-match "Heat weapons" or "Data Compendium"
+        false_pos = summarize.search_things_to_note_in_prompt(
+            "High fire rate weapons are strong here."
+        )
+        assert false_pos is None
 
-    # When "Data Compendium" matches, nested "Compendium" is suppressed so only "Data Compendium" appears
-    span_prompt = summarize.search_things_to_note_in_prompt(
-        "You can check the Destiny 2 Data Compendium for exact numbers."
-    )
-    assert span_prompt is not None
-    assert '"Data Compendium": "数据汇编"' in span_prompt
-    assert '"Compendium": "汇编"' not in span_prompt
+        # When "Data Compendium" matches, nested "Compendium" is suppressed so only "Data Compendium" appears
+        span_prompt = summarize.search_things_to_note_in_prompt(
+            "You can check the Destiny 2 Data Compendium for exact numbers."
+        )
+        assert span_prompt is not None
+        assert '"Data Compendium": "数据汇编"' in span_prompt
+        assert '"Compendium": "汇编"' not in span_prompt
 
 
 def test_generic_kb_candidate_retrieval_and_llm_reduce_consolidation(
@@ -900,14 +851,14 @@ def test_generic_kb_candidate_retrieval_and_llm_reduce_consolidation(
     assert by_src["Hand Cannons"]["tgt"] == "手炮"
 
     # Also verify _get_term_index() does not deadlock when OPTIONAL_JSON_TERMS_PATH exists
-    term_json = tmp_path / "terminology.json"
-    term_json.write_text(json.dumps(consolidated), encoding="utf-8")
-    monkeypatch.setattr(summarize, "_4_1_TERMINOLOGY", str(term_json))
+    ws = TaskWorkspace(tmp_path)
+    ws.save_terms(consolidated.get("theme", ""), consolidated["terms"])
     monkeypatch.setattr(summarize, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
     monkeypatch.setattr(summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
-    note_prompt = summarize.search_things_to_note_in_prompt(
-        "Using Multimoc and DFA today."
-    )
+    with workspace_context(ws):
+        note_prompt = summarize.search_things_to_note_in_prompt(
+            "Using Multimoc and DFA today."
+        )
     assert note_prompt is not None
     assert "多机系统CCX" in note_prompt
     assert "死从天降" in note_prompt
@@ -1166,10 +1117,8 @@ def test_review_edge_cases_word_gaps_partial_batch_and_standalone_punct(
        and _build_utterances_from_sentences handles CJK fallback by char length rather than .split().
     2. _batch_split_sentences_llm preserves valid batch entries when one entry misses [br] and only
        falls back for the missing entry.
-    3. split_for_sub_main constructs line_word_gaps from utterances.json + words.json and passes them
+    3. split_for_sub_main constructs line_word_gaps from project.sqlite utterances + words and passes them
        to split_align_subs."""
-    import pandas as pd
-
     import core._3_1_split_nlp as s31
     import core._5_split_sub as s5
 
@@ -1232,43 +1181,25 @@ def test_review_edge_cases_word_gaps_partial_batch_and_standalone_punct(
     assert batch_res[1] == "第二句前半部分\n第二句后半部分"
     assert single_calls == ["第二句漏掉了切分标记"]
 
-    # 3. split_for_sub_main passes line_word_gaps constructed from utterances.json + words.json
-    ws_dir = tmp_path / "ws"
-    log_dir = ws_dir / "log"
-    log_dir.mkdir(parents=True)
-    trans_xlsx = log_dir / "translation_results.xlsx"
-    pd.DataFrame(
-        {
-            "Source": [
-                "One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen"
-            ],
-            "Translation": [
-                "这是一段包含自然逗号的中文长句，后半部分用来验证主流程声学停顿传递。"
-            ],
-        }
-    ).to_excel(trans_xlsx, index=False)
-    (log_dir / "words.json").write_text(
-        json.dumps(
-            [
-                {"idx": i, "text": f"w{i}", "start": float(i), "end": float(i) + 0.4}
-                for i in range(16)
-            ]
-        ),
-        encoding="utf-8",
+    # 3. split_for_sub_main passes line_word_gaps constructed from project.sqlite utterances + words
+    ws = TaskWorkspace(tmp_path / "ws")
+    ws.save_words(
+        [
+            {"idx": i, "text": f"w{i}", "start": float(i), "end": float(i) + 0.4}
+            for i in range(16)
+        ]
     )
-    (log_dir / "utterances.json").write_text(
-        json.dumps(
-            [
-                {
-                    "id": 0,
-                    "word_span": [0, 16],
-                    "start": 0.0,
-                    "end": 15.4,
-                    "src": "One two",
-                }
-            ]
-        ),
-        encoding="utf-8",
+    ws.save_utterances(
+        [
+            {
+                "id": 0,
+                "word_span": [0, 16],
+                "start": 0.0,
+                "end": 15.4,
+                "src": "One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen",
+                "tgt": "这是一段包含自然逗号的中文长句，后半部分用来验证主流程声学停顿传递。",
+            }
+        ]
     )
 
     captured_gaps = []
@@ -1278,13 +1209,6 @@ def test_review_edge_cases_word_gaps_partial_batch_and_standalone_punct(
         captured_gaps.append(line_word_gaps)
         return orig_split_align(src_lines, tr_lines, line_word_gaps=line_word_gaps)
 
-    monkeypatch.setattr(s5, "_4_2_TRANSLATION", str(trans_xlsx))
-    monkeypatch.setattr(
-        s5, "_5_SPLIT_SUB", str(log_dir / "translation_results_for_subtitles.xlsx")
-    )
-    monkeypatch.setattr(
-        s5, "_5_REMERGED", str(log_dir / "translation_results_remerged.xlsx")
-    )
     monkeypatch.setattr(s5, "find_subtitle_file", lambda: None)
     monkeypatch.setattr(
         s5,
@@ -1294,6 +1218,7 @@ def test_review_edge_cases_word_gaps_partial_batch_and_standalone_punct(
         ),
     )
     monkeypatch.setattr(s5, "split_align_subs", spy_split_align)
-    s5.split_for_sub_main()
+    with workspace_context(ws):
+        s5.split_for_sub_main()
     assert captured_gaps and captured_gaps[0] is not None
     assert len(captured_gaps[0][0]) == 15

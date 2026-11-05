@@ -1,5 +1,4 @@
 import os
-import pandas as pd
 from pydub import AudioSegment
 from rich.progress import (
     Progress,
@@ -11,13 +10,12 @@ from rich.progress import (
 from rich.console import Console
 from core.utils import check_cancel, rprint
 from core.utils.models import (
-    _8_1_AUDIO_TASK,
     _AUDIO_SEGS_DIR,
     _DUB_WAV_FILE,
     resolve_task_path,
 )
 from core.utils.task_literals import parse_task_literal
-from core.workspace import workspace_for_path  # noqa: F401
+from core.workspace import get_active_workspace
 
 console = Console()
 
@@ -30,12 +28,9 @@ DUB_SRC_SUB_FILE = "output/dub_src.srt"
 OUTPUT_FILE_TEMPLATE = f"{_AUDIO_SEGS_DIR}/{{}}.wav"
 
 
-def load_and_flatten_data(excel_file):
+def load_and_flatten_data():
     """Load and flatten dubbing task data"""
-    _ws_for_path = globals().get("workspace_for_path")
-    df = _ws_for_path(excel_file).load_dub_tasks_df() if _ws_for_path else None
-    if df is None or df.empty:
-        df = pd.read_excel(excel_file)
+    df = get_active_workspace().load_dub_tasks_df()
     lines = [parse_task_literal(line) for line in df["lines"].tolist()]
     lines = [item for sublist in lines for item in sublist]
 
@@ -60,7 +55,13 @@ def get_audio_files(df):
 
 def process_audio_segment(audio_file, sample_rate=DUB_SAMPLE_RATE):
     """Load a single audio segment directly as lossless mono PCM without lossy MP3 transcoding."""
-    audio_segment = AudioSegment.from_file(audio_file)
+    if str(audio_file).lower().endswith(".wav"):
+        try:
+            audio_segment = AudioSegment.from_wav(audio_file)
+        except Exception:
+            audio_segment = AudioSegment.from_file(audio_file)
+    else:
+        audio_segment = AudioSegment.from_file(audio_file)
     return audio_segment.set_frame_rate(sample_rate).set_channels(1).set_sample_width(2)
 
 
@@ -117,7 +118,7 @@ def write_srt(path, times, lines):
 
 
 def create_srt_subtitle():
-    df, lines, new_sub_times = load_and_flatten_data(resolve_task_path(_8_1_AUDIO_TASK))
+    df, lines, new_sub_times = load_and_flatten_data()
     dub_sub_path = resolve_task_path(DUB_SUB_FILE)
     dub_src_sub_path = resolve_task_path(DUB_SRC_SUB_FILE)
     write_srt(dub_sub_path, new_sub_times, lines)
@@ -142,10 +143,8 @@ def merge_full_audio():
     """Main function: Process the complete audio merging process"""
     console.print("\n[bold cyan]🎬 Starting audio merging process...[/bold cyan]")
 
-    with console.status("[bold cyan]📊 Loading data from Excel...[/bold cyan]"):
-        df, lines, new_sub_times = load_and_flatten_data(
-            resolve_task_path(_8_1_AUDIO_TASK)
-        )
+    with console.status("[bold cyan]📊 Loading data from workspace...[/bold cyan]"):
+        df, lines, new_sub_times = load_and_flatten_data()
     console.print("[bold green]✅ Data loaded successfully[/bold green]")
 
     with console.status("[bold cyan]🔍 Getting audio file list...[/bold cyan]"):

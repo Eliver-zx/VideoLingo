@@ -48,6 +48,7 @@ from core.workspace import (
     load_domain_glossary,
     load_global_glossary,
     promote_terms_to_domain,
+    rmtree_robust,
     sanitize_domain_name,
     save_domain_glossary,
     save_global_glossary,
@@ -57,6 +58,7 @@ from core.workspace import (
 
 def _configure_utf8_console():
     """Allow Rich and task threads to print Unicode on Windows."""
+    os.environ.setdefault("PYTHONUTF8", "1")
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if callable(reconfigure):
@@ -177,11 +179,27 @@ class ConfigUpdateRequest(BaseModel):
 # ─── Shared Helpers ───
 
 
+def _clean_user_path(raw: str | Path) -> str:
+    """Strip whitespace and surrounding quotes from Windows 'Copy as path' strings or file:/// URIs."""
+    s = str(raw or "").strip()
+    while len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+        s = s[1:-1].strip()
+    if s.lower().startswith("file:///"):
+        from urllib.parse import unquote
+
+        rest = unquote(s[8:])
+        if len(rest) >= 2 and rest[1] in (":", "|"):
+            s = rest[0] + ":" + rest[2:]
+        else:
+            s = "/" + rest
+    return s
+
+
 def subtitle_file(path):
     """The SRT file of a request, which has to be one with subtitles in it."""
     from core._2_import_subtitles import read_cues
 
-    path = Path(path).resolve()
+    path = Path(_clean_user_path(path)).resolve()
     if (
         not path.is_file()
         or path.suffix.lower() != ".srt"
@@ -246,11 +264,10 @@ def _workspace_summary(ws: TaskWorkspace) -> dict[str, Any]:
             )
         truncated = data
     stages_done = {
-        "asr": ws.has_words() or (ws.log_dir / "cleaned_chunks.xlsx").is_file(),
-        "split": ws.has_utterances() or (ws.log_dir / "split_by_meaning.txt").is_file(),
-        "terms": ws.has_terms() or (ws.log_dir / "terminology.json").is_file(),
-        "translate": ws.has_translations()
-        or (ws.log_dir / "translation_results.xlsx").is_file(),
+        "asr": ws.has_words(),
+        "split": ws.has_utterances(),
+        "terms": ws.has_terms(),
+        "translate": ws.has_translations(),
         "subtitles": (ws.root / "trans.srt").is_file()
         and (ws.root / "src.srt").is_file(),
         "sub_video": (ws.root / "output_sub.mp4").is_file(),
@@ -353,15 +370,17 @@ def pick_local_files():
             "$f.Multiselect = $false; "
             "$top = New-Object System.Windows.Forms.Form; "
             "$top.TopMost = $true; "
-            "if ($f.ShowDialog($top) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.FileName }"
+            "$top.ShowInTaskbar = $false; "
+            "$top.Width = 0; $top.Height = 0; "
+            "$top.WindowState = 'Minimized'; $top.Show(); $top.WindowState = 'Normal'; $top.Activate(); "
+            "if ($f.ShowDialog($top) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.FileName }; "
+            "$top.Dispose()"
         )
         proc = subprocess.run(
             [
                 "powershell",
                 "-NoProfile",
                 "-STA",
-                "-WindowStyle",
-                "Hidden",
                 "-Command",
                 ps_script,
             ],
@@ -369,6 +388,7 @@ def pick_local_files():
             text=True,
             encoding="utf-8",
             errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             check=False,
         )
         if proc.returncode != 0:
@@ -395,7 +415,8 @@ def get_task(task_id: str):
 
 @app.post("/api/tasks", status_code=202)
 def create_task(request: CreateTaskRequest):
-    parsed = urlparse(request.source)
+    source_str = _clean_user_path(request.source)
+    parsed = urlparse(source_str)
     overrides: dict[str, Any] = {}
     if request.source_language:
         overrides["whisper.language"] = request.source_language
@@ -419,12 +440,12 @@ def create_task(request: CreateTaskRequest):
             raise HTTPException(422, "Invalid URL")
         ws = create_task_workspace(request.title or "youtube_video", base_dir=OUTPUT)
         manifest = ws.load_manifest()
-        manifest["title"] = request.title or request.source
+        manifest["title"] = request.title or source_str
         manifest["origin"] = {
             "kind": "youtube",
             "source_path": None,
             "original_filename": None,
-            "url": request.source,
+            "url": source_str,
             "mount_mode": "yt-dlp",
         }
         manifest["config_override"] = overrides
@@ -434,7 +455,7 @@ def create_task(request: CreateTaskRequest):
             from core._1_ytdlp import download_video_ytdlp
 
             download_video_ytdlp(
-                request.source,
+                source_str,
                 save_path=str(ws.root),
                 resolution=load_key("ytb_resolution"),
             )
@@ -450,7 +471,7 @@ def create_task(request: CreateTaskRequest):
         )
         return _workspace_summary(ws)
 
-    src_path = Path(request.source).resolve()
+    src_path = Path(source_str).resolve()
     if not src_path.is_file():
         raise HTTPException(422, f"Source file does not exist: {src_path}")
     formats = load_key("allowed_video_formats") + load_key("allowed_audio_formats")
@@ -728,40 +749,7 @@ def update_task_terms(task_id: str, request: TermsUpdateRequest):
 @app.get("/api/tasks/{task_id}/utterances")
 def get_task_utterances(task_id: str):
     ws = _resolve_workspace(task_id)
-    utts = ws.load_utterances()
-    if utts:
-        return {"utterances": utts}
-    trans_xlsx = ws.log_dir / "translation_results.xlsx"
-    if trans_xlsx.is_file():
-        import pandas as pd
-
-        df = pd.read_excel(trans_xlsx)
-        rows = []
-        for idx, row in df.iterrows():
-            src_val = row.get("Source")
-            tgt_val = row.get("Translation")
-            src = (
-                ""
-                if src_val is None or bool(pd.isna(src_val))
-                else str(src_val).strip()
-            )
-            tgt = (
-                ""
-                if tgt_val is None or bool(pd.isna(tgt_val))
-                else str(tgt_val).strip()
-            )
-            rows.append(
-                {
-                    "id": idx,
-                    "start": 0.0,
-                    "end": 0.0,
-                    "src": src,
-                    "tgt": tgt,
-                    "tts_text": tgt,
-                }
-            )
-        return {"utterances": rows}
-    return {"utterances": []}
+    return {"utterances": ws.load_utterances()}
 
 
 @app.put("/api/tasks/{task_id}/utterances")
@@ -804,14 +792,13 @@ def update_task_utterances(task_id: str, request: UtterancesUpdateRequest):
         normalized_utts.append(item)
     ws.save_utterances(normalized_utts)
     ws.delete_kv("sub_split_cfg", "sub_split_rev")
-    if ws.has_dub_tasks() or (ws.audio_dir / "tts_tasks.xlsx").is_file():
+    if ws.has_dub_tasks():
         ws.invalidate_from_stage("dub_tts")
     is_task_active = runner.active_task_id == ws.task_id and runner.is_active
-    has_words_data = ws.has_words() or (ws.log_dir / "cleaned_chunks.xlsx").is_file()
     if (
         normalized_utts
         and not is_task_active
-        and has_words_data
+        and ws.has_words()
         and (ws.src_srt_path.is_file() or ws.trans_srt_path.is_file())
     ):
         from core._6_gen_sub import align_timestamp_main
@@ -835,7 +822,7 @@ def delete_task(task_id: str):
         raise HTTPException(409, "Cannot delete an active task; stop it first.")
     runner.cancel_queued(ws.task_id)
     ws.clear_runtime_cache()
-    shutil.rmtree(ws.root)
+    rmtree_robust(ws.root)
     return {"deleted": ws.task_id}
 
 

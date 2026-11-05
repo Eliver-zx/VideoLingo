@@ -13,6 +13,7 @@ from core.utils.subtitle_style import (
     get_burn_mode,
     get_optimal_video_encoder_args,
     get_subtitle_filters as _default_get_subtitle_filters,
+    wrap_gpu_subtitle_filter,
 )
 from core.workspace import probe_media_metadata
 
@@ -27,7 +28,13 @@ TRANS_SRT = f"{OUTPUT_DIR}/trans.srt"
 
 def check_gpu_available():
     try:
-        result = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True)
+        result = subprocess.run(
+            ["ffmpeg", "-nostdin", "-encoders"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         return "h264_nvenc" in result.stdout
     except Exception:
         return False
@@ -96,19 +103,23 @@ def merge_subtitles_to_video():
             display_height=TARGET_HEIGHT,
         )
         vf_filter = f"ass='{escape_ffmpeg_filter_path(ass_path)}'"
+    ffmpeg_gpu = bool(load_key("ffmpeg_gpu"))
+    if ffmpeg_gpu:
+        rprint("[bold green]will use GPU acceleration.[/bold green]")
+    hw_input_args, vf_filter = wrap_gpu_subtitle_filter(
+        vf_filter, ffmpeg_gpu, video_meta=meta
+    )
     ffmpeg_cmd = [
         "ffmpeg",
+        "-nostdin",
+        *hw_input_args,
         "-i",
         video_file,
         "-vf",
         vf_filter,
     ]
-
-    ffmpeg_gpu = bool(load_key("ffmpeg_gpu"))
-    if ffmpeg_gpu:
-        rprint("[bold green]will use GPU acceleration.[/bold green]")
     ffmpeg_cmd.extend(get_optimal_video_encoder_args(ffmpeg_gpu))
-    ffmpeg_cmd.extend(["-c:a", "copy", "-y", out_video])
+    ffmpeg_cmd.extend(["-c:a", "copy", "-movflags", "+faststart", "-y", out_video])
 
     rprint("🎬 Start merging subtitles to video...")
     start_time = time.time()

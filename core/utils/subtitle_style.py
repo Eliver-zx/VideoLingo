@@ -313,9 +313,11 @@ def escape_ffmpeg_filter_path(path: str | Path) -> str:
 def _available_ffmpeg_encoders() -> set[str]:
     try:
         proc = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-encoders"],
+            ["ffmpeg", "-nostdin", "-hide_banner", "-encoders"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
             timeout=10,
         )
@@ -327,6 +329,93 @@ def _available_ffmpeg_encoders() -> set[str]:
         )
     except Exception:
         return {"libx264"}
+
+
+@functools.lru_cache(maxsize=1)
+def _available_ffmpeg_filters() -> set[str]:
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-nostdin", "-hide_banner", "-filters"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=10,
+        )
+        out = proc.stdout or ""
+        return set(
+            re.findall(
+                r"\b(ass|subtitles|scale_cuda|hwdownload|hwupload_cuda|overlay_cuda)\b",
+                out,
+            )
+        )
+    except Exception:
+        return set()
+
+
+def _can_nvdec_cuda_surface(video_meta: dict | None) -> bool:
+    """Return True when the video stream can be decoded directly to a CUDA surface without auto-rotate CPU filters."""
+    if not video_meta:
+        return True
+    rot = abs(int(video_meta.get("rotation") or 0)) % 360
+    if rot != 0:
+        return False
+    codec = str(video_meta.get("codec_name") or "").lower()
+    pix_fmt = str(video_meta.get("pix_fmt") or "").lower()
+    if not codec:
+        return True
+    base_codecs = {"h264", "hevc", "vp8", "vp9", "mpeg1video", "mpeg2video", "vc1"}
+    if codec == "av1":
+        try:
+            import torch  # type: ignore[import-not-found]
+
+            if not (
+                torch.cuda.is_available()
+                and hasattr(torch.cuda, "get_device_capability")
+                and torch.cuda.get_device_capability(0) >= (8, 6)
+            ):
+                return False
+        except Exception:
+            return False
+    elif codec not in base_codecs:
+        return False
+    if codec == "h264" and pix_fmt not in {"", "yuv420p", "yuvj420p", "nv12"}:
+        return False
+    if pix_fmt and any(tag in pix_fmt for tag in ("422", "444", "12le", "12be", "gbr")):
+        return False
+    return True
+
+
+def wrap_gpu_subtitle_filter(
+    subtitle_filter: str,
+    use_gpu: bool = False,
+    video_meta: dict | None = None,
+) -> tuple[list[str], str]:
+    """Return (pre-input hwaccel args, video filter chain) for subtitle burn-in."""
+    if not use_gpu:
+        return [], subtitle_filter
+    encoders = _available_ffmpeg_encoders()
+    filters = _available_ffmpeg_filters()
+    if (
+        platform.system() != "Darwin"
+        and "h264_nvenc" in encoders
+        and "scale_cuda" in filters
+        and "hwdownload" in filters
+        and _can_nvdec_cuda_surface(video_meta)
+    ):
+        return (
+            [
+                "-hwaccel",
+                "cuda",
+                "-hwaccel_output_format",
+                "cuda",
+                "-thread_queue_size",
+                "1024",
+            ],
+            f"scale_cuda=format=yuv420p,hwdownload,format=yuv420p,{subtitle_filter}",
+        )
+    return ["-hwaccel", "auto", "-thread_queue_size", "1024"], subtitle_filter
 
 
 def get_optimal_video_encoder_args(use_gpu: bool = False) -> list[str]:
@@ -341,9 +430,33 @@ def get_optimal_video_encoder_args(use_gpu: bool = False) -> list[str]:
                 "-c:v",
                 "h264_nvenc",
                 "-preset",
-                "p4",
+                "p5",
+                "-tune",
+                "hq",
+                "-profile:v",
+                "high",
+                "-rc",
+                "vbr",
                 "-cq",
                 "23",
+                "-b:v",
+                "0",
+                "-maxrate",
+                "6000k",
+                "-bufsize",
+                "12000k",
+                "-spatial-aq",
+                "1",
+                "-aq-strength",
+                "8",
+                "-temporal-aq",
+                "1",
+                "-rc-lookahead",
+                "20",
+                "-bf",
+                "3",
+                "-b_ref_mode",
+                "middle",
                 "-pix_fmt",
                 "yuv420p",
             ]

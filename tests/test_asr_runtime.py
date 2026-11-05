@@ -32,7 +32,7 @@ class RetiredRuntimeTests(unittest.TestCase):
             patch.object(asr, "find_media_file") as find,
         ):
             with self.assertRaisesRegex(ValueError, "retired"):
-                asr.transcribe.__wrapped__()
+                getattr(asr.transcribe, "__wrapped__")()
             find.assert_not_called()
 
     def test_supported_runtimes_reach_media_discovery(self):
@@ -59,7 +59,7 @@ class RetiredRuntimeTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                     FileNotFoundError, "synthetic missing input"
                 ):
-                    asr.transcribe.__wrapped__()
+                    getattr(asr.transcribe, "__wrapped__")()
 
     def test_missing_whisperx_fails_before_preparing_audio(self):
         def load_key(key):
@@ -80,7 +80,7 @@ class RetiredRuntimeTests(unittest.TestCase):
             patch("importlib.util.find_spec", return_value=None),
         ):
             with self.assertRaises(RuntimeError) as caught:
-                asr.transcribe.__wrapped__()
+                getattr(asr.transcribe, "__wrapped__")()
         find.assert_not_called()
         message = str(caught.exception)
         self.assertIn("whisper.backend to qwen", message)
@@ -125,7 +125,7 @@ class RetiredRuntimeTests(unittest.TestCase):
                 mai_asr, "configured_credentials", return_value=("key", "eastus")
             ),
         ):
-            asr.transcribe.__wrapped__()
+            getattr(asr.transcribe, "__wrapped__")()
         transcribe.assert_called_once_with(
             asr._RAW_AUDIO_FILE, asr._RAW_AUDIO_FILE, 2, 3
         )
@@ -157,7 +157,7 @@ class RetiredRuntimeTests(unittest.TestCase):
                         patch.object(asr, "find_media_file") as find,
                     ):
                         with self.assertRaisesRegex(ValueError, expected_key):
-                            asr.transcribe.__wrapped__()
+                            getattr(asr.transcribe, "__wrapped__")()
                     find.assert_not_called()
 
 
@@ -183,7 +183,7 @@ class LocalBackendTests(unittest.TestCase):
         qwen = Mock(return_value=qwen_result or result())
         whisperx = Mock(return_value=result())
         fake_whisperx = types.ModuleType("core.asr_backend.whisperX_local")
-        fake_whisperx.transcribe_audio = whisperx
+        setattr(fake_whisperx, "transcribe_audio", whisperx)
         key = Mock(return_value=None)
         real_find_spec = importlib.util.find_spec
 
@@ -273,13 +273,17 @@ class LocalBackendTests(unittest.TestCase):
                 self.run_local(
                     {"language": "en", "cache": False}, qwen_result=None, real_qwen=True
                 )
-        self.assertFalse(Path(asr._2_CLEANED_CHUNKS).exists())
+        from core.workspace import get_active_workspace
+
+        self.assertFalse(get_active_workspace().has_words())
 
     def test_silent_audio_fails_clearly_without_writing_outputs(self):
         # All-silent audio gives no segments; save_results would otherwise hit KeyError('text').
+        from core.workspace import get_active_workspace
+
         with self.assertRaisesRegex(ValueError, "No speech was recognized"):
             self.run_local({}, qwen_result={"language": None, "segments": []})
-        self.assertFalse(Path(asr._2_CLEANED_CHUNKS).exists())
+        self.assertFalse(get_active_workspace().has_words())
 
 
 if __name__ == "__main__":

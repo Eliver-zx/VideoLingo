@@ -6,16 +6,6 @@ import time
 import os
 from rich import print as rprint
 
-_PATH_TO_GLOBAL_ATTR = {
-    "output/log/cleaned_chunks.xlsx": "_2_CLEANED_CHUNKS",
-    "output/log/split_by_nlp.txt": "_3_1_SPLIT_BY_NLP",
-    "output/log/split_by_meaning.txt": "_3_2_SPLIT_BY_MEANING",
-    "output/log/terminology.json": "_4_1_TERMINOLOGY",
-    "output/log/translation_results.xlsx": "_4_2_TRANSLATION",
-    "output/log/translation_results_for_subtitles.xlsx": "_5_SPLIT_SUB",
-    "output/log/translation_results_remerged.xlsx": "_5_REMERGED",
-    "output/audio/tts_tasks.xlsx": "_8_1_AUDIO_TASK",
-}
 
 # ------------------------------
 # retry decorator
@@ -49,23 +39,24 @@ def except_handler(error_msg, retry=0, delay=1, default_return=None):
 
 
 # ------------------------------
-# check file exists decorator
+# check step / file completion decorator
 # ------------------------------
 
 
-def check_file_exists(file_path):
+def check_file_exists(step_or_path):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            from core.workspace import workspace_for_path
+            from core.workspace import get_active_workspace
 
-            attr_name = _PATH_TO_GLOBAL_ATTR.get(str(file_path))
-            effective = (
-                func.__globals__.get(attr_name, file_path) if attr_name else file_path
-            )
-            resolved = resolve_task_path(effective)
-            ws = workspace_for_path(resolved)
-            if os.path.exists(resolved) or ws.is_step_done(resolved):
+            ws = get_active_workspace()
+            if ws.is_step_done(step_or_path):
+                rprint(
+                    f"[yellow]⚠️ Step <{step_or_path}> already completed, skip <{func.__name__}> step.[/yellow]"
+                )
+                return
+            resolved = resolve_task_path(step_or_path)
+            if os.path.exists(resolved):
                 rprint(
                     f"[yellow]⚠️ Step <{resolved}> already completed, skip <{func.__name__}> step.[/yellow]"
                 )

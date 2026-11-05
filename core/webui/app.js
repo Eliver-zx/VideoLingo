@@ -751,13 +751,14 @@
       const origBtnText = createBtn.textContent;
       const sourceInput = document.getElementById('input-source-path');
       const subInput = document.getElementById('input-sub-path');
-      const rawPath = sourceInput.value.trim();
+      const rawPath = sourceInput.value.trim().replace(/^["']+|["']+$/g, '').trim();
       if (!rawPath && !droppedFile) {
         sourceInput.focus();
         appendLog('warn', 'WARN', '请先选择本地媒体文件或输入有效的视频路径 / YouTube 链接', true);
         return;
       }
-      const subPath = subInput.value.trim() || null;
+      const cleanedSub = subInput.value.trim().replace(/^["']+|["']+$/g, '').trim();
+      const subPath = cleanedSub || null;
       const srcLang = document.getElementById('task-src-lang').value || 'en';
       const tgtLang = document.getElementById('task-tgt-lang').value.trim() || '简体中文';
       const domain = document.getElementById('task-domain').value;
@@ -827,7 +828,7 @@
         }
       }
 
-      const fileName = rawPath.split('/').pop() || rawPath;
+      const fileName = rawPath.split(/[\\/]/).pop() || rawPath;
       const id = fileName.replace(/\.[^.]+$/, '');
       REAL_TASKS.unshift({
         id,

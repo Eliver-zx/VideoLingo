@@ -7,11 +7,10 @@ from core.asr_backend.audio_preprocess import get_audio_duration
 from core.tts_backend.estimate_duration import init_estimator, estimate_duration
 from core.utils import load_key, rprint
 from core.utils.models import (
-    _8_1_AUDIO_TASK,
     _RAW_AUDIO_FILE,
     resolve_task_path,
 )
-from core.workspace import workspace_for_path
+from core.workspace import get_active_workspace
 
 SRC_SRT = "output/src.srt"
 TRANS_SRT = "output/trans.srt"
@@ -167,17 +166,14 @@ def process_cutoffs(df):
 
 
 def gen_dub_chunks():
-    audio_task_path = resolve_task_path(_8_1_AUDIO_TASK)
-    ws = workspace_for_path(audio_task_path)
-    if ws.is_step_done(audio_task_path):
+    ws = get_active_workspace()
+    if ws.is_step_done("dub_tasks"):
         rprint(
             "[yellow]⚠️ Dubbing chunks already exist and are up-to-date, skip <gen_dub_chunks> step.[/yellow]"
         )
         return
     rprint("[🎬 Starting] Generating dubbing chunks...")
     df = ws.load_dub_tasks_df()
-    if df.empty and os.path.exists(audio_task_path):
-        df = pd.read_excel(audio_task_path)
 
     rprint("[📊 Processing] Analyzing timing and speed...")
     df = analyze_subtitle_timing_and_speed(df)

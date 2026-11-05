@@ -5,8 +5,8 @@ import pandas as pd
 from rich.console import Console
 from rich.panel import Panel
 from core.utils import check_file_exists, load_key, rprint
-from core.utils.models import _8_1_AUDIO_TASK, resolve_task_path
-from core.workspace import workspace_for_path
+from core.utils.models import resolve_task_path
+from core.workspace import get_active_workspace, workspace_for_path
 
 console = Console()
 
@@ -203,12 +203,11 @@ def process_srt():
     return df
 
 
-@check_file_exists(_8_1_AUDIO_TASK)
+@check_file_exists("dub_tasks")
 def gen_audio_task_main():
     df = process_srt()
     console.print(df)
-    out_path = resolve_task_path(_8_1_AUDIO_TASK)
-    ws = workspace_for_path(out_path)
+    ws = get_active_workspace()
     ws.save_dub_tasks(df)
     rprint(
         Panel(

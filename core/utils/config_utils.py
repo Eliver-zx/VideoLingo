@@ -6,6 +6,7 @@ import copy
 import os
 from pathlib import Path
 import threading
+import time
 from typing import Any
 import unicodedata
 from ruamel.yaml import YAML
@@ -321,7 +322,14 @@ def _atomic_dump_yaml(data: Any, config_path: str | Path) -> None:
             yaml.dump(data, f)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, target)
+        for attempt in range(5):
+            try:
+                os.replace(tmp_path, target)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
         if isinstance(data, dict):
             _refresh_cache_for_path(target, _to_plain_data(data))
     finally:

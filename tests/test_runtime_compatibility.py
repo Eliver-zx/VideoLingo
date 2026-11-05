@@ -64,21 +64,29 @@ def test_arbitrary_expressions_rejected(parse, text):
 
 def test_old_workbook_readers(tmp_path, parse):
     import pandas as pd
+    from core.workspace import TaskWorkspace
 
-    path = tmp_path / "legacy.xlsx"
-    pd.DataFrame(
-        {
-            "number": [1],
-            "lines": ["['Hello', 'World']"],
-            "new_sub_times": ["[[np.float64(0.1), np.float64(1.5)], [1.5, 2.0]]"],
-        }
-    ).to_excel(path, index=False)
+    ws = TaskWorkspace(tmp_path)
+    ws.save_dub_tasks(
+        [
+            {
+                "number": 1,
+                "lines": "['Hello', 'World']",
+                "new_sub_times": "[[np.float64(0.1), np.float64(1.5)], [1.5, 2.0]]",
+            }
+        ]
+    )
     ns = functions(
         "core/_11_merge_audio.py",
         ["load_and_flatten_data", "get_audio_files"],
-        {"pd": pd, "parse_task_literal": parse, "OUTPUT_FILE_TEMPLATE": "{0}.wav"},
+        {
+            "pd": pd,
+            "parse_task_literal": parse,
+            "OUTPUT_FILE_TEMPLATE": "{0}.wav",
+            "get_active_workspace": lambda: ws,
+        },
     )
-    table, lines, times = ns["load_and_flatten_data"](path)
+    table, lines, times = ns["load_and_flatten_data"]()
     assert lines == ["Hello", "World"] and times == [[0.1, 1.5], [1.5, 2.0]]
     assert ns["get_audio_files"](table) == ["1_0.wav", "1_1.wav"]
 
@@ -111,7 +119,7 @@ def test_cache_resolution_offline_first(tmp_path, monkeypatch, mode):
         return str(complete)
 
     module = types.ModuleType("faster_whisper.utils")
-    module.download_model = download
+    setattr(module, "download_model", download)
     monkeypatch.setitem(sys.modules, "faster_whisper.utils", module)
     result = namespace["resolve_whisper_model"]("large-v3", tmp_path / "project")
     assert Path(result) == complete

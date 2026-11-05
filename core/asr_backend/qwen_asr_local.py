@@ -13,6 +13,7 @@ Heavy libraries are imported lazily so this module imports without them.
 
 import gc
 import importlib.util
+import json
 import math
 import platform
 import re
@@ -178,6 +179,23 @@ def _has_complete_weights(local: Path) -> bool:
         return False
     if any(local.rglob("*.incomplete")):
         return False
+    for index_name in ("model.safetensors.index.json", "pytorch_model.bin.index.json"):
+        index_path = local / index_name
+        if index_path.is_file():
+            try:
+                data = json.loads(index_path.read_text(encoding="utf-8"))
+                shards = set((data.get("weight_map") or {}).values())
+            except Exception:
+                return False
+            if not shards or any(not (local / shard).is_file() for shard in shards):
+                return False
+            if not (local / "tokenizer_config.json").is_file():
+                return False
+            if not (local / "preprocessor_config.json").is_file():
+                return False
+            return True
+    if any(local.glob("*-of-*.safetensors")) or any(local.glob("*-of-*.bin")):
+        return False
     return (
         any(local.glob("*.safetensors"))
         or any(local.glob("*.bin"))
@@ -187,7 +205,8 @@ def _has_complete_weights(local: Path) -> bool:
 
 def _model_source(repo_id):
     """Ensure a complete local copy in model_dir (e.g. _model_cache/Qwen3-ASR-1.7B), downloading into it if missing."""
-    local = Path(load_key("model_dir")) / repo_id.split("/")[-1]
+    raw_dir = str(load_key("model_dir") or "./_model_cache").strip().strip("\"'")
+    local = Path(raw_dir) / repo_id.split("/")[-1]
     if _has_complete_weights(local):
         rprint(f"[green]Using local Qwen model: {local.resolve()}[/green]")
         return str(local.resolve())
@@ -827,6 +846,7 @@ def asr_session(engine, repo_id):
         yield run
     finally:
         # Release the model even when a window fails, so a retry does not start out of memory.
+        run = None
         model = None
         _free(engine)
 

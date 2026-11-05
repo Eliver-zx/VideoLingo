@@ -3,32 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 # ------------------------------------------
-# 3 Core JSON Contracts (New Architecture)
+# Audio, Subtitle & Log Paths
 # ------------------------------------------
-
-_2_WORDS_JSON = "output/log/words.json"
-_3_UTTERANCES_JSON = "output/log/utterances.json"
-_4_1_TERMS_JSON = "output/log/terms.json"
-
-# ------------------------------------------
-# Legacy / Intermediate Path Constants
-# ------------------------------------------
-
-_2_CLEANED_CHUNKS = "output/log/cleaned_chunks.xlsx"
-_3_1_SPLIT_BY_NLP = "output/log/split_by_nlp.txt"
-_3_2_SPLIT_BY_MEANING = "output/log/split_by_meaning.txt"
-_4_1_TERMINOLOGY = "output/log/terminology.json"
-_4_2_TRANSLATION = "output/log/translation_results.xlsx"
-_5_SPLIT_SUB = "output/log/translation_results_for_subtitles.xlsx"
-_5_REMERGED = "output/log/translation_results_remerged.xlsx"
-
-_8_1_AUDIO_TASK = "output/audio/tts_tasks.xlsx"
 _10_DUB_TRUNCATED = "output/log/dub_truncated.json"
 
-
-# ------------------------------------------
-# Audio & Media Paths
-# ------------------------------------------
 _OUTPUT_DIR = "output"
 _AUDIO_DIR = "output/audio"
 _RAW_AUDIO_FILE = "output/audio/raw.mp3"
@@ -66,17 +44,6 @@ def resolve_task_path(path_str: str | Path) -> str:
 
 
 __all__ = [
-    "_2_WORDS_JSON",
-    "_3_UTTERANCES_JSON",
-    "_4_1_TERMS_JSON",
-    "_2_CLEANED_CHUNKS",
-    "_3_1_SPLIT_BY_NLP",
-    "_3_2_SPLIT_BY_MEANING",
-    "_4_1_TERMINOLOGY",
-    "_4_2_TRANSLATION",
-    "_5_SPLIT_SUB",
-    "_5_REMERGED",
-    "_8_1_AUDIO_TASK",
     "_10_DUB_TRUNCATED",
     "_OUTPUT_DIR",
     "_AUDIO_DIR",

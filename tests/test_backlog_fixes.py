@@ -205,13 +205,14 @@ def test_core_utils_unknown_attribute_is_still_an_attribute_error():
 
 def test_split_chunks_has_no_empty_chunk(tmp_path, monkeypatch):
     import core._4_2_translate as translate
+    from core.workspace import TaskWorkspace, workspace_context
 
     sentences = ["x" * 50, "short one", "short two", "y" * 50, "short three"]
-    source = tmp_path / "split_by_meaning.txt"
-    source.write_text("\n".join(sentences), encoding="utf-8")
-    monkeypatch.setattr(translate, "_3_2_SPLIT_BY_MEANING", str(source))
+    ws = TaskWorkspace(tmp_path)
+    ws.save_utterances([{"id": i, "src": s} for i, s in enumerate(sentences)])
 
-    chunks = translate.split_chunks_by_chars(chunk_size=30, max_i=10)
+    with workspace_context(ws):
+        chunks = translate.split_chunks_by_chars(chunk_size=30, max_i=10)
 
     assert all(chunk.strip() for chunk in chunks)
     assert "\n".join(chunks).split("\n") == sentences
@@ -225,44 +226,47 @@ def test_split_chunks_has_no_empty_chunk(tmp_path, monkeypatch):
 def _refer_audio(monkeypatch, tmp_path):
     import numpy as np
     import core._9_refer_audio as refer
+    from core.workspace import TaskWorkspace
 
     refers, segs = tmp_path / "refers", tmp_path / "segs"
     segs.mkdir()
     monkeypatch.setattr(refer, "_AUDIO_REFERS_DIR", str(refers))
     monkeypatch.setattr(refer, "_AUDIO_SEGS_DIR", str(segs))
     monkeypatch.setattr(refer, "find_spec", lambda name: None)
-    monkeypatch.setattr(
-        refer.pd,
-        "read_excel",
-        lambda path: pd.DataFrame(
-            {
-                "number": [1, 2],
-                "start_time": ["00:00:00,000", "00:00:01,000"],
-                "end_time": ["00:00:01,000", "00:00:02,000"],
-            }
-        ),
+    ws = TaskWorkspace(tmp_path)
+    ws.save_dub_tasks(
+        [
+            {"number": 1, "start_time": "00:00:00,000", "end_time": "00:00:01,000"},
+            {"number": 2, "start_time": "00:00:01,000", "end_time": "00:00:02,000"},
+        ]
     )
     monkeypatch.setattr(
         refer.sf, "read", lambda path: (np.zeros(32000, dtype="float32"), 16000)
     )
-    return refer, refers, segs
+    return refer, refers, segs, ws
 
 
 def test_refer_audio_is_extracted_even_when_dub_segments_exist(monkeypatch, tmp_path):
-    refer, refers, segs = _refer_audio(monkeypatch, tmp_path)
+    from core.workspace import workspace_context
+
+    refer, refers, segs, ws = _refer_audio(monkeypatch, tmp_path)
     (segs / "1.wav").write_bytes(b"left over from an earlier dubbing run")
 
-    refer.extract_refer_audio_main()
+    with workspace_context(ws):
+        refer.extract_refer_audio_main()
 
     assert sorted(path.name for path in refers.iterdir()) == ["1.wav", "2.wav"]
 
 
 def test_refer_audio_is_skipped_when_references_exist(monkeypatch, tmp_path):
-    refer, refers, _ = _refer_audio(monkeypatch, tmp_path)
+    from core.workspace import workspace_context
+
+    refer, refers, _, ws = _refer_audio(monkeypatch, tmp_path)
     refers.mkdir()
     (refers / "1.wav").write_bytes(b"existing")
 
-    refer.extract_refer_audio_main()
+    with workspace_context(ws):
+        refer.extract_refer_audio_main()
 
     assert [path.name for path in refers.iterdir()] == ["1.wav"]
 
@@ -531,7 +535,7 @@ def test_split_by_mark_handles_text_longer_than_the_tokenizer_limit(
     tmp_path, monkeypatch
 ):
     from core import _3_1_split_nlp
-    from core.workspace import TaskWorkspace
+    from core.workspace import TaskWorkspace, workspace_context
 
     seen = []
 
@@ -552,17 +556,11 @@ def test_split_by_mark_handles_text_longer_than_the_tokenizer_limit(
             for i, w in enumerate(words)
         ]
     )
-    nlp_out = tmp_path / "split_by_nlp.txt"
-    meaning_out = tmp_path / "split_by_meaning.txt"
-    cleaned_xlsx = tmp_path / "cleaned_chunks.xlsx"
-
-    monkeypatch.setattr(_3_1_split_nlp, "_2_CLEANED_CHUNKS", str(cleaned_xlsx))
-    monkeypatch.setattr(_3_1_split_nlp, "_3_1_SPLIT_BY_NLP", str(nlp_out))
-    monkeypatch.setattr(_3_1_split_nlp, "_3_2_SPLIT_BY_MEANING", str(meaning_out))
     monkeypatch.setattr(_3_1_split_nlp, "get_source_language", lambda: "en")
     monkeypatch.setattr(_3_1_split_nlp, "ask_gpt", fake_ask_gpt)
 
-    _3_1_split_nlp.split_by_spacy()
+    with workspace_context(ws):
+        _3_1_split_nlp.split_by_spacy()
 
     lines = [u["src"] for u in ws.load_utterances()]
     assert len(seen) > 1
@@ -883,6 +881,7 @@ def _translate_lines(monkeypatch, replies, reflect=True):
         reply = replies[log_title]
         if isinstance(reply, Exception):
             raise reply
+        assert valid_def is not None
         check = valid_def(reply)
         if check["status"] != "success":
             raise ValueError(check["message"])
@@ -959,6 +958,7 @@ def _split_sub(monkeypatch, split, align, max_length=20):
         reply = align(prompt) if callable(align) else align
         if isinstance(reply, Exception):
             raise reply
+        assert valid_def is not None
         check = valid_def(reply)
         if check["status"] != "success":
             raise ValueError(check["message"])
@@ -1063,7 +1063,7 @@ def test_split_sub_stops_when_the_task_is_cancelled(monkeypatch):
 
 
 def test_split_sub_main_writes_lines_of_equal_length(monkeypatch, tmp_path):
-    from core.workspace import TaskWorkspace
+    from core.workspace import TaskWorkspace, workspace_context
 
     def align(prompt):
         if prompt == LONG_TR:
@@ -1108,14 +1108,9 @@ def test_split_sub_main_writes_lines_of_equal_length(monkeypatch, tmp_path):
             },
         ]
     )
-    translation, split_sub, remerged = (
-        str(tmp_path / name) for name in ("t.xlsx", "s.xlsx", "r.xlsx")
-    )
-    monkeypatch.setattr(module, "_4_2_TRANSLATION", translation)
-    monkeypatch.setattr(module, "_5_SPLIT_SUB", split_sub)
-    monkeypatch.setattr(module, "_5_REMERGED", remerged)
 
-    module.split_for_sub_main()
+    with workspace_context(ws):
+        module.split_for_sub_main()
 
     utts = ws.load_utterances()
     sub_cues = [c for u in utts for c in u.get("sub_cues", [])]
@@ -1372,16 +1367,14 @@ def _wait_for(condition, timeout=3):
     return False
 
 
-def _checkpoint(
-    monkeypatch, tmp_path, enabled=True, terminology='{"theme": "t", "terms": []}'
-):
+def _checkpoint(monkeypatch, tmp_path, enabled=True, terms=None):
     from core import pipeline
     from core.task_runner import TaskRunner
+    from core.workspace import TaskWorkspace
 
     monkeypatch.chdir(tmp_path)
-    os.makedirs("output/log")
-    with open("output/log/terminology.json", "w", encoding="utf-8") as f:
-        f.write(terminology)
+    ws = TaskWorkspace("output")
+    ws.save_terms("t", [] if terms is None else terms)
     monkeypatch.setattr(
         pipeline, "load_key", lambda key: {"pause_before_translate": enabled}[key]
     )
@@ -1416,16 +1409,20 @@ def test_task_waits_at_the_checkpoint_until_it_is_resumed(monkeypatch, tmp_path)
 
 
 def test_checkpoint_waits_again_when_the_edit_cannot_be_read(monkeypatch, tmp_path):
+    from core.workspace import TaskWorkspace
+
     pipeline, runner, calls = _checkpoint(monkeypatch, tmp_path)
+    ws = TaskWorkspace("output")
     try:
         assert _wait_for(lambda: runner.state == "paused")
-        with open("output/log/terminology.json", "w", encoding="utf-8") as f:
-            f.write('{"terms": [{"src": "a", "tgt": "b", "note": "c"},]}')
+        with ws._db(write=True) as conn:
+            assert conn is not None
+            conn.execute("DELETE FROM task_kv WHERE key = 'terms_meta'")
+            conn.execute("DELETE FROM terms")
         runner.resume()
         assert _wait_for(lambda: runner.pause_message == pipeline.INVALID_TERMINOLOGY)
         assert runner.state == "paused" and calls == []
-        with open("output/log/terminology.json", "w", encoding="utf-8") as f:
-            f.write('{"terms": [{"src": "a", "tgt": "b", "note": "c"}]}')
+        ws.save_terms("t", [{"src": "a", "tgt": "b", "note": "c"}])
         runner.resume()
     finally:
         runner.resume()
@@ -1450,14 +1447,13 @@ def test_no_checkpoint_when_it_is_switched_off(monkeypatch, tmp_path):
 
 
 def test_no_checkpoint_when_the_translation_exists(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    os.makedirs("output/log")
-    open("output/log/translation_results.xlsx", "w").close()
-    from core.utils.models import _4_2_TRANSLATION
-
-    assert _4_2_TRANSLATION == "output/log/translation_results.xlsx"
     from core import pipeline
     from core.task_runner import TaskRunner
+    from core.workspace import TaskWorkspace
+
+    monkeypatch.chdir(tmp_path)
+    ws = TaskWorkspace("output")
+    ws.save_utterances([{"id": 0, "src": "Hello", "tgt": "你好"}])
 
     monkeypatch.setattr(pipeline, "load_key", lambda key: True)
     runner = TaskRunner()
@@ -1475,41 +1471,42 @@ def test_checkpoint_does_nothing_outside_a_task(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "content,valid",
+    "payload,valid",
     [
-        ('{"theme": "t", "terms": [{"src": "a", "tgt": "b", "note": "c"}]}', True),
-        ('{"terms": []}', True),
-        ('{"terms": [{"src": "a", "tgt": "b"}]}', False),
-        ('{"terms": {"src": "a"}}', False),
-        ("[]", False),
-        ("not json", False),
+        ({"summary": "t", "terms": [{"src": "a", "tgt": "b", "note": "c"}]}, True),
+        ({"terms": []}, True),
+        ({"terms": [{"src": "a", "tgt": "b"}]}, False),
+        ({"terms": {"src": "a"}}, False),
+        ({"terms": [{"src": "a", "tgt": "", "note": "c"}]}, False),
+        (None, False),
     ],
 )
-def test_terminology_error(monkeypatch, tmp_path, content, valid):
+def test_terminology_error(monkeypatch, tmp_path, payload, valid):
     from core import pipeline
+    from core.workspace import TaskWorkspace, workspace_context
 
-    monkeypatch.chdir(tmp_path)
-    os.makedirs("output/log")
-    with open("output/log/terminology.json", "w", encoding="utf-8") as f:
-        f.write(content)
-    assert (pipeline.terminology_error() is None) == valid
+    ws = TaskWorkspace(tmp_path)
+    if payload is not None:
+        ws.save_terms("t", [])
+        monkeypatch.setattr(TaskWorkspace, "load_terms", lambda self: payload)
+    with workspace_context(ws):
+        assert (pipeline.terminology_error() is None) == valid
 
 
 def test_edited_terminology_is_kept_on_a_retry(monkeypatch, tmp_path):
     import core._4_1_summarize as module
+    from core.workspace import TaskWorkspace
 
     monkeypatch.chdir(tmp_path)
-    os.makedirs("output/log")
-    with open("output/log/terminology.json", "w", encoding="utf-8") as f:
-        f.write('{"terms": [{"src": "edited", "tgt": "b", "note": "c"}]}')
+    ws = TaskWorkspace("output")
+    ws.save_terms("t", [{"src": "edited", "tgt": "b", "note": "c"}])
     monkeypatch.setattr(
         module, "ask_gpt", lambda *args, **kwargs: pytest.fail("summarized again")
     )
 
     module.get_summary()
 
-    with open("output/log/terminology.json", encoding="utf-8") as f:
-        assert "edited" in f.read()
+    assert ws.load_terms()["terms"][0]["src"] == "edited"
 
 
 def test_transcribe_stage_stops_before_the_translation(tmp_path, monkeypatch):
@@ -1557,12 +1554,17 @@ def test_transcribe_stage_stops_before_the_translation(tmp_path, monkeypatch):
 def test_source_subtitles_without_a_translation(monkeypatch, tmp_path):
     import core._5_split_sub as split_sub
     import core._6_gen_sub as module
+    from core.workspace import TaskWorkspace
 
     monkeypatch.chdir(tmp_path)
-    os.makedirs("output/log")
-    _words().to_excel("output/log/cleaned_chunks.xlsx", index=False)
-    with open("output/log/split_by_meaning.txt", "w", encoding="utf-8") as f:
-        f.write("Hello world.\nHow are you?\n")
+    ws = TaskWorkspace("output")
+    ws.save_words(_words().to_dict(orient="records"))
+    ws.save_utterances(
+        [
+            {"id": 0, "src": "Hello world."},
+            {"id": 1, "src": "How are you?"},
+        ]
+    )
     settings = {
         "subtitle": {"max_length": 8, "target_multiplier": 1.2},
         "max_workers": 2,
@@ -1577,7 +1579,12 @@ def test_source_subtitles_without_a_translation(monkeypatch, tmp_path):
 
     module.gen_source_subtitles()
 
-    assert [name for name in os.listdir("output") if name != "log"] == ["src.srt"]
+    assert [
+        name
+        for name in os.listdir("output")
+        if name
+        not in ("log", "project.sqlite", "project.sqlite-shm", "project.sqlite-wal")
+    ] == ["src.srt"]
     with open("output/src.srt", encoding="utf-8") as f:
         assert f.read() == (
             "1\n00:00:00,000 --> 00:00:00,500\nHello\n\n\n"
@@ -1917,17 +1924,24 @@ def test_default_subtitle_filter_is_the_one_from_before(monkeypatch, tmp_path):
 
 def _dub_subtitle_tasks(tmp_path, monkeypatch, **columns):
     import core._11_merge_audio as module
+    from core.workspace import TaskWorkspace
 
     monkeypatch.chdir(tmp_path)
-    os.makedirs("output/audio")
-    pd.DataFrame(
-        {
-            "number": [1, 2],
-            "lines": [str(["你好。", "最近好吗？"]), str(["再见。"])],
-            "new_sub_times": [str([[0.0, 1.5], [1.5, 3.25]]), str([[3661.5, 3663.0]])],
-            **columns,
-        }
-    ).to_excel("output/audio/tts_tasks.xlsx", index=False)
+    os.makedirs("output/audio", exist_ok=True)
+    ws = TaskWorkspace("output")
+    ws.save_dub_tasks(
+        pd.DataFrame(
+            {
+                "number": [1, 2],
+                "lines": [str(["你好。", "最近好吗？"]), str(["再见。"])],
+                "new_sub_times": [
+                    str([[0.0, 1.5], [1.5, 3.25]]),
+                    str([[3661.5, 3663.0]]),
+                ],
+                **columns,
+            }
+        )
+    )
     return module
 
 
@@ -1970,7 +1984,8 @@ def test_no_source_subtitles_of_the_dub_when_they_do_not_match(
 
     module.create_srt_subtitle()
 
-    assert sorted(os.listdir("output")) == ["audio", "dub.srt"]
+    assert "dub.srt" in os.listdir("output")
+    assert "dub_src.srt" not in os.listdir("output")
 
 
 # ------------------------------------------------------------------
@@ -1979,14 +1994,21 @@ def test_no_source_subtitles_of_the_dub_when_they_do_not_match(
 
 
 def _translation_results(translation, source=("Hello world.", "...", "How are you?")):
-    pd.DataFrame(
-        {
-            "Source": list(source),
-            "Translation": list(translation),
-            "timestamp": ["00:00:00,000 --> 00:00:01,000"] * len(source),
-            "duration": [1.0] * len(source),
-        }
-    ).to_excel("output/log/translation_results.xlsx", index=False)
+    from core.workspace import TaskWorkspace
+
+    ws = TaskWorkspace("output")
+    ws.save_utterances(
+        [
+            {
+                "id": i,
+                "src": str(s or ""),
+                "tgt": str(t or "") if t is not None else "",
+                "start": float(i),
+                "end": float(i) + 1.0,
+            }
+            for i, (s, t) in enumerate(zip(source, translation))
+        ]
+    )
 
 
 def _translation_checkpoint(monkeypatch, tmp_path, enabled=True):
@@ -1994,7 +2016,6 @@ def _translation_checkpoint(monkeypatch, tmp_path, enabled=True):
     from core.task_runner import TaskRunner
 
     monkeypatch.chdir(tmp_path)
-    os.makedirs("output/log")
     _translation_results(["你好，世界。", None, "你好吗？"])
     monkeypatch.setattr(
         pipeline,
@@ -2036,16 +2057,9 @@ def test_task_waits_after_the_translation_and_uses_the_edit(monkeypatch, tmp_pat
         lambda: _translation_results(
             ["你好，世界。", None], source=["Hello world.", "..."]
         ),
-        lambda: _translation_results(
-            ["你好，世界。", None, "你好吗？"],
-            source=["Hello, world.", "...", "How are you?"],
-        ),
         lambda: _translation_results(["你好，世界。", None, " "]),
-        lambda: pd.DataFrame(
-            {"Source": ["Hello world.", "...", "How are you?"]}
-        ).to_excel("output/log/translation_results.xlsx", index=False),
-        lambda: open("output/log/translation_results.xlsx", "w").close(),
-        lambda: os.remove("output/log/translation_results.xlsx"),
+        lambda: _translation_results(["", None, "你好吗？"]),
+        lambda: _translation_results([], source=[]),
     ],
 )
 def test_checkpoint_waits_again_when_the_translation_cannot_be_used(
@@ -2087,11 +2101,20 @@ def test_no_checkpoint_after_the_translation_when_it_is_switched_off(
 def test_no_checkpoint_when_the_subtitles_are_cut_already(monkeypatch, tmp_path):
     from core import pipeline
     from core.task_runner import TaskRunner
-    from core.utils.models import _5_SPLIT_SUB
+    from core.workspace import TaskWorkspace
 
     monkeypatch.chdir(tmp_path)
-    os.makedirs("output/log")
-    open(_5_SPLIT_SUB, "w").close()
+    ws = TaskWorkspace("output")
+    ws.save_utterances(
+        [
+            {
+                "id": 0,
+                "src": "Hello",
+                "tgt": "你好",
+                "sub_cues": [{"src": "Hello", "tgt": "你好", "start": 0.0, "end": 1.0}],
+            }
+        ]
+    )
     monkeypatch.setattr(pipeline, "load_key_or", lambda key, default: True)
     runner = TaskRunner()
     runner.start([("one", pipeline.review_translation)])
@@ -2315,17 +2338,7 @@ def test_recognition_is_kept_without_subtitles_of_the_user(monkeypatch, tmp_path
     # A retry keeps the words that are there
     module.add_input_subtitles("talk.srt", SRT.encode("utf-8"))
     ws = TaskWorkspace("output")
-    ws.save_words(
-        [
-            {
-                "text": str(r["text"]).strip('"'),
-                "start": float(r["start"]),
-                "end": float(r["end"]),
-                "speaker": str(r.get("speaker_id", "SPEAKER_00")),
-            }
-            for _, r in _words().iterrows()
-        ]
-    )
+    ws.save_words(_words().to_dict(orient="records"))
     module.import_subtitles()
     assert len(ws.load_words()) == 5
 
@@ -2356,12 +2369,17 @@ def test_source_subtitles_of_the_user_are_not_cut(monkeypatch, tmp_path):
     import core._1_ytdlp as ytdlp
     import core._5_split_sub as split_sub
     import core._6_gen_sub as module
+    from core.workspace import TaskWorkspace
 
     monkeypatch.chdir(tmp_path)
-    os.makedirs("output/log")
-    _words().to_excel("output/log/cleaned_chunks.xlsx", index=False)
-    with open("output/log/split_by_meaning.txt", "w", encoding="utf-8") as f:
-        f.write("Hello world.\nHow are you?")
+    ws = TaskWorkspace("output")
+    ws.save_words(_words().to_dict(orient="records"))
+    ws.save_utterances(
+        [
+            {"id": 0, "src": "Hello world."},
+            {"id": 1, "src": "How are you?"},
+        ]
+    )
     monkeypatch.setattr(ytdlp, "find_subtitle_file", lambda: "output/input/talk.srt")
     monkeypatch.setattr(
         split_sub, "split_source_lines", lambda lines: pytest.fail("the lines are kept")

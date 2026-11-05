@@ -3,7 +3,6 @@
 from pathlib import Path
 from unittest.mock import patch
 
-import pandas as pd
 import pytest
 
 from core import _3_1_split_nlp
@@ -125,7 +124,8 @@ def test_arabic_and_multilingual_punctuation_splitting():
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    """A working directory with config.yaml (auto -> detected language) and cleaned_chunks.xlsx."""
+    """A working directory with config.yaml (auto -> detected language) and workspace words."""
+    from core.workspace import TaskWorkspace
 
     def make(language, words):
         text = (ROOT / "config.yaml").read_text(encoding="utf-8")
@@ -136,10 +136,8 @@ def project(tmp_path, monkeypatch):
         )
         assert f"detected_language: '{language}'" in text
         (tmp_path / "config.yaml").write_text(text, encoding="utf-8")
-        (tmp_path / "output/log").mkdir(parents=True)
-        pd.DataFrame({"text": words}).to_excel(
-            tmp_path / "output/log/cleaned_chunks.xlsx", index=False
-        )
+        ws = TaskWorkspace(tmp_path / "output")
+        ws.save_words([{"text": w, "start": 0.0, "end": 0.1} for w in words])
         monkeypatch.chdir(tmp_path)
         return tmp_path
 

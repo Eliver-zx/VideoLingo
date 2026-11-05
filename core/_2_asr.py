@@ -15,7 +15,6 @@ from core.asr_backend.audio_preprocess import (
 )
 from core._1_ytdlp import find_media_file
 from core.utils.models import (
-    _2_CLEANED_CHUNKS,
     _RAW_AUDIO_FILE,
     _VOCAL_AUDIO_FILE,
     resolve_task_path,
@@ -74,7 +73,7 @@ SUPPORTED_RUNTIMES = (
 )
 
 
-@check_file_exists(_2_CLEANED_CHUNKS)
+@check_file_exists("asr")
 def transcribe():
     raw_runtime = str(load_key("whisper.runtime") or "").strip()
     runtime = "zero" if raw_runtime == "Zero" else raw_runtime
