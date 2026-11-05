@@ -118,10 +118,12 @@
         badge.innerHTML = `<span class="status-dot" style="color:var(--text-muted);"></span><span>暂无任务</span>`;
         return;
       }
-      const runningCount = REAL_TASKS.filter(t => t.state === 'running').length;
-      const pausedCount = REAL_TASKS.filter(t => t.state === 'paused').length;
+      const runningCount = REAL_TASKS.filter(t => t.rawState === 'running' || t.rawState === 'stopping').length;
+      const queuedCount = REAL_TASKS.filter(t => t.rawState === 'queued').length;
+      const pausedCount = REAL_TASKS.filter(t => t.rawState === 'paused').length;
       if (runningCount > 0) {
-        badge.innerHTML = `<span class="status-dot" style="color:var(--brand-bright);"></span><span>${runningCount} 个任务运行中</span>`;
+        const qSuffix = queuedCount > 0 ? ` · ${queuedCount} 个排队` : '';
+        badge.innerHTML = `<span class="status-dot" style="color:var(--brand-bright);"></span><span>${runningCount} 个任务运行中${qSuffix}</span>`;
       } else if (pausedCount > 0) {
         badge.innerHTML = `<span class="status-dot" style="color:var(--amber);"></span><span>${pausedCount} 个任务待审校</span>`;
       } else {
@@ -239,10 +241,13 @@
       const domain = t.config_override?.glossary_domain !== undefined
         ? String(t.config_override.glossary_domain)
         : (currentConfig.glossary_domain ?? 'destiny2');
-      let stateLabel = '就绪';
-      let cardState = 'running';
-      let stepSummary = exec.current_step || '等待运行';
-      let progress = Math.round((exec.progress || 0) * 100);
+      const hasAnyProgress = Boolean(
+        sd.asr || sd.split || sd.terms || sd.translate || sd.subtitles || sd.sub_video || sd.dub_audio || sd.dub_video
+      );
+      let stateLabel = hasAnyProgress ? '待继续' : '待启动';
+      let cardState = 'paused';
+      let stepSummary = exec.current_step || (hasAnyProgress ? '已中断 · 点击继续' : '等待手动启动');
+      let progress = hasAnyProgress ? Math.round((exec.progress || 0) * 100) : 0;
 
       if (state === 'paused') {
         cardState = 'paused';
@@ -250,16 +255,24 @@
         stateLabel = reason.includes('terminology') ? '待审术语' : '待校字幕';
         stepSummary = exec.pause_reason || '等待人工审校';
         progress = Math.max(progress, 45);
-      } else if (state === 'running') {
+      } else if (state === 'queued') {
+        cardState = 'paused';
+        stateLabel = '排队中';
+        stepSummary = '等待前一任务完成…';
+      } else if (state === 'running' || state === 'stopping') {
         cardState = 'running';
-        stateLabel = '运行中';
+        stateLabel = state === 'stopping' ? '停止中' : '运行中';
         stepSummary = exec.current_step || '正在处理…';
         progress = Math.max(progress, 15);
+      } else if (state === 'stopped') {
+        cardState = 'paused';
+        stateLabel = '已停止';
+        stepSummary = exec.current_step ? `停于: ${exec.current_step}` : '已停止 · 可继续';
       } else if (state === 'error') {
         cardState = 'error';
         stateLabel = '异常';
         stepSummary = exec.error || '执行出错';
-      } else if (sd.dub_video || sd.sub_video) {
+      } else if (sd.dub_video || (sd.sub_video && !exec.dubbing_enabled)) {
         cardState = 'completed';
         stateLabel = '已完成';
         stepSummary = sd.dub_video ? '配音成片已输出' : '字幕成片已输出';
@@ -274,6 +287,11 @@
         stateLabel = '待审术语';
         stepSummary = '术语已提取 · 待确认';
         progress = 45;
+      } else if (sd.split || sd.asr) {
+        cardState = 'paused';
+        stateLabel = '待继续';
+        stepSummary = sd.split ? '已完成断句 · 待继续' : '已完成识别 · 待继续';
+        progress = sd.split ? 30 : 18;
       }
 
       return {
@@ -282,6 +300,9 @@
         domain,
         state: cardState,
         rawState: state,
+        hasAnyProgress,
+        desiredStage: exec.desired_stage || 'subtitles',
+        dubbingEnabled: Boolean(exec.dubbing_enabled),
         stateLabel,
         stepSummary,
         progress,
@@ -787,7 +808,7 @@
             form.append('target_language', tgtLang);
             form.append('glossary_domain', domain);
             form.append('stage', stage);
-            form.append('autorun', 'true');
+            form.append('autorun', 'false');
             created = await apiFetch('/api/tasks/upload', { method: 'POST', body: form });
             droppedFile = null;
             droppedSubFile = null;
@@ -806,7 +827,7 @@
                 glossary_domain: domain,
                 stage,
                 dubbing: stage === 'all' || stage === 'dubbing',
-                autorun: true,
+                autorun: false,
               }),
             });
           }
@@ -815,7 +836,7 @@
             sourceInput.value = '';
             subInput.value = '';
             closeTopLayer(newTaskDialog);
-            appendLog('asr', 'ASR', `Created workspace output/${created.task_id}/ and started pipeline...`, false);
+            appendLog('asr', 'TASK', `已创建工作区 output/${created.task_id}/，点击「启动任务」开始执行。`, false);
             await loadBackendTasks();
             return;
           }
@@ -834,17 +855,22 @@
         id,
         title: fileName,
         domain,
-        state: 'running',
-        stateLabel: '运行中',
-        stepSummary: '正在语音识别…',
-        progress: 18
+        state: 'paused',
+        rawState: 'idle',
+        hasAnyProgress: false,
+        desiredStage: stage,
+        dubbingEnabled: stage === 'all' || stage === 'dubbing',
+        stateLabel: '待启动',
+        stepSummary: '等待手动启动',
+        progress: 0
       });
       activeTaskId = id;
       document.getElementById('detail-task-title').textContent = fileName;
       document.getElementById('detail-domain-pill').textContent = domain || '无领域';
       closeTopLayer(newTaskDialog);
+      syncPipelineRibbon(REAL_TASKS[0], 0, 0);
       renderTaskRail();
-      appendLog('asr', 'ASR', `Created workspace output/${id}/ and started pipeline...`, false);
+      appendLog('asr', 'TASK', `已创建工作区 output/${id}/，点击「启动任务」开始执行。`, false);
     });
 
     // =========================================================================
@@ -1209,7 +1235,46 @@
     const line3 = document.getElementById('pipe-line-3');
     const line4 = document.getElementById('pipe-line-4');
 
+    function syncStartResumeButton(card) {
+      const btn = document.getElementById('btn-start-resume-task');
+      const labelEl = document.getElementById('btn-start-resume-label');
+      if (!btn || !labelEl) return;
+      if (!card) {
+        btn.disabled = true;
+        labelEl.textContent = '启动任务';
+        return;
+      }
+      const rawState = card.rawState || card.state || 'idle';
+      if (rawState === 'running' || rawState === 'stopping' || rawState === 'queued') {
+        btn.disabled = true;
+        labelEl.textContent = rawState === 'queued' ? '排队中…' : (rawState === 'stopping' ? '停止中…' : '运行中…');
+        return;
+      }
+      const sd = card.raw?.stages_done || {};
+      const desired = card.desiredStage || 'subtitles';
+      const isDesiredDone = (
+        (desired === 'transcribe' && Boolean(sd.split && (card.raw?.files || []).includes('src.srt'))) ||
+        (desired === 'subtitles' && Boolean(sd.sub_video || sd.subtitles)) ||
+        (desired === 'dubbing' && Boolean(sd.dub_video || sd.dub_audio)) ||
+        (desired === 'all' && Boolean(card.dubbingEnabled ? (sd.dub_video || sd.dub_audio) : (sd.sub_video || sd.subtitles)))
+      );
+      if (isDesiredDone && rawState === 'completed') {
+        btn.disabled = false;
+        labelEl.textContent = '继续任务';
+        return;
+      }
+      btn.disabled = false;
+      const shouldSayContinue = Boolean(
+        card.hasAnyProgress ||
+        rawState === 'paused' ||
+        rawState === 'stopped' ||
+        rawState === 'error'
+      );
+      labelEl.textContent = shouldSayContinue ? '继续任务' : '启动任务';
+    }
+
     function syncPipelineRibbon(card, uttCount = 0, termCount = 0) {
+      syncStartResumeButton(card);
       const b1 = document.getElementById('pill-badge-1');
       const b2 = document.getElementById('pill-badge-2');
       const b3 = document.getElementById('pill-badge-3');
@@ -1228,14 +1293,15 @@
       }
 
       const sd = card.raw?.stages_done || {};
-      const pillClass = card.state === 'completed' ? 'completed' : (card.state === 'paused' ? 'paused' : (card.state === 'error' ? 'error' : 'running'));
+      const isRunning = card.rawState === 'running' || card.rawState === 'stopping';
+      const pillClass = card.state === 'completed' ? 'completed' : (card.state === 'paused' ? 'paused' : (card.state === 'error' ? 'error' : (isRunning ? 'running' : 'paused')));
       if (detailBadge) {
         detailBadge.className = `status-pill ${pillClass}`;
         detailBadge.innerHTML = `<span class="status-dot"></span><span>${escapeHtml(card.stateLabel || '就绪')}</span>`;
       }
 
-      if (pill1) pill1.className = sd.asr ? 'pipe-node done' : (card.state === 'running' ? 'pipe-node active' : 'pipe-node');
-      if (b1) b1.textContent = sd.asr ? '已完成' : (card.state === 'running' ? '识别中' : '未开始');
+      if (pill1) pill1.className = sd.asr ? 'pipe-node done' : (isRunning ? 'pipe-node active' : 'pipe-node');
+      if (b1) b1.textContent = sd.asr ? '已完成' : (isRunning ? '识别中' : '未开始');
       if (line1) line1.className = sd.asr ? 'pipe-line done' : 'pipe-line';
 
       if (pill2) pill2.className = sd.split ? 'pipe-node done' : 'pipe-node';
@@ -1617,6 +1683,50 @@
     // =========================================================================
     // 8. Subtitle Edit 交接动作与轻量成片预览弹窗
     // =========================================================================
+    document.getElementById('btn-start-resume-task')?.addEventListener('click', async () => {
+      const task = REAL_TASKS.find(x => x.id === activeTaskId);
+      if (!task) return;
+      const rawState = task.rawState || task.state || 'idle';
+      if (rawState === 'running' || rawState === 'stopping' || rawState === 'queued') return;
+
+      if (isBackendConnected && task.fromBackend) {
+        try {
+          if (isEditingTerms) {
+            await persistTaskTermsToBackend();
+          }
+          if (isEditingUtterances) {
+            await persistTaskUtterancesToBackend();
+          }
+          if (rawState === 'paused') {
+            await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/resume`, { method: 'POST' });
+            appendLog('llm', 'RUN', `已继续执行任务 ${activeTaskId}…`, false);
+          } else {
+            const desiredStage = task.desiredStage || task.raw?.execution?.desired_stage || 'subtitles';
+            const dubbingEnabled = Boolean(task.dubbingEnabled ?? task.raw?.execution?.dubbing_enabled ?? (desiredStage === 'all' || desiredStage === 'dubbing'));
+            await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/run`, {
+              method: 'POST',
+              body: JSON.stringify({ stage: desiredStage, dubbing: dubbingEnabled }),
+            });
+            appendLog('asr', 'RUN', `${task.hasAnyProgress ? '继续' : '启动'}任务 ${activeTaskId} (${desiredStage})…`, false);
+          }
+          await loadBackendTasks();
+          return;
+        } catch (err) {
+          reportActionError('RUN', err);
+          return;
+        }
+      }
+
+      task.rawState = 'running';
+      task.state = 'running';
+      task.stateLabel = '运行中';
+      task.stepSummary = '正在语音识别…';
+      task.progress = Math.max(task.progress || 0, 18);
+      syncPipelineRibbon(task, STREAM_TABLE_ROWS.length, REAL_TASK_TERMS.length);
+      renderTaskRail();
+      appendLog('asr', 'RUN', `Started pipeline for ${activeTaskId}...`, false);
+    });
+
     document.getElementById('btn-open-task-dir').addEventListener('click', async () => {
       const task = REAL_TASKS.find(x => x.id === activeTaskId);
       if (!task) return;
@@ -2523,6 +2633,7 @@
     }
 
     // 初始化全量视图 (同步立即渲染空状态，随后异步同步后端数据)
+    syncStartResumeButton(null);
     renderTaskRail();
     renderBatchTree();
     renderStreamTable();

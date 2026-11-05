@@ -286,6 +286,12 @@ def _workspace_summary(ws: TaskWorkspace) -> dict[str, Any]:
             "pause_reason": runner.pause_message or None,
             "error": runner.error_msg or None,
         }
+    elif runner.is_queued(ws.task_id):
+        manifest["execution"] = {
+            **manifest.get("execution", {}),
+            "state": "queued",
+            "current_step": "Queued",
+        }
     manifest["files"] = files
     manifest["refers"] = refers
     manifest["segs"] = segs
@@ -451,6 +457,10 @@ def create_task(request: CreateTaskRequest):
             "url": source_str,
             "mount_mode": "yt-dlp",
         }
+        if sub_path:
+            dst_srt = ws.root / "source.srt"
+            shutil.copy2(sub_path, dst_srt)
+            manifest.setdefault("media", {})["input_subtitle"] = "source.srt"
         manifest["config_override"] = overrides
         manifest.setdefault("execution", {}).update(
             {
@@ -590,8 +600,14 @@ def upload_task(
                 "filename": "source.srt",
             }
         )
+    needs_dub = stage in ("all", "dubbing")
+    ws.update_manifest(
+        execution={
+            "desired_stage": stage,
+            "dubbing_enabled": needs_dub,
+        }
+    )
     if autorun:
-        needs_dub = stage in ("all", "dubbing")
         steps = _wrap_workspace_steps(ws, get_steps(stage, needs_dub), overrides)
         runner.enqueue(steps, task_id=ws.task_id)
     return _workspace_summary(ws)
@@ -600,23 +616,50 @@ def upload_task(
 @app.post("/api/tasks/{task_id}/run", status_code=202)
 def run_task(task_id: str, request: RunRequest):
     ws = _resolve_workspace(task_id)
-    if runner.active_task_id == ws.task_id and runner.is_active:
-        raise HTTPException(409, f"Task {ws.task_id} is already running.")
+    if (runner.active_task_id == ws.task_id and runner.is_active) or runner.is_queued(
+        ws.task_id
+    ):
+        raise HTTPException(409, f"Task {ws.task_id} is already running or queued.")
     manifest = ws.load_manifest()
-    media_kind = (manifest.get("media") or {}).get("kind")
-    if not media_kind:
-        try:
-            _, media_kind = ws.resolve_media_file()
-        except ValueError as exc:
+    exec_info = manifest.get("execution") or {}
+    saved_stage = exec_info.get("desired_stage")
+    effective_stage: Literal["transcribe", "subtitles", "dubbing", "all"] = (
+        request.stage
+        if request.stage is not None
+        else (
+            saved_stage
+            if saved_stage in ("transcribe", "subtitles", "dubbing", "all")
+            else "subtitles"
+        )
+    )
+    effective_dub = (
+        request.dubbing
+        if request.dubbing is not None
+        else bool(exec_info.get("dubbing_enabled", False))
+    )
+
+    media_info = manifest.get("media") or {}
+    media_kind = media_info.get("kind") or media_info.get("type")
+    origin_url = (manifest.get("origin") or {}).get("url")
+    needs_download = False
+    try:
+        _, resolved_kind = ws.resolve_media_file()
+        media_kind = resolved_kind
+    except ValueError as exc:
+        if origin_url:
+            needs_download = True
+            media_kind = media_kind or "video"
+        elif not media_kind:
             raise HTTPException(409, str(exc)) from exc
-    needs_dubbing = request.stage == "dubbing" or (
-        request.stage == "all" and request.dubbing
+
+    needs_dubbing = effective_stage == "dubbing" or (
+        effective_stage == "all" and effective_dub
     )
     if needs_dubbing and media_kind in ("audio", "subtitle"):
         raise HTTPException(
             422, "Input without a video supports subtitles only, as in the UI."
         )
-    if request.stage == "dubbing" and not (
+    if effective_stage == "dubbing" and not (
         ws.has_utterances()
         or all((ws.root / name).exists() for name in ("src.srt", "trans.srt"))
     ):
@@ -632,11 +675,29 @@ def run_task(task_id: str, request: RunRequest):
     if request.glossary_domain is not None:
         overrides["glossary_domain"] = request.glossary_domain.strip()
     manifest["config_override"] = overrides
+    manifest.setdefault("execution", {}).update(
+        {
+            "desired_stage": effective_stage,
+            "dubbing_enabled": needs_dubbing,
+        }
+    )
     ws.save_manifest(manifest)
 
-    steps = _wrap_workspace_steps(
-        ws, get_steps(request.stage, needs_dubbing), overrides
-    )
+    raw_steps = list(get_steps(effective_stage, needs_dubbing))
+    if needs_download and origin_url:
+
+        def _dl():
+            from core._1_ytdlp import download_video_ytdlp
+
+            download_video_ytdlp(
+                origin_url,
+                save_path=str(ws.root),
+                resolution=load_key("ytb_resolution"),
+            )
+
+        raw_steps = [("Download video", _dl)] + raw_steps
+
+    steps = _wrap_workspace_steps(ws, raw_steps, overrides)
     started_now = runner.enqueue(steps, task_id=ws.task_id)
     return {"accepted": True, "started_immediately": started_now, "task_id": ws.task_id}
 

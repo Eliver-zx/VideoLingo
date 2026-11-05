@@ -79,6 +79,56 @@ def test_task_creation_validates_source_and_isolates_workspaces(client):
     assert (Path("output") / t2 / "source.mp4").read_bytes() == b"test media"
 
 
+def test_create_task_does_not_autorun_by_default_and_manual_run_uses_desired_stage(
+    client, monkeypatch
+):
+    Path("manual.mp4").write_bytes(b"test media")
+    calls = []
+
+    def plan(stage, dubbing):
+        calls.append((stage, dubbing))
+        return [("Step", lambda: None)]
+
+    monkeypatch.setattr(api, "get_steps", plan)
+    res = client.post(
+        "/api/tasks",
+        json={
+            "source": str(Path("manual.mp4").resolve()),
+            "stage": "subtitles",
+            "dubbing": False,
+        },
+    )
+    assert res.status_code == 202
+    data = res.json()
+    task_id = data["task_id"]
+    assert data["execution"]["state"] == "idle"
+    assert data["execution"]["desired_stage"] == "subtitles"
+    assert data["execution"]["dubbing_enabled"] is False
+    assert calls == []
+
+    run_res = client.post(f"/api/tasks/{task_id}/run", json={})
+    assert run_res.status_code == 202
+    state = finish(client, task_id)
+    assert calls == [("subtitles", False)]
+    assert state["execution"]["state"] == "completed"
+
+    res_up = client.post(
+        "/api/tasks/upload",
+        files={"file": ("clip.mp4", b"test media", "video/mp4")},
+        data={"stage": "transcribe"},
+    )
+    assert res_up.status_code == 202
+    up_data = res_up.json()
+    up_id = up_data["task_id"]
+    assert up_data["execution"]["state"] == "idle"
+    assert up_data["execution"]["desired_stage"] == "transcribe"
+    assert calls == [("subtitles", False)]
+
+    assert client.post(f"/api/tasks/{up_id}/run", json={}).status_code == 202
+    finish(client, up_id)
+    assert calls == [("subtitles", False), ("transcribe", False)]
+
+
 def test_url_uses_existing_downloader(client, monkeypatch):
     from core import _1_ytdlp
 
@@ -177,6 +227,8 @@ def test_busy_and_stopping_reject_active_task_mutations_and_drain_queue(
         res_t2 = client.post(f"/api/tasks/{t2}/run", json={})
         assert res_t2.status_code == 202
         assert res_t2.json()["started_immediately"] is False
+        assert client.get(f"/api/tasks/{t2}").json()["execution"]["state"] == "queued"
+        assert client.post(f"/api/tasks/{t2}/run", json={}).status_code == 409
         # Stopping t1 transitions t1 to stopping, then drains and runs queued t2!
         assert client.post(f"/api/tasks/{t1}/stop").json()["state"] == "stopping"
     finally:

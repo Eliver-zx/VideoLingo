@@ -433,6 +433,8 @@ def test_fastapi_webui_tasks_terms_and_utterances_endpoints(
         'id="detail-task-title"',
         'id="detail-task-badge"',
         'id="detail-domain-pill"',
+        'id="btn-start-resume-task"',
+        'id="btn-start-resume-label"',
         'id="btn-open-task-dir"',
         'id="btn-burn-sub-video"',
         'id="btn-run-dubbing"',

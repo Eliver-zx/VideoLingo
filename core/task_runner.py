@@ -159,6 +159,11 @@ class TaskRunner:
             self._pause_event.set()  # unblock if paused so thread can exit
             self._notify("task_stopping")
 
+    def is_queued(self, task_id: str) -> bool:
+        """Return True if task_id is currently waiting in the serial queue."""
+        with self._queue_lock:
+            return any(item[0] == task_id for item in self._queue)
+
     def cancel_queued(self, task_id: str) -> bool:
         """Remove a queued task by task_id before it starts."""
         with self._queue_lock:
