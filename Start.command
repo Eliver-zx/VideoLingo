@@ -8,27 +8,14 @@ export PYTHONWARNINGS="ignore"
 PORT="${VIDEOLINGO_API_PORT:-8501}"
 URL="http://127.0.0.1:${PORT}"
 
-if ! command -v uv >/dev/null 2>&1; then
-    echo "ERROR: uv is not installed or not in PATH. Install it from https://docs.astral.sh/uv/"
-    exit 1
-fi
-
 if [ -x "$HOME/.venvs/videolingo/bin/python" ]; then
-    VENV_DIR="$HOME/.venvs/videolingo"
+    PY_CMD="$HOME/.venvs/videolingo/bin/python"
+elif [ -x "$PWD/.venv/bin/python" ]; then
+    PY_CMD="$PWD/.venv/bin/python"
 else
-    VENV_DIR="$PWD/.venv"
-fi
-PY_CMD="$VENV_DIR/bin/python"
-
-if [ ! -x "$PY_CMD" ]; then
-    echo "[1/2] Creating Python 3.12 virtual environment at $VENV_DIR ..."
-    uv venv "$VENV_DIR" --python 3.12
-fi
-
-if ! "$PY_CMD" -c "import fastapi, multipart, uvicorn, openai, ruamel.yaml, demucs, rapidfuzz; import mlx_audio" >/dev/null 2>&1 && \
-   ! "$PY_CMD" -c "import fastapi, multipart, uvicorn, openai, ruamel.yaml, demucs, rapidfuzz; import qwen_asr" >/dev/null 2>&1; then
-    echo "[2/2] Installing dependencies via uv ..."
-    uv pip install --python "$PY_CMD" -r requirements.txt
+    echo "ERROR: Python virtual environment not found (.venv/bin/python)."
+    echo "Please run ./Install.command first to set up dependencies."
+    exit 1
 fi
 
 echo "Using Python: $PY_CMD"

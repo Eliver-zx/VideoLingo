@@ -13,57 +13,19 @@ cd /D "%~dp0"
 if "%VIDEOLINGO_API_PORT%"=="" set "VIDEOLINGO_API_PORT=8501"
 set "URL=http://127.0.0.1:%VIDEOLINGO_API_PORT%"
 
-where uv >nul 2>nul
-if errorlevel 1 (
-    echo ERROR: uv is not installed or not in PATH. Install it from https://docs.astral.sh/uv/
-    goto failed
-)
-
-where ffmpeg >nul 2>nul
-if errorlevel 1 (
-    echo ERROR: ffmpeg is not installed or not in PATH. Install via: winget install "FFmpeg ^(Essentials Build^)"
-    goto failed
-)
-
-where ffprobe >nul 2>nul
-if errorlevel 1 (
-    echo ERROR: ffprobe is not installed or not in PATH. Install via: winget install "FFmpeg ^(Essentials Build^)"
-    goto failed
-)
-
 if exist "%USERPROFILE%\.venvs\videolingo\Scripts\python.exe" (
-    set "VENV_DIR=%USERPROFILE%\.venvs\videolingo"
+    set "VENV_PY=%USERPROFILE%\.venvs\videolingo\Scripts\python.exe"
+) else if exist "%CD%\.venv\Scripts\python.exe" (
+    set "VENV_PY=%CD%\.venv\Scripts\python.exe"
 ) else (
-    set "VENV_DIR=%CD%\.venv"
+    echo ERROR: Python virtual environment not found ^(.venv\Scripts\python.exe^).
+    echo Please run Install.bat first to set up dependencies.
+    pause
+    exit /b 1
 )
-set "VENV_PY=%VENV_DIR%\Scripts\python.exe"
-
-if not exist "%VENV_PY%" (
-    echo [1/2] Creating Python 3.12 virtual environment at "%VENV_DIR%" ...
-    uv venv "%VENV_DIR%" --python 3.12
-    if errorlevel 1 goto failed
-)
-
-"%VENV_PY%" -c "import fastapi, multipart, uvicorn, openai, ruamel.yaml, demucs, rapidfuzz, qwen_asr, torch, importlib.metadata as m; assert torch.cuda.is_available(); assert tuple(map(int, m.version('nagisa').split('.')[:2])) >= (0, 3)" >nul 2>nul
-if errorlevel 1 (
-    echo [2/2] Installing dependencies ^(CUDA PyTorch + Qwen3-ASR^) via uv ...
-    uv pip install --python "%VENV_PY%" --extra-index-url https://download.pytorch.org/whl/cu126 --index-strategy unsafe-best-match -r requirements.txt
-    if errorlevel 1 goto failed
-)
-
-"%VENV_PY%" -c "import torch; assert torch.cuda.is_available(), 'CUDA is not available in PyTorch! Check NVIDIA driver and CUDA PyTorch install.'; print(f'GPU ready: {torch.cuda.get_device_name(0)}')"
-if errorlevel 1 goto failed
 
 echo Using Python: "%VENV_PY%"
 echo Starting VideoLingo WebUI at %URL% ...
 start "" powershell -NoProfile -WindowStyle Hidden -Command "for ($i=0; $i -lt 50; $i++) { try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1', %VIDEOLINGO_API_PORT%); $c.Close(); Start-Process '%URL%'; exit } catch { Start-Sleep -Milliseconds 200 } }"
 "%VENV_PY%" api.py
-goto end
-
-:failed
-echo Installation or launch failed.
-pause
-exit /b 1
-
-:end
 pause

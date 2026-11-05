@@ -39,9 +39,7 @@ transformers>=5.14,<6; sys_platform == 'darwin' and platform_machine == 'arm64'
 huggingface-hub>=1,<2; sys_platform == 'darwin' and platform_machine == 'arm64'
 # mlx-audio's forced aligner imports these lazily for Japanese/Korean but does not
 # declare them; same pins as qwen-asr 0.0.6.
-# On Windows/Linux, nagisa>=0.3.1 fixes UnicodeDecodeError (cp932 vs utf-8) under non-Japanese locales.
-nagisa==0.2.11; sys_platform == 'darwin' and platform_machine == 'arm64'
-nagisa>=0.3.1; sys_platform != 'darwin' or platform_machine != 'arm64'
+nagisa==0.2.11
 soynlp==0.0.493; sys_platform == 'darwin' and platform_machine == 'arm64'
 torch==2.2.2; sys_platform == 'darwin' and platform_machine == 'x86_64'
 torchaudio==2.2.2; sys_platform == 'darwin' and platform_machine == 'x86_64'
