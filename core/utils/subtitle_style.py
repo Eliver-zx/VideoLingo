@@ -327,6 +327,11 @@ def _available_ffmpeg_encoders() -> set[str]:
                 r"\b(h264_nvenc|h264_videotoolbox|h264_amf|h264_qsv|libx264)\b", out
             )
         )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "FFmpeg executable not found in PATH. Please install FFmpeg "
+            "(e.g. `winget install Gyan.FFmpeg` or `conda install ffmpeg`) and restart."
+        ) from exc
     except Exception:
         return {"libx264"}
 
@@ -350,6 +355,11 @@ def _available_ffmpeg_filters() -> set[str]:
                 out,
             )
         )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "FFmpeg executable not found in PATH. Please install FFmpeg "
+            "(e.g. `winget install Gyan.FFmpeg` or `conda install ffmpeg`) and restart."
+        ) from exc
     except Exception:
         return set()
 

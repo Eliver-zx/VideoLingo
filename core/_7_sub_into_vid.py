@@ -35,7 +35,12 @@ def check_gpu_available():
             encoding="utf-8",
             errors="replace",
         )
-        return "h264_nvenc" in result.stdout
+        return "h264_nvenc" in (result.stdout or "")
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "FFmpeg executable not found in PATH. Please install FFmpeg "
+            "(e.g. `winget install Gyan.FFmpeg` or `conda install ffmpeg`) and restart."
+        ) from exc
     except Exception:
         return False
 

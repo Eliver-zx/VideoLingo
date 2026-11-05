@@ -123,6 +123,50 @@ def test_audio_preprocess_imports_resolve_task_path():
     assert "resolve_task_path" in imported_names
 
 
+def test_windows_ffmpeg_path_sanitizes_broken_dirs_and_hooks_popen(
+    tmp_path, monkeypatch
+):
+    from core.utils import models
+
+    fake_bin_dir = tmp_path / "ffmpeg_bin"
+    fake_bin_dir.mkdir()
+    fake_ffmpeg = fake_bin_dir / "ffmpeg.exe"
+    fake_ffmpeg.write_bytes(b"MZ")
+    broken_dir = tmp_path / "nonexistent_dir_causing_winerror_3"
+
+    monkeypatch.setattr(models.os, "name", "nt")
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv(
+        "PATH",
+        f'"{broken_dir}"{os.pathsep}"{fake_bin_dir}"',
+    )
+    monkeypatch.setattr(models.shutil, "which", lambda name: str(fake_ffmpeg))
+
+    captured_kwargs = {}
+
+    def fake_orig_init(self, args, *p_args, **p_kwargs):
+        captured_kwargs["args"] = args
+        captured_kwargs["executable"] = p_kwargs.get("executable")
+
+    monkeypatch.setattr(models.subprocess.Popen, "__init__", fake_orig_init)
+    models.ensure_windows_ffmpeg_path()
+
+    cleaned_path_entries = os.environ["PATH"].split(os.pathsep)
+    assert str(broken_dir) not in cleaned_path_entries
+    assert any(
+        os.path.realpath(p) == os.path.realpath(str(fake_bin_dir))
+        for p in cleaned_path_entries
+        if os.path.isdir(p)
+    )
+
+    dummy = object.__new__(models.subprocess.Popen)
+    models.subprocess.Popen.__init__(dummy, ["ffmpeg", "-nostdin", "-encoders"])
+    assert captured_kwargs["args"] == ["ffmpeg", "-nostdin", "-encoders"]
+    assert os.path.realpath(captured_kwargs["executable"]) == os.path.realpath(
+        str(fake_ffmpeg)
+    )
+
+
 def band_level(pcm_path, low, high):
     import numpy as np
 

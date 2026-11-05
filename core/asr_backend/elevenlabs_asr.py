@@ -7,6 +7,7 @@ import tempfile
 from core.asr_backend.audio_preprocess import audio_slice_wav
 from rich import print as rprint
 from core.utils import load_key, set_runtime_state as update_key
+from core.utils.models import resolve_task_path
 
 # ----------------------------------------
 # ISO 639-2 to 1
@@ -147,5 +148,7 @@ if __name__ == "__main__":
     print(result)
 
     # Save result to file
-    with open("output/transcript.json", "w", encoding="utf-8") as f:
+    out_transcript = resolve_task_path("output/transcript.json")
+    os.makedirs(os.path.dirname(out_transcript) or ".", exist_ok=True)
+    with open(out_transcript, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=4)

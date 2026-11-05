@@ -22,7 +22,7 @@ def __getattr__(name):
     if _import_error is not None and name in __all__:
         raise ImportError(
             f"core.utils could not be loaded: {_import_error}. "
-            "Some dependencies are missing; run Start.command / Start.bat or `uv pip install -r requirements.txt`."
+            "Some dependencies are missing; run Install.command / Install.bat or `uv pip install -r requirements.txt`."
         ) from _import_error
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

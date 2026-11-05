@@ -42,13 +42,14 @@ def load_and_flatten_data():
 
 def get_audio_files(df):
     """Generate a list of audio file paths"""
-    _resolve = globals().get("resolve_task_path", lambda p: p)
     audios = []
     for index, row in df.iterrows():
         number = row["number"]
         line_count = len(parse_task_literal(row["lines"]))
         for line_index in range(line_count):
-            temp_file = _resolve(OUTPUT_FILE_TEMPLATE.format(f"{number}_{line_index}"))
+            temp_file = resolve_task_path(
+                OUTPUT_FILE_TEMPLATE.format(f"{number}_{line_index}")
+            )
             audios.append(temp_file)
     return audios
 

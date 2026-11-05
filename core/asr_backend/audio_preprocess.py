@@ -1,9 +1,7 @@
 import math
 import os
-from pathlib import Path
 import re
 import subprocess
-import sys
 from typing import Dict, List, Tuple
 import pandas as pd
 from pydub import AudioSegment
@@ -11,6 +9,7 @@ from core.utils import load_key_or, set_runtime_state as update_key
 from core.utils.models import (
     _AUDIO_DIR,
     _RAW_AUDIO_FILE,
+    ensure_windows_ffmpeg_path,
     resolve_task_path,
 )
 from core.workspace import get_active_workspace
@@ -18,47 +17,7 @@ from pydub.silence import detect_silence
 from pydub.utils import mediainfo
 from rich import print as rprint
 
-
-def _ensure_windows_ffmpeg_path() -> None:
-    """Sanitize quoted PATH entries on Windows and prepend common FFmpeg locations."""
-    if os.name != "nt":
-        return
-    raw_parts = os.environ.get("PATH", "").split(os.pathsep)
-    cleaned_parts: list[str] = []
-    seen_lower: set[str] = set()
-    for part in raw_parts:
-        p = part.strip().strip('"').strip("'")
-        if not p:
-            continue
-        key = p.lower()
-        if key not in seen_lower:
-            seen_lower.add(key)
-            cleaned_parts.append(p)
-    user_home = Path.home()
-    local_appdata = Path(
-        os.environ.get("LOCALAPPDATA") or (user_home / "AppData" / "Local")
-    )
-    candidates = [
-        Path(sys.executable).resolve().parent / "Library" / "bin",
-        Path(sys.prefix).resolve() / "Library" / "bin",
-        local_appdata / "Microsoft" / "WinGet" / "Links",
-        user_home / "scoop" / "shims",
-        Path("C:/ProgramData/chocolatey/bin"),
-        user_home / ".local" / "bin",
-    ]
-    winget_pkgs = local_appdata / "Microsoft" / "WinGet" / "Packages"
-    if winget_pkgs.is_dir():
-        for ff_exe in winget_pkgs.glob("*FFmpeg*/*/bin/ffmpeg.exe"):
-            candidates.append(ff_exe.parent)
-    for cand in candidates:
-        c_str = str(cand)
-        if cand.is_dir() and c_str.lower() not in seen_lower:
-            seen_lower.add(c_str.lower())
-            cleaned_parts.insert(0, c_str)
-    os.environ["PATH"] = os.pathsep.join(cleaned_parts)
-
-
-_ensure_windows_ffmpeg_path()
+ensure_windows_ffmpeg_path()
 
 
 def audio_slice_wav(path, start=None, end=None, sample_rate=16000):
@@ -252,7 +211,13 @@ def get_audio_duration(audio_file: str) -> float:
         pass
 
     cmd = ["ffmpeg", "-nostdin", "-i", str(audio_file)]
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "FFmpeg executable not found in PATH. Please install FFmpeg "
+            "(e.g. `winget install Gyan.FFmpeg` or `conda install ffmpeg`) and restart."
+        ) from exc
     _, stderr = process.communicate()
     output = stderr.decode("utf-8", errors="replace")
 
@@ -267,7 +232,9 @@ def get_audio_duration(audio_file: str) -> float:
             + float(duration_parts[2])
         )
     except Exception as e:
-        print(f"[red]❌ Error: Failed to get audio duration: {e}[/red]")
+        rprint(
+            f"[red]❌ Error: Failed to get audio duration for {audio_file}: {e}[/red]"
+        )
         duration = 0.0
     return duration
 
