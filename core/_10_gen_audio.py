@@ -13,7 +13,7 @@ from rich.progress import Progress
 from concurrent.futures import as_completed
 from core.concurrency import ContextThreadPoolExecutor
 
-from core.utils import check_cancel, load_key, rprint
+from core.utils import check_cancel, load_key, report_progress, rprint
 from core.utils.models import (
     _10_DUB_TRUNCATED,
     _AUDIO_SEGS_DIR,
@@ -162,6 +162,13 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
     tasks_df["real_dur"] = 0.0
     rprint("[bold green]🎯 Starting TTS audio generation...[/bold green]")
 
+    total_rows = max(1, len(tasks_df))
+    done_rows = 0
+    report_progress(
+        0.02,
+        f"TTS 配音 0/{len(tasks_df)}",
+        f"🎯 开始生成 TTS 配音音频（共 {len(tasks_df)} 句）...",
+    )
     with Progress() as progress:
         task = progress.add_task(
             "[cyan]🔄 Generating TTS audio...", total=len(tasks_df)
@@ -175,6 +182,11 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
                 number, real_dur = process_row(row, tasks_df)
                 tasks_df.loc[tasks_df["number"] == number, "real_dur"] = real_dur
                 progress.advance(task)
+                done_rows += 1
+                report_progress(
+                    0.02 + 0.78 * (done_rows / total_rows),
+                    f"TTS 配音 {done_rows}/{len(tasks_df)}",
+                )
             except Exception as e:
                 rprint(f"[red]❌ Error in warmup: {str(e)}[/red]")
                 raise e
@@ -198,6 +210,11 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
                                 real_dur
                             )
                             progress.advance(task)
+                            done_rows += 1
+                            report_progress(
+                                0.02 + 0.78 * (done_rows / total_rows),
+                                f"TTS 配音 {done_rows}/{len(tasks_df)}",
+                            )
                         except Exception as e:
                             rprint(f"[red]❌ Error: {str(e)}[/red]")
                             raise e

@@ -37,6 +37,17 @@ def check_cancel():
     TaskRunner.check_cancel()
 
 
+def report_progress(
+    fraction: float | None = None,
+    sub_label: str | None = None,
+    message: str | None = None,
+) -> None:
+    """Report sub-step progress (0.0 to 1.0) and optional log message to the active TaskRunner."""
+    from core.task_runner import TaskRunner
+
+    TaskRunner.report_progress(fraction=fraction, sub_label=sub_label, message=message)
+
+
 __all__ = [
     "ask_gpt",
     "except_handler",
@@ -50,4 +61,5 @@ __all__ = [
     "join_words",
     "get_source_language",
     "check_cancel",
+    "report_progress",
 ]

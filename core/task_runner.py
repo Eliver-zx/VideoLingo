@@ -26,6 +26,8 @@ class TaskRunner:
     current_step: int = -1  # 0-indexed, -1 = not started
     total_steps: int = 0
     current_label: str = ""
+    sub_label: str = ""
+    sub_progress: float = 0.0
     error_msg: str = ""
     pause_message: str = ""  # why the task paused itself, empty when the user paused it
     active_task_id: str | None = None
@@ -54,16 +56,19 @@ class TaskRunner:
         if callback in self._listeners:
             self._listeners.remove(callback)
 
-    def _notify(self, event_type: str = "status") -> None:
+    def _notify(self, event_type: str = "status", message: str | None = None) -> None:
         payload = {
             "type": event_type,
             "task_id": self.active_task_id,
             "state": self.state,
             "active": self.is_active,
             "step": self.current_label or None,
+            "sub_step": self.sub_label or None,
+            "sub_progress": round(self.sub_progress, 4),
             "step_index": self.current_step,
             "total_steps": self.total_steps,
-            "progress": self.progress,
+            "progress": round(self.progress, 4),
+            "message": message or None,
             "error": self.error_msg or None,
             "pause_message": self.pause_message or None,
             "queued_count": len(self._queue),
@@ -74,7 +79,7 @@ class TaskRunner:
             except Exception:
                 pass
 
-    # ------ Cancellation helpers (called from core code) ------
+    # ------ Cancellation & progress helpers (called from core code) ------
 
     @classmethod
     def check_cancel(cls) -> None:
@@ -85,6 +90,23 @@ class TaskRunner:
         runner._pause_event.wait()
         if runner._stop_event.is_set():
             raise StopTask()
+
+    @classmethod
+    def report_progress(
+        cls,
+        fraction: float | None = None,
+        sub_label: str | None = None,
+        message: str | None = None,
+    ) -> None:
+        """Update sub-step progress (0.0 to 1.0) and broadcast an SSE event when a runner is active."""
+        runner = cls._current
+        if runner is None:
+            return
+        if fraction is not None:
+            runner.sub_progress = max(0.0, min(1.0, float(fraction)))
+        if sub_label is not None:
+            runner.sub_label = str(sub_label)
+        runner._notify("task_progress", message=message)
 
     # ------ Control API ------
 
@@ -104,6 +126,8 @@ class TaskRunner:
         self.total_steps = len(steps)
         self.current_step = -1
         self.current_label = ""
+        self.sub_label = ""
+        self.sub_progress = 0.0
         self.error_msg = ""
         self.pause_message = ""
         self.state = "running"
@@ -182,6 +206,8 @@ class TaskRunner:
             self.current_step = -1
             self.total_steps = 0
             self.current_label = ""
+            self.sub_label = ""
+            self.sub_progress = 0.0
             self.error_msg = ""
             self.pause_message = ""
             self._steps = []
@@ -202,11 +228,11 @@ class TaskRunner:
         """0.0 to 1.0"""
         if self.total_steps == 0:
             return 0.0
-        return (
-            1.0
-            if self.state == "completed"
-            else max(self.current_step, 0) / self.total_steps
-        )
+        if self.state == "completed":
+            return 1.0
+        base = max(self.current_step, 0)
+        sub = max(0.0, min(1.0, self.sub_progress)) if self.current_step >= 0 else 0.0
+        return min(0.99, (base + sub) / self.total_steps)
 
     # ------ Internal ------
 
@@ -229,6 +255,8 @@ class TaskRunner:
 
                 self.current_step = i
                 self.current_label = label
+                self.sub_label = ""
+                self.sub_progress = 0.0
                 self._notify("task_progress")
                 func()
                 self.check_cancel()

@@ -26,7 +26,13 @@ from pathlib import Path
 
 import numpy as np
 from rich import print as rprint
-from core.utils import load_key, load_key_or, except_handler, check_cancel
+from core.utils import (
+    load_key,
+    load_key_or,
+    except_handler,
+    check_cancel,
+    report_progress,
+)
 from core.asr_backend.speech_edges import trim_speech_windows
 
 SAMPLE_RATE = 16000
@@ -206,7 +212,8 @@ def _has_complete_weights(local: Path) -> bool:
 def _model_source(repo_id):
     """Ensure a complete local copy in model_dir (e.g. _model_cache/Qwen3-ASR-1.7B), downloading into it if missing."""
     raw_dir = str(load_key("model_dir") or "./_model_cache").strip().strip("\"'")
-    local = Path(raw_dir) / repo_id.split("/")[-1]
+    short_name = repo_id.split("/")[-1]
+    local = Path(raw_dir) / short_name
     if _has_complete_weights(local):
         rprint(f"[green]Using local Qwen model: {local.resolve()}[/green]")
         return str(local.resolve())
@@ -215,7 +222,9 @@ def _model_source(repo_id):
     except ImportError:
         return repo_id
     local.mkdir(parents=True, exist_ok=True)
-    rprint(f"[cyan]⬇️ Downloading {repo_id} into {local.resolve()} ...[/cyan]")
+    msg = f"⬇️ Downloading {repo_id} into {local.resolve()} ..."
+    rprint(f"[cyan]{msg}[/cyan]")
+    report_progress(sub_label=f"下载模型 {short_name}…", message=msg)
     snapshot_download(repo_id=repo_id, local_dir=str(local.resolve()))
     return str(local.resolve())
 
@@ -410,10 +419,17 @@ def probe_window(run, raw, a, b, seconds=PROBE_SECONDS, count=PROBES_PER_WINDOW)
     return probes, rejected
 
 
-def plan_languages(run, raw, windows):
+def plan_languages(run, raw, windows, progress_cb=None):
     """auto: [(language or None, [(language, probe text)])] per window from probe votes."""
     per_window, rejected = [], 0
-    for a, b in windows:
+    total_w = max(1, len(windows))
+    for w_idx, (a, b) in enumerate(windows, 1):
+        if progress_cb is not None:
+            progress_cb(
+                0.05 + 0.10 * ((w_idx - 1) / total_w),
+                f"语言探测 {w_idx}/{total_w}",
+                f"🌐 语言探测 [{w_idx}/{total_w}] ({a / SAMPLE_RATE:.1f}s–{b / SAMPLE_RATE:.1f}s)...",
+            )
         probes, bad = probe_window(run, raw, a, b)
         per_window.append(probes)
         rejected += bad
@@ -445,9 +461,10 @@ def plan_languages(run, raw, windows):
             )
             or "none"
         )
-        rprint(
-            f"[cyan]🌐 {a / SAMPLE_RATE:.1f}-{b / SAMPLE_RATE:.1f}s language: {language or 'auto'} (probes: {votes})[/cyan]"
-        )
+        msg = f"🌐 {a / SAMPLE_RATE:.1f}-{b / SAMPLE_RATE:.1f}s language: {language or 'auto'} (probes: {votes})"
+        rprint(f"[cyan]{msg}[/cyan]")
+        if progress_cb is not None:
+            progress_cb(0.15, f"语言确定: {language or 'auto'}", msg)
         plan.append((language, probes))
     return plan
 
@@ -788,8 +805,10 @@ def _torch_attn_implementation(device: str) -> str | None:
 @contextmanager
 def asr_session(engine, repo_id):
     """Load Qwen3-ASR once and yield run(clip, qwen_language or None, max_tokens=None) -> (language, text)."""
+    from typing import Any
+
     source = _model_source(repo_id)
-    model = None
+    model: Any = None
     try:
         if engine == "mlx":
             from mlx_audio.stt.utils import load_model  # type: ignore[import-not-found]
@@ -798,7 +817,6 @@ def asr_session(engine, repo_id):
 
             def _run_mlx(clip, language, max_tokens=None):
                 check_cancel()
-                assert model is not None
                 out = model.generate(
                     clip,
                     language=language,
@@ -816,7 +834,9 @@ def asr_session(engine, repo_id):
             run = _run_mlx
         else:
             from qwen_asr import Qwen3ASRModel  # type: ignore[import-not-found]
+            from transformers.utils import logging as hf_logging  # type: ignore[import-not-found]
 
+            hf_logging.set_verbosity_error()
             device, dtype = _torch_device()
             attn = _torch_attn_implementation(device)
             load_kwargs = {
@@ -834,7 +854,6 @@ def asr_session(engine, repo_id):
 
             def _run_tf(clip, language, max_tokens=None):
                 check_cancel()
-                assert model is not None
                 # qwen-asr reads this attribute for every generate() call.
                 model.max_new_tokens = max_tokens or token_budget(
                     len(clip) / SAMPLE_RATE
@@ -859,8 +878,11 @@ def _transcribe(engine, repo_id, clips, language):
 
 def _align(engine, repo_id, jobs):
     """jobs: [(clip, text, qwen_language)] -> [[(token, start, end)]] relative to each clip."""
+    from typing import Any
+
     source = _model_source(repo_id)
-    aligner, results = None, []
+    aligner: Any = None
+    results = []
     try:
         if engine == "mlx":
             from mlx_audio.stt.utils import load_model  # type: ignore[import-not-found]
@@ -868,13 +890,14 @@ def _align(engine, repo_id, jobs):
             aligner = load_model(source)
 
             def _align_mlx(clip, text, lang):
-                assert aligner is not None
                 return aligner.generate(clip, text=text, language=lang)
 
             align = _align_mlx
         else:
             from qwen_asr import Qwen3ForcedAligner  # type: ignore[import-not-found]
+            from transformers.utils import logging as hf_logging  # type: ignore[import-not-found]
 
+            hf_logging.set_verbosity_error()
             device, dtype = _torch_device()
             attn = _torch_attn_implementation(device)
             load_kwargs = {"dtype": dtype, "device_map": device}
@@ -883,18 +906,26 @@ def _align(engine, repo_id, jobs):
             aligner = Qwen3ForcedAligner.from_pretrained(source, **load_kwargs)
 
             def _align_tf(clip, text, lang):
-                assert aligner is not None
                 return aligner.align(
                     audio=(clip, SAMPLE_RATE), text=text, language=lang
                 )[0]
 
             align = _align_tf
-        for clip, text, lang in jobs:
+        total_jobs = max(1, len(jobs))
+        for j_idx, (clip, text, lang) in enumerate(jobs, 1):
             check_cancel()
-            result = align(clip, text, lang)
-            results.append(
-                [(item.text, item.start_time, item.end_time) for item in result]
+            report_progress(
+                0.75 + 0.23 * ((j_idx - 1) / total_jobs),
+                f"时间戳对齐 {j_idx}/{total_jobs}",
+                f"🔗 词级时间戳对齐 [{j_idx}/{total_jobs}] ({len(clip) / SAMPLE_RATE:.1f}s)...",
             )
+            t_align = time.time()
+            result = align(clip, text, lang)
+            items = [(item.text, item.start_time, item.end_time) for item in result]
+            rprint(
+                f"[cyan]🔗 Aligned window [{j_idx}/{total_jobs}] ({len(items)} tokens in {time.time() - t_align:.1f}s)[/cyan]"
+            )
+            results.append(items)
     finally:
         align = None  # the closure holds a reference to the aligner
         aligner = None
@@ -937,20 +968,51 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     # 1. transcribe raw audio (auto: probe the language first, then force it per window)
     t0 = time.time()
     pieces = []
+    total_w = max(1, len(windows))
+    report_progress(
+        0.04,
+        f"加载 Qwen3-ASR {size}",
+        f"🚀 正在加载 Qwen3-ASR {size} ({engine})，共 {len(windows)} 个识别窗口...",
+    )
     with asr_session(engine, models[size]) as run:
         plan = (
             [(forced, None)] * len(windows)
             if forced
-            else plan_languages(run, raw, windows)
+            else plan_languages(run, raw, windows, progress_cb=report_progress)
         )
-        for (a, b), (language, probes) in zip(windows, plan):
+        for w_idx, ((a, b), (language, probes)) in enumerate(zip(windows, plan), 1):
+            span_label = (
+                f"{start + a / SAMPLE_RATE:.1f}s–{start + b / SAMPLE_RATE:.1f}s"
+            )
+            start_msg = f"🎙️ [{w_idx}/{total_w}] 正在识别窗口 {span_label} ({language or 'auto'})..."
+            rprint(f"[cyan]{start_msg}[/cyan]")
+            report_progress(
+                0.15 + 0.58 * ((w_idx - 1) / total_w),
+                f"语音识别 {w_idx}/{total_w} ({span_label})",
+                start_msg,
+            )
+            t_win = time.time()
             window = transcribe_window(
                 run, raw, a, b, language, probes, start, forced=bool(forced)
+            )
+            win_text = " ".join(text for *_, text in window).strip()
+            preview = (
+                (win_text[:48] + "…") if len(win_text) > 48 else (win_text or "<静音>")
+            )
+            done_msg = (
+                f"✅ [{w_idx}/{total_w}] 完成窗口 {span_label} "
+                f"({time.time() - t_win:.1f}s, {len(win_text)} 字符): {preview}"
+            )
+            rprint(f"[green]{done_msg}[/green]")
+            report_progress(
+                0.15 + 0.58 * (w_idx / total_w),
+                f"已完成窗口 {w_idx}/{total_w}",
+                done_msg,
             )
             if forced:
                 # Text only, no inference: a clearly wrong language fails on its first window.
                 mismatch = script_mismatch(
-                    " ".join(text for *_, text in window),
+                    win_text,
                     configured,
                     **WINDOW_SCRIPT_LIMITS,
                 )
@@ -994,6 +1056,9 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     jobs = [(vocal[a:b], text, lang) for a, b, text, lang in todo]
     aligned = _align(engine, models["aligner"], jobs) if jobs else []
     rprint(f"[cyan]⏱️ time align:[/cyan] {time.time() - t0:.2f}s")
+    report_progress(
+        0.99, "语音识别完成", f"✨ Qwen3-ASR 识别与对齐全部完成 ({len(todo)} 段)"
+    )
 
     segments = []
     for (a, b, text, _), items in zip(todo, aligned):

@@ -7,7 +7,13 @@ from core.concurrency import ContextThreadPoolExecutor
 from core.translate_lines import translate_lines
 from core._4_1_summarize import _get_term_index, search_things_to_note_in_prompt
 from core._6_gen_sub import align_timestamp
-from core.utils import check_cancel, check_file_exists, load_key, load_key_or
+from core.utils import (
+    check_cancel,
+    check_file_exists,
+    load_key,
+    load_key_or,
+    report_progress,
+)
 from core.workspace import get_active_workspace
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -234,6 +240,12 @@ def translate_all():
         )
 
         # 🔄 Use concurrent execution for translation
+        total_chunks = max(1, len(chunks))
+        report_progress(
+            0.28,
+            f"字幕翻译 0/{len(chunks)} 批",
+            f"🌐 开始并发翻译字幕（共 {len(chunks)} 批）...",
+        )
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -253,8 +265,15 @@ def translate_all():
                 try:
                     for future in concurrent.futures.as_completed(futures):
                         check_cancel()
-                        results.append(future.result())
+                        res_item = future.result()
+                        results.append(res_item)
                         progress.update(task, advance=1)
+                        done_cnt = len(results)
+                        report_progress(
+                            0.28 + 0.70 * (done_cnt / total_chunks),
+                            f"字幕翻译 {done_cnt}/{len(chunks)} 批",
+                            f"🌐 完成翻译批次 #{res_item[0] + 1:02d} ({done_cnt}/{len(chunks)})",
+                        )
                 except BaseException:
                     for f in futures:
                         f.cancel()

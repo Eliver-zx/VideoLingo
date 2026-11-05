@@ -1307,3 +1307,38 @@ def test_sharded_weights_and_quoted_model_dir_validation(monkeypatch, tmp_path):
     downloads.clear()
     assert qwen._model_source("Qwen/Qwen3-ASR-1.7B") == str(model_dir.resolve())
     assert downloads == []
+
+
+def test_task_runner_subprogress_updates_sse_and_qwen_reports_windows(pipeline):
+    from core.task_runner import TaskRunner
+
+    pipeline["asr"] = lambda a, b, language: (
+        language,
+        "Hello, world." if a < 1 else "Bye now.",
+    )
+    events: list[dict] = []
+    runner = TaskRunner()
+    runner.add_listener(events.append)
+
+    def step_one():
+        qwen.transcribe_audio("raw.wav", "raw.wav", 0, 200)
+
+    runner.start(
+        [
+            ("Word-level transcription and alignment", step_one),
+            ("Second step", lambda: None),
+        ],
+        task_id="t_prog",
+    )
+    assert runner._thread is not None
+    runner._thread.join(timeout=5.0)
+
+    progress_events = [
+        e for e in events if e.get("type") == "task_progress" and e.get("sub_step")
+    ]
+    assert len(progress_events) >= 3
+    assert any("语音识别" in (e.get("sub_step") or "") for e in progress_events)
+    assert any("完成窗口" in (e.get("message") or "") for e in progress_events)
+    fracs = [e["progress"] for e in progress_events]
+    assert all(0.0 < f < 0.5 for f in fracs)
+    assert fracs == sorted(fracs)

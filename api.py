@@ -283,6 +283,8 @@ def _workspace_summary(ws: TaskWorkspace) -> dict[str, Any]:
             **manifest.get("execution", {}),
             "state": runner.state,
             "current_step": runner.current_label or None,
+            "sub_step": runner.sub_label or None,
+            "sub_progress": round(runner.sub_progress, 4),
             "step_index": runner.current_step,
             "total_steps": runner.total_steps,
             "progress": runner.progress,

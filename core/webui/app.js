@@ -262,8 +262,16 @@
       } else if (state === 'running' || state === 'stopping') {
         cardState = 'running';
         stateLabel = state === 'stopping' ? '停止中' : '运行中';
-        stepSummary = exec.current_step || '正在处理…';
-        progress = Math.max(progress, 15);
+        const rawProgressPct = Math.round((exec.progress || 0) * 100);
+        progress = Math.max(rawProgressPct, 4);
+        const subStep = String(exec.sub_step || '').trim();
+        if (subStep) {
+          stepSummary = `${subStep} · ${progress}%`;
+        } else if (exec.current_step) {
+          stepSummary = `${exec.current_step} · ${progress}%`;
+        } else {
+          stepSummary = '正在处理…';
+        }
       } else if (state === 'stopped') {
         cardState = 'paused';
         stateLabel = '已停止';
@@ -1293,19 +1301,38 @@
       }
 
       const sd = card.raw?.stages_done || {};
+      const exec = card.raw?.execution || {};
       const isRunning = card.rawState === 'running' || card.rawState === 'stopping';
+      const curStepStr = String(exec.current_step || '').toLowerCase();
+      const subStepStr = String(exec.sub_step || '').trim();
       const pillClass = card.state === 'completed' ? 'completed' : (card.state === 'paused' ? 'paused' : (card.state === 'error' ? 'error' : (isRunning ? 'running' : 'paused')));
       if (detailBadge) {
         detailBadge.className = `status-pill ${pillClass}`;
-        detailBadge.innerHTML = `<span class="status-dot"></span><span>${escapeHtml(card.stateLabel || '就绪')}</span>`;
+        const badgeLabel = isRunning && subStepStr
+          ? `${card.stateLabel || '运行中'} · ${subStepStr}`
+          : (card.stateLabel || '就绪');
+        detailBadge.innerHTML = `<span class="status-dot"></span><span>${escapeHtml(badgeLabel)}</span>`;
       }
 
-      if (pill1) pill1.className = sd.asr ? 'pipe-node done' : (isRunning ? 'pipe-node active' : 'pipe-node');
-      if (b1) b1.textContent = sd.asr ? '已完成' : (isRunning ? '识别中' : '未开始');
+      const activeStage1 = isRunning && !sd.asr && (curStepStr.includes('transcription') || !curStepStr);
+      const activeStage2 = isRunning && sd.asr && !sd.split && curStepStr.includes('segmentation');
+      const activeStage3 = isRunning && !sd.terms && curStepStr.includes('summarization') && !subStepStr.includes('翻译');
+      const activeStage4 = isRunning && (
+        (curStepStr.includes('summarization') && (sd.terms || subStepStr.includes('翻译'))) ||
+        curStepStr.includes('cutting and aligning')
+      );
+      const activeStage5 = isRunning && (
+        curStepStr.includes('merging subtitles') ||
+        curStepStr.includes('audio') ||
+        curStepStr.includes('dub')
+      );
+
+      if (pill1) pill1.className = sd.asr ? 'pipe-node done' : (activeStage1 ? 'pipe-node active' : 'pipe-node');
+      if (b1) b1.textContent = sd.asr ? '已完成' : (activeStage1 ? (subStepStr || '识别中…') : '未开始');
       if (line1) line1.className = sd.asr ? 'pipe-line done' : 'pipe-line';
 
-      if (pill2) pill2.className = sd.split ? 'pipe-node done' : 'pipe-node';
-      if (b2) b2.textContent = `${uttCount}句`;
+      if (pill2) pill2.className = sd.split ? 'pipe-node done' : (activeStage2 ? 'pipe-node active' : 'pipe-node');
+      if (b2) b2.textContent = activeStage2 ? (subStepStr || '断句中…') : `${uttCount}句`;
       if (line2) line2.className = sd.split ? 'pipe-line done' : 'pipe-line';
 
       if (card.state === 'paused' && card.stateLabel === '待审术语') {
@@ -1315,20 +1342,32 @@
         if (pill4) pill4.className = 'pipe-node';
         if (b4) b4.textContent = '等待中';
       } else {
-        if (pill3) pill3.className = sd.terms ? 'pipe-node done' : 'pipe-node';
-        if (b3) b3.textContent = `${termCount}条`;
+        if (pill3) pill3.className = sd.terms ? 'pipe-node done' : (activeStage3 ? 'pipe-node active' : 'pipe-node');
+        if (b3) b3.textContent = activeStage3 ? (subStepStr || '提取中…') : `${termCount}条`;
         if (line3) line3.className = sd.terms ? 'pipe-line done' : 'pipe-line';
 
         const batchCount = uttCount > 0 ? Math.max(1, Math.ceil(uttCount / 15)) : 0;
         const transDone = Boolean(sd.translate || sd.subtitles);
-        if (pill4) pill4.className = transDone ? 'pipe-node done' : 'pipe-node';
-        if (b4) b4.textContent = transDone && batchCount > 0 ? `${batchCount}/${batchCount}批` : `${batchCount}批`;
+        if (pill4) pill4.className = transDone ? 'pipe-node done' : (activeStage4 ? 'pipe-node active' : 'pipe-node');
+        if (b4) {
+          if (activeStage4) {
+            b4.textContent = subStepStr || '翻译中…';
+          } else {
+            b4.textContent = transDone && batchCount > 0 ? `${batchCount}/${batchCount}批` : `${batchCount}批`;
+          }
+        }
         if (line4) line4.className = transDone ? 'pipe-line done' : 'pipe-line';
       }
 
       const mergeDone = Boolean(sd.sub_video || sd.dub_video);
-      if (pill5) pill5.className = mergeDone ? 'pipe-node done' : 'pipe-node';
-      if (b5) b5.textContent = sd.dub_video ? '已配音' : (sd.sub_video ? '已压制' : '待合成');
+      if (pill5) pill5.className = mergeDone ? 'pipe-node done' : (activeStage5 ? 'pipe-node active' : 'pipe-node');
+      if (b5) {
+        if (activeStage5) {
+          b5.textContent = subStepStr || '合成中…';
+        } else {
+          b5.textContent = sd.dub_video ? '已配音' : (sd.sub_video ? '已压制' : '待合成');
+        }
+      }
     }
 
     pill1?.addEventListener('click', () => {
@@ -2619,10 +2658,38 @@
             if (d.message || d.pause_message || d.error) {
               const msg = d.message || d.pause_message || d.error;
               const warn = Boolean(d.error) || /warn|error|fail|异常|失败/i.test(msg);
-              appendLog('llm', (d.step || d.state || 'RUN').toUpperCase().slice(0, 6), msg, warn);
+              const stepStr = String(d.step || d.state || 'RUN').toLowerCase();
+              const logTag = stepStr.includes('transcription') ? 'asr' : 'llm';
+              const logLabel = stepStr.includes('transcription')
+                ? 'ASR'
+                : (stepStr.includes('segmentation') ? 'NLP' : (stepStr.includes('summarization') ? 'TRANS' : (d.step || d.state || 'RUN').toUpperCase().slice(0, 6)));
+              appendLog(logTag, logLabel, msg, warn);
+            }
+            if (d.task_id) {
+              const tCard = REAL_TASKS.find(x => x.id === d.task_id);
+              if (tCard && tCard.raw) {
+                tCard.raw.execution = {
+                  ...(tCard.raw.execution || {}),
+                  state: d.state || tCard.rawState,
+                  current_step: d.step ?? tCard.raw.execution?.current_step,
+                  sub_step: d.sub_step ?? tCard.raw.execution?.sub_step,
+                  sub_progress: d.sub_progress ?? tCard.raw.execution?.sub_progress,
+                  progress: d.progress ?? tCard.raw.execution?.progress,
+                  pause_reason: d.pause_message ?? tCard.raw.execution?.pause_reason,
+                  error: d.error ?? tCard.raw.execution?.error,
+                };
+                const updated = mapBackendTaskToCard(tCard.raw);
+                Object.assign(tCard, updated);
+                renderTaskRail();
+                if (d.task_id === activeTaskId) {
+                  syncPipelineRibbon(tCard, STREAM_TABLE_ROWS.length, REAL_TASK_TERMS.length);
+                }
+              }
             }
             const isProgressTick = d.type === 'task_progress' || (d.state === 'running' && !d.pause_message && !d.error);
-            loadBackendTasks({ skipActiveDetail: isProgressTick });
+            if (!isProgressTick) {
+              loadBackendTasks({ skipActiveDetail: false });
+            }
           } catch (parseErr) {
             appendLog('warn', 'SSE', `解析事件流数据失败: ${parseErr.message}`, true);
           }

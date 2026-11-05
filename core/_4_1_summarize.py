@@ -19,6 +19,7 @@ from core.utils import (
     check_cancel,
     check_file_exists,
     load_key_or,
+    report_progress,
     rprint,
 )
 from core.workspace import (
@@ -1678,10 +1679,16 @@ def get_summary():
     rprint(
         f"📝 Summarizing and extracting terminology across {len(chunks)} chunk(s) ..."
     )
+    report_progress(
+        0.02,
+        f"术语提取 0/{len(chunks)}",
+        f"📝 开始提取术语与视频主题（共 {len(chunks)} 个分块）...",
+    )
 
     chunk_results: list[tuple[int, dict]] = []
     if len(chunks) == 1:
         chunk_results.append(_extract_chunk_summary(0, chunks[0], custom_terms_json))
+        report_progress(0.18, "术语提取 1/1", "✅ 完成术语提取 1/1")
     else:
         max_workers = max(1, int(load_key_or("max_workers", 4) or 4))
         with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -1695,6 +1702,12 @@ def get_summary():
                 for future in concurrent.futures.as_completed(futures):
                     check_cancel()
                     chunk_results.append(future.result())
+                    done_cnt = len(chunk_results)
+                    report_progress(
+                        0.02 + 0.16 * (done_cnt / len(chunks)),
+                        f"术语提取 {done_cnt}/{len(chunks)}",
+                        f"📝 术语提取分块完成 [{done_cnt}/{len(chunks)}]",
+                    )
             except BaseException:
                 for f in futures:
                     f.cancel()
@@ -1703,11 +1716,17 @@ def get_summary():
     summary = _merge_terminology_results(chunk_results, custom_terms_list)
     kb_data = _get_kb_index(custom_terms_list)
     full_text = " ".join(chunks)
+    report_progress(0.20, "术语归并消歧…")
     summary = _consolidate_terms_with_llm(
         summary, chunk_results, custom_terms_list, kb_data=kb_data, full_text=full_text
     )
 
     ws.save_terms(summary.get("theme", ""), summary.get("terms", []))
+    report_progress(
+        0.25,
+        f"已提取 {len(summary['terms'])} 条术语",
+        f"💾 术语提取完成（共 {len(summary['terms'])} 条）",
+    )
 
     rprint(f"💾 Summary saved to `{ws.db_path}` ({len(summary['terms'])} terms)")
 
