@@ -9,45 +9,27 @@ import subprocess
 
 import pytest
 
+from core.asr_backend import audio_preprocess
+from core.tts_backend import sf_fishtts
+from core.utils import config_utils
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def load(relative, names, namespace, keep_assign=False):
-    """Exec selected top-level functions (optionally plus module constants) without importing core."""
-    tree = ast.parse((ROOT / relative).read_text(encoding="utf-8"))
-    tree.body = [
-        node
-        for node in tree.body
-        if (isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names)
-        or (keep_assign and isinstance(node, ast.Assign))
-    ]
-    exec(compile(tree, relative, "exec"), namespace)
-    return namespace
-
-
-def extraction(directory, config, encoder=True, real_encoder_probe=False):
-    namespace = {
-        "os": os,
-        "subprocess": subprocess,
-        "rprint": lambda *args: None,
-        "_AUDIO_DIR": str(directory),
-        "_RAW_AUDIO_FILE": str(directory / "raw.mp3"),
-        "resolve_task_path": lambda p: p,
-        "load_key_or": lambda key, default: config.get(key, default),
-    }
-    names = {
-        "raw_audio_settings",
-        "_raw_audio_command",
-        "convert_video_to_audio",
-        "prepare_audio_for_asr",
-    }
-    if real_encoder_probe:
-        names.add("_ffmpeg_has_encoder")
-    else:
-        namespace["_ffmpeg_has_encoder"] = lambda _: encoder
-    return load(
-        "core/asr_backend/audio_preprocess.py", names, namespace, keep_assign=True
+def configure_extraction(
+    monkeypatch, directory, config, encoder=True, real_encoder_probe=False
+):
+    monkeypatch.setattr(audio_preprocess, "rprint", lambda *args: None)
+    monkeypatch.setattr(audio_preprocess, "_AUDIO_DIR", str(directory))
+    monkeypatch.setattr(audio_preprocess, "_RAW_AUDIO_FILE", str(directory / "raw.mp3"))
+    monkeypatch.setattr(audio_preprocess, "resolve_task_path", lambda p: p)
+    monkeypatch.setattr(
+        audio_preprocess,
+        "load_key_or",
+        lambda key, default: config.get(key, default),
     )
+    if not real_encoder_probe:
+        monkeypatch.setattr(audio_preprocess, "_ffmpeg_has_encoder", lambda _: encoder)
 
 
 # ---------------------------------------------------------------------------
@@ -71,13 +53,13 @@ def extraction(directory, config, encoder=True, real_encoder_probe=False):
 def test_raw_extraction_uses_v2_quality_by_default(
     tmp_path, monkeypatch, encoder, config, rate, bitrate
 ):
-    namespace = extraction(tmp_path, config, encoder)
+    configure_extraction(monkeypatch, tmp_path, config, encoder)
     commands = []
     monkeypatch.setattr(
         subprocess, "run", lambda command, **kwargs: commands.append(command)
     )
-    namespace["convert_video_to_audio"]("video.mp4")
-    namespace["prepare_audio_for_asr"]("upload.wav")
+    audio_preprocess.convert_video_to_audio("video.mp4")
+    audio_preprocess.prepare_audio_for_asr("upload.wav")
     assert len(commands) == 2
     for command in commands:
         assert command[command.index("-ar") + 1] == rate
@@ -91,24 +73,26 @@ def test_raw_extraction_uses_v2_quality_by_default(
             )
 
 
-def test_sample_rate_below_recognition_rate_is_rejected(tmp_path):
-    namespace = extraction(tmp_path, {"audio.raw_sample_rate": 8000})
+def test_sample_rate_below_recognition_rate_is_rejected(tmp_path, monkeypatch):
+    configure_extraction(monkeypatch, tmp_path, {"audio.raw_sample_rate": 8000})
     with pytest.raises(ValueError):
-        namespace["raw_audio_settings"]()
+        audio_preprocess.raw_audio_settings()
 
 
 def test_ffmpeg_has_encoder_raises_runtime_error_when_ffmpeg_missing(
     tmp_path, monkeypatch
 ):
-    namespace = extraction(tmp_path, {}, real_encoder_probe=True)
-    namespace["_ffmpeg_has_encoder"]._cache = {}
+    configure_extraction(monkeypatch, tmp_path, {}, real_encoder_probe=True)
+    monkeypatch.setattr(
+        audio_preprocess._ffmpeg_has_encoder, "_cache", {}, raising=False
+    )
 
     def raise_missing(*args, **kwargs):
         raise FileNotFoundError(3, "系统找不到指定的路径。")
 
     monkeypatch.setattr(subprocess, "run", raise_missing)
     with pytest.raises(RuntimeError, match="FFmpeg executable not found in PATH"):
-        namespace["_ffmpeg_has_encoder"]("libmp3lame")
+        audio_preprocess._ffmpeg_has_encoder("libmp3lame")
 
 
 def test_audio_preprocess_imports_resolve_task_path():
@@ -196,7 +180,7 @@ def band_level(pcm_path, low, high):
     )
 
 
-def test_extracted_audio_keeps_high_band(tmp_path):
+def test_extracted_audio_keeps_high_band(tmp_path, monkeypatch):
     """White noise keeps its 9-14 kHz energy under the default settings; the 3.0.0 16 kHz path lost it."""
     if not shutil.which("ffmpeg"):
         pytest.skip("Real extraction test requires FFmpeg")
@@ -219,8 +203,8 @@ def test_extracted_audio_keeps_high_band(tmp_path):
         check=True,
         capture_output=True,
     )
-    namespace = extraction(tmp_path, {}, real_encoder_probe=True)
-    namespace["convert_video_to_audio"](str(source))
+    configure_extraction(monkeypatch, tmp_path, {}, real_encoder_probe=True)
+    audio_preprocess.convert_video_to_audio(str(source))
     restored = tmp_path / "raw.mp3"
     legacy = tmp_path / "legacy.mp3"
     subprocess.run(
@@ -261,20 +245,11 @@ def test_extracted_audio_keeps_high_band(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def normalizer():
-    from pydub import AudioSegment
-
-    return load(
-        "core/asr_backend/audio_preprocess.py",
-        {"normalize_audio_volume"},
-        {"AudioSegment": AudioSegment, "rprint": lambda *args: None, "math": math},
-    )["normalize_audio_volume"]
-
-
-def test_normalize_limits_gain_to_peak_headroom(tmp_path):
+def test_normalize_limits_gain_to_peak_headroom(tmp_path, monkeypatch):
     from pydub import AudioSegment
     from pydub.generators import Sine
 
+    monkeypatch.setattr(audio_preprocess, "rprint", lambda *args: None)
     burst = Sine(440, sample_rate=16000).to_audio_segment(duration=60, volume=-1.0)
     sparse = burst + AudioSegment.silent(duration=10000, frame_rate=16000)
     source = tmp_path / "sparse.wav"
@@ -282,30 +257,38 @@ def test_normalize_limits_gain_to_peak_headroom(tmp_path):
     assert -20.0 - sparse.dBFS > -1.0 - sparse.max_dBFS, (
         "fixture must want more gain than the peak allows"
     )
-    output = normalizer()(str(source), str(tmp_path / "normalized.wav"))
+    output = audio_preprocess.normalize_audio_volume(
+        str(source), str(tmp_path / "normalized.wav")
+    )
     result = AudioSegment.from_wav(output)
     assert -1.3 <= result.max_dBFS <= -0.9
 
 
-def test_normalize_still_attenuates_loud_input(tmp_path):
+def test_normalize_still_attenuates_loud_input(tmp_path, monkeypatch):
     from pydub import AudioSegment
     from pydub.generators import Sine
 
+    monkeypatch.setattr(audio_preprocess, "rprint", lambda *args: None)
     loud = Sine(440, sample_rate=16000).to_audio_segment(duration=1000, volume=-1.0)
     source = tmp_path / "loud.wav"
     loud.export(source, format="wav")
     result = AudioSegment.from_wav(
-        normalizer()(str(source), str(tmp_path / "normalized.wav"))
+        audio_preprocess.normalize_audio_volume(
+            str(source), str(tmp_path / "normalized.wav")
+        )
     )
     assert abs(result.dBFS - (-20.0)) < 0.2
 
 
-def test_normalize_survives_silence(tmp_path):
+def test_normalize_survives_silence(tmp_path, monkeypatch):
     from pydub import AudioSegment
 
+    monkeypatch.setattr(audio_preprocess, "rprint", lambda *args: None)
     source = tmp_path / "silence.wav"
     AudioSegment.silent(duration=500, frame_rate=16000).export(source, format="wav")
-    output = normalizer()(str(source), str(tmp_path / "normalized.wav"))
+    output = audio_preprocess.normalize_audio_volume(
+        str(source), str(tmp_path / "normalized.wav")
+    )
     assert Path(output).stat().st_size > 0
 
 
@@ -314,21 +297,11 @@ def test_normalize_survives_silence(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_custom_voice_reference_is_merged_at_44k(tmp_path):
+def test_custom_voice_reference_is_merged_at_44k(tmp_path, monkeypatch):
     from pydub import AudioSegment
     from pydub.generators import Sine
 
-    namespace = load(
-        "core/tts_backend/sf_fishtts.py",
-        {"merge_audio"},
-        {
-            "AudioSegment": AudioSegment,
-            "os": os,
-            "rprint": lambda *args: None,
-            "except_handler": lambda *args, **kwargs: lambda func: func,
-        },
-        keep_assign=True,
-    )
+    monkeypatch.setattr(sf_fishtts, "rprint", lambda *args: None)
     clips = []
     for index in (1, 2):
         clip = tmp_path / f"{index}.wav"
@@ -337,7 +310,7 @@ def test_custom_voice_reference_is_merged_at_44k(tmp_path):
         )
         clips.append(str(clip))
     output = tmp_path / "combined_reference.wav"
-    assert namespace["merge_audio"](clips, str(output)) is True
+    assert sf_fishtts.merge_audio(clips, str(output)) is True
     merged = AudioSegment.from_wav(output)
     assert merged.frame_rate == 44100 and merged.channels == 1
     assert abs(len(merged) - (300 + 100) * 2) <= 5
@@ -348,20 +321,102 @@ def test_custom_voice_reference_is_merged_at_44k(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_optional_config_key_falls_back_without_error():
-    def load_key(key):
+def test_optional_config_key_falls_back_without_error(monkeypatch):
+    def fake_load_key(key):
         if key == "present":
             return "value"
         raise KeyError(key)
 
-    namespace = load(
-        "core/utils/config_utils.py", {"load_key_or"}, {"load_key": load_key}
-    )
-    assert namespace["load_key_or"]("present", "default") == "value"
-    assert namespace["load_key_or"]("missing.key", "default") == "default"
+    monkeypatch.setattr(config_utils, "load_key", fake_load_key)
+    assert config_utils.load_key_or("present", "default") == "value"
+    assert config_utils.load_key_or("missing.key", "default") == "default"
 
 
 def test_shipped_config_restores_v2_extraction_defaults():
     yaml = pytest.importorskip("yaml")
     config = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
     assert config["audio"] == {"raw_sample_rate": 44100, "raw_bitrate": "192k"}
+
+
+def test_codebase_has_no_dynamic_globals_escape_hatches_or_swallowed_subprocess_fnf():
+    """Enforce static AST guardrails across api.py, core/, and tests/."""
+    py_files = [ROOT / "api.py", *sorted((ROOT / "core").rglob("*.py"))]
+    globals_get_hits: list[str] = []
+    unhandled_subproc_hits: list[str] = []
+    hardcoded_output_open_hits: list[str] = []
+    partial_exec_test_hits: list[str] = []
+
+    for path in py_files:
+        rel = path.relative_to(ROOT)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(rel))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Call)
+                and isinstance(node.func.value.func, ast.Name)
+                and node.func.value.func.id == "globals"
+            ):
+                arg0 = ast.unparse(node.args[0]) if node.args else ""
+                globals_get_hits.append(f"{rel}:{node.lineno} -> globals().get({arg0})")
+
+            if isinstance(node, ast.Try):
+                has_subproc = any(
+                    isinstance(sub, ast.Call)
+                    and isinstance(sub.func, ast.Attribute)
+                    and isinstance(sub.func.value, ast.Name)
+                    and sub.func.value.id == "subprocess"
+                    and sub.func.attr in {"run", "Popen", "check_output", "check_call"}
+                    for stmt in node.body
+                    for sub in ast.walk(stmt)
+                )
+                if has_subproc:
+                    handler_types = [
+                        ast.unparse(h.type) if h.type else "<bare except>"
+                        for h in node.handlers
+                    ]
+                    has_broad = any(
+                        t in {"Exception", "BaseException", "<bare except>"}
+                        for t in handler_types
+                    )
+                    has_fnf = any("FileNotFoundError" in t for t in handler_types)
+                    if has_broad and not has_fnf:
+                        unhandled_subproc_hits.append(
+                            f"{rel}:{node.lineno} -> subprocess in broad except {handler_types}"
+                        )
+
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "open"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and node.args[0].value.startswith("output/")
+            ):
+                hardcoded_output_open_hits.append(
+                    f"{rel}:{node.lineno} -> open({node.args[0].value!r})"
+                )
+
+    for test_path in sorted((ROOT / "tests").rglob("*.py")):
+        rel = test_path.relative_to(ROOT)
+        tree = ast.parse(test_path.read_text(encoding="utf-8"), filename=str(rel))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "exec"
+            ):
+                partial_exec_test_hits.append(f"{rel}:{node.lineno} -> exec(...)")
+
+    assert not globals_get_hits, f"Forbidden globals().get() found: {globals_get_hits}"
+    assert not unhandled_subproc_hits, (
+        f"Subprocess inside broad except without FileNotFoundError guard: {unhandled_subproc_hits}"
+    )
+    assert not hardcoded_output_open_hits, (
+        f"Hardcoded open('output/...') without resolve_task_path: {hardcoded_output_open_hits}"
+    )
+    assert not partial_exec_test_hits, (
+        f"Forbidden partial-module exec(...) loader in tests/: {partial_exec_test_hits}"
+    )

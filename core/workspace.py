@@ -23,6 +23,9 @@ from typing import Any
 import uuid
 
 from core.utils.config_utils import load_key_or
+from core.utils.models import ensure_windows_ffmpeg_path
+
+ensure_windows_ffmpeg_path()
 
 OUTPUT_ROOT = Path("output")
 GLOSSARY_DIR = Path("glossary")
@@ -235,7 +238,9 @@ def probe_media_metadata(media_path: str | Path) -> dict[str, Any]:
             timeout=15,
         )
         data = json.loads(proc.stdout or "{}")
-    except Exception:
+    except FileNotFoundError:
+        return info
+    except (subprocess.SubprocessError, OSError, ValueError):
         return info
 
     fmt_dur = data.get("format", {}).get("duration")

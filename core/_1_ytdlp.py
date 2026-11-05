@@ -43,9 +43,8 @@ def needs_cookies(error):
 
 
 def download_video_ytdlp(url, save_path="output", resolution="1080"):
-    _resolve = globals().get("resolve_task_path")
-    if _resolve is not None and save_path == "output":
-        save_path = _resolve(save_path)
+    if save_path == "output":
+        save_path = resolve_task_path(save_path)
     os.makedirs(save_path, exist_ok=True)
     ydl_opts: dict[str, Any] = {
         "format": "bestvideo+bestaudio/best"
@@ -100,15 +99,9 @@ def download_video_ytdlp(url, save_path="output", resolution="1080"):
     media_file = find_video_files(save_path)
     write_input_manifest(media_file, "video", save_path)
 
-    _ws_cls = globals().get("TaskWorkspace")
-    _probe = globals().get("probe_media_metadata")
-    if _ws_cls is not None and (info or os.path.isfile(media_file)):
-        ws = _ws_cls(save_path)
-        meta = (
-            _probe(media_file)
-            if (_probe is not None and os.path.isfile(media_file))
-            else {}
-        )
+    if info or os.path.isfile(media_file):
+        ws = TaskWorkspace(save_path)
+        meta = probe_media_metadata(media_file) if os.path.isfile(media_file) else {}
         title = str(
             info.get("title")
             or os.path.splitext(os.path.basename(media_file))[0]

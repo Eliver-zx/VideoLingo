@@ -1,43 +1,40 @@
-import warnings
+import functools
+from pathlib import Path
 import time
-import torch  # noqa: E402  # type: ignore[import-not-found]
-import functools  # noqa: E402
-from pathlib import Path  # noqa: E402
+import warnings
+
+from rich import print as rprint
+
+from core.utils import except_handler, load_key, set_runtime_state as update_key
 
 warnings.filterwarnings("ignore")
 
-# =============================================================================
-# Compatibility shim — applied BEFORE importing whisperx
-# =============================================================================
-
-# torch.load: default weights_only=False for pyannote checkpoints
-# PyTorch >=2.6 changed torch.load default to weights_only=True.
-# pyannote checkpoints contain omegaconf objects that fail the safety check.
-# Monkey-patch torch.load to default to weights_only=False (matching <2.6
-# behavior).  This is safe here because all model files come from trusted
-# sources (HuggingFace / pyannote).
-_original_torch_load = torch.load
+_whisperx_initialized = False
 
 
-@functools.wraps(_original_torch_load)
-def _patched_torch_load(*args, **kwargs):
-    if kwargs.get("weights_only") is None:
-        kwargs["weights_only"] = False
-    return _original_torch_load(*args, **kwargs)
+def _ensure_whisperx():
+    global _whisperx_initialized
+    import torch  # type: ignore[import-not-found]
 
+    if not _whisperx_initialized:
+        _original_torch_load = torch.load
 
-torch.load = _patched_torch_load
+        @functools.wraps(_original_torch_load)
+        def _patched_torch_load(*args, **kwargs):
+            if kwargs.get("weights_only") is None:
+                kwargs["weights_only"] = False
+            return _original_torch_load(*args, **kwargs)
 
-# =============================================================================
-# Now safe to import whisperx and the rest of the application
-# =============================================================================
-import whisperx  # noqa: E402  # type: ignore[import-not-found]
-from whisperx.audio import (  # noqa: E402  # type: ignore[import-not-found]
-    load_audio as _whisperx_load_audio,
-    SAMPLE_RATE as _WHISPERX_SR,
-)
-from rich import print as rprint  # noqa: E402
-from core.utils import except_handler, load_key, set_runtime_state as update_key  # noqa: E402
+        torch.load = _patched_torch_load
+        _whisperx_initialized = True
+
+    import whisperx  # type: ignore[import-not-found]
+    from whisperx.audio import (  # type: ignore[import-not-found]
+        SAMPLE_RATE as _WHISPERX_SR,
+        load_audio as _whisperx_load_audio,
+    )
+
+    return torch, whisperx, _whisperx_load_audio, _WHISPERX_SR
 
 
 def _complete_model_directory(path):
@@ -97,6 +94,7 @@ def resolve_whisper_model(model_name, model_dir=None):
 
 @except_handler("WhisperX processing error:")
 def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
+    torch, whisperx, _whisperx_load_audio, _WHISPERX_SR = _ensure_whisperx()
     WHISPER_LANGUAGE = load_key("whisper.language")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     rprint(f"🚀 Starting WhisperX using device: {device} ...")

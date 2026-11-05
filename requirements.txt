@@ -21,7 +21,7 @@ ruamel.yaml>=0.19.1,<0.20
 autocorrect-py>=2.14,<3
 edge-tts>=7.2.8,<8
 demucs>=4.1.0,<5
-audio-separator>=0.28,<1
+audio-separator>=0.28,<1; sys_platform != 'darwin' or platform_machine != 'x86_64'
 
 # Default local ASR: Qwen3-ASR + Qwen3-ForcedAligner (core/asr_backend/qwen_asr_local.py).
 # Apple Silicon uses MLX (mlx-audio); every mlx-audio release with Qwen3-ASR needs

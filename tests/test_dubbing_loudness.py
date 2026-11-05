@@ -1,8 +1,6 @@
 """Real FFmpeg checks with synthetic audio; no TTS, network or service startup."""
 
-import ast
 import json
-import math
 from pathlib import Path
 import shutil
 import subprocess
@@ -11,23 +9,16 @@ import pytest
 from pydub import AudioSegment
 from pydub.generators import Sine
 
+from core import _1_ytdlp, _9_refer_audio as references, _12_dub_to_vid as merge
+from core.workspace import TaskWorkspace, workspace_context
+
 
 @pytest.fixture
-def normalize():
+def normalize(monkeypatch):
     if not shutil.which("ffmpeg"):
         pytest.skip("FFmpeg is required")
-    path = Path(__file__).resolve().parents[1] / "core/_12_dub_to_vid.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    tree.body = [
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "normalize_dub_audio"
-    ]
-    namespace = dict(
-        subprocess=subprocess, json=json, math=math, check_cancel=lambda: None
-    )
-    exec(compile(tree, str(path), "exec"), namespace)
-    return namespace["normalize_dub_audio"]
+    monkeypatch.setattr(merge, "check_cancel", lambda: None)
+    return merge.normalize_dub_audio
 
 
 def render(tmp_path, normalize, name, audio):
@@ -90,11 +81,8 @@ def test_ffmpeg_failure_is_reported(tmp_path, normalize):
 
 @pytest.mark.parametrize("has_background", [True, False])
 def test_final_video_merge_with_real_ffmpeg(tmp_path, monkeypatch, has_background):
-    from core import _1_ytdlp, _12_dub_to_vid as merge
-
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         pytest.skip("FFmpeg and FFprobe are required")
-    # Every generated file stays in the isolated workspace, including relative paths.
     monkeypatch.chdir(tmp_path)
     Path("output").mkdir()
     source = Path("output/source.mp4")
@@ -167,8 +155,6 @@ def test_final_video_merge_with_real_ffmpeg(tmp_path, monkeypatch, has_backgroun
 
 def test_reference_audio_uses_raw_track_without_demucs(tmp_path, monkeypatch):
     import soundfile as sf
-    from core import _9_refer_audio as references
-    from core.workspace import TaskWorkspace, workspace_context
 
     if not shutil.which("ffmpeg"):
         pytest.skip("FFmpeg is required")
