@@ -134,7 +134,21 @@ def _try_direct_utterance_timestamps(
                 u_clean = remove_punctuation(
                     str(u.get("src_raw") or u.get("src", "")).lower()
                 ).replace(" ", "")
-                if w_a_text and u_clean and not u_clean.startswith(w_a_text[:1]):
+                has_span_overlap = any(
+                    (
+                        wt := remove_punctuation(
+                            str(df_words["text"].iloc[k]).lower()
+                        ).replace(" ", "")
+                    )
+                    and wt in u_clean
+                    for k in range(w_a, w_b)
+                )
+                if (
+                    w_a_text
+                    and u_clean
+                    and not u_clean.startswith(w_a_text[:1])
+                    and not has_span_overlap
+                ):
                     return None
             stamps.append(
                 (
@@ -163,7 +177,21 @@ def _try_direct_utterance_timestamps(
                 c_clean = remove_punctuation(str(c.get("src", "")).lower()).replace(
                     " ", ""
                 )
-                if w_a_text and c_clean and not c_clean.startswith(w_a_text[:1]):
+                has_span_overlap = any(
+                    (
+                        wt := remove_punctuation(
+                            str(df_words["text"].iloc[k]).lower()
+                        ).replace(" ", "")
+                    )
+                    and wt in c_clean
+                    for k in range(w_a, w_b)
+                )
+                if (
+                    w_a_text
+                    and c_clean
+                    and not c_clean.startswith(w_a_text[:1])
+                    and not has_span_overlap
+                ):
                     return None
             stamps.append(
                 (
@@ -233,7 +261,10 @@ def get_sentence_timestamps(df_words, df_sentences):
             match_found = True
         else:
             # Word-boundary fuzzy match fallback
-            max_dist = max(2, int(sentence_len * 0.25))
+            max_dist = min(
+                max(1, sentence_len // 2),
+                max(4, int(sentence_len * 0.35)),
+            )
             win_low = max(0, current_pos - 8)
             win_high = min(len(full_words_str), current_pos + sentence_len + 16)
             cand_starts = [

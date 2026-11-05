@@ -31,10 +31,19 @@ def apply_fix_source_terms(text: str, terms: list[dict]) -> str:
             canonical
         ]
         for cand in sorted(set(candidates), key=len, reverse=True):
-            if re.match(r"^[\w\s\-]+$", cand, flags=re.ASCII):
-                pattern = re.compile(
-                    rf"(?<!\w){re.escape(cand)}(?!\w)", flags=re.IGNORECASE
-                )
+            if re.match(r"^[\w\s\.\-]+$", cand, flags=re.ASCII):
+                toks = re.findall(r"\w+", cand, flags=re.ASCII)
+                if len(toks) >= 2:
+                    sep = r"(?:[\s,\-–—]+|\s*\.\s*)+"
+                    trail_dot = r"\.?" if cand.endswith(".") else ""
+                    pattern = re.compile(
+                        rf"(?<!\w){sep.join(re.escape(t) for t in toks)}{trail_dot}(?!\w)",
+                        flags=re.IGNORECASE,
+                    )
+                else:
+                    pattern = re.compile(
+                        rf"(?<!\w){re.escape(cand)}(?!\w)", flags=re.IGNORECASE
+                    )
             else:
                 pattern = re.compile(re.escape(cand), flags=re.IGNORECASE)
             out = pattern.sub(canonical, out)
@@ -54,14 +63,22 @@ def split_chunks_by_chars(chunk_size=2400, max_i=15):
         return []
 
     terms = _get_term_index().get("terms", [])
-    if any(isinstance(t, dict) and t.get("fix_source") for t in terms):
-        new_sentences = [apply_fix_source_terms(s, terms) for s in sentences]
-        if new_sentences != sentences:
+    has_fix = any(isinstance(t, dict) and t.get("fix_source") for t in terms)
+    has_prev_punct = any(isinstance(u, dict) and u.get("src_punct") for u in utts)
+    if has_fix or has_prev_punct:
+        base_sentences = [
+            str(u.get("src_punct") or u.get("src") or "").strip()
+            for u in utts
+            if str(u.get("src") or "").strip()
+        ]
+        new_sentences = [apply_fix_source_terms(s, terms) for s in base_sentences]
+        if new_sentences != sentences or (has_fix and not has_prev_punct):
             orig_sentences = list(sentences)
             sentences = new_sentences
             if utts and len(utts) == len(sentences):
                 for idx, u in enumerate(utts):
                     u.setdefault("src_raw", orig_sentences[idx])
+                    u.setdefault("src_punct", base_sentences[idx])
                     u["src"] = sentences[idx]
                 ws.save_utterances(utts)
 

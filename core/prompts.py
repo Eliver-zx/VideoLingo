@@ -22,8 +22,8 @@ Restore sentence-ending punctuation (`.`, `?`, `!` or `。`, `？`, `！`) and i
    - **Mid-Sentence Spoken Hesitations**: When a speaker pauses or utters a vocal filler mid-sentence before continuing a list, predicate, or phrase, use commas; NEVER start a new sentence with a dangling phrase after a hesitation filler.
 3. **Break True Independent Sentences**:
    - When one complete independent thought finishes and a new independent main clause begins, end the first with `.`, `?`, `!` (or `。`, `？`, `！`).
-4. **Acoustic Pause Markers (`‖`)**:
-   - The symbol `‖` in the input indicates a spoken acoustic pause (>= 0.4s). Use `‖` as a cue: place a period ONLY if the preceding words already form a complete independent sentence, or a comma if the speaker paused mid-sentence. **Do not include `‖` in the output**.
+4. **Acoustic Pause Markers (`‖` and `‖‖`)**:
+   - `‖` indicates a short spoken pause (>= 0.4s) and `‖‖` indicates a long spoken pause (>= 1.0s). Place a period ONLY if the preceding words already form a complete independent sentence, or a comma if the speaker paused mid-sentence. **Do not include `‖` or `‖‖` in the output**.
 
 ## INPUT
 <transcript>

@@ -1222,3 +1222,312 @@ def test_review_edge_cases_word_gaps_partial_batch_and_standalone_punct(
         s5.split_for_sub_main()
     assert captured_gaps and captured_gaps[0] is not None
     assert len(captured_gaps[0][0]) == 15
+
+
+def test_end_to_end_alias_replacement_across_split_translate_and_sub_cues(
+    monkeypatch, tmp_path
+):
+    """Verify multi-word alias protection in Step 3, punctuation-tolerant & reversible
+    fix_source replacement in Step 4.2, and token-aligned cue partitioning & timestamps in Step 5 & 6."""
+    import core._3_1_split_nlp as s31
+    import core._4_2_translate as s42
+    import core._5_split_sub as s5
+    import core._6_gen_sub as s6
+
+    ws = TaskWorkspace(tmp_path / "alias_ws")
+    ws.ensure_dirs()
+
+    # 1. Step 3 protects multi-word aliases from mid-alias splits and projects LLM alias rewrites onto the end word
+    raw_words = [
+        {"idx": 0, "text": "Gnats", "start": 0.0, "end": 0.4},
+        {"idx": 1, "text": "runs", "start": 0.5, "end": 0.8},
+        {"idx": 2, "text": "pie", "start": 0.9, "end": 1.2},
+        {"idx": 3, "text": "torch", "start": 1.2, "end": 1.6},
+        {"idx": 4, "text": "for", "start": 1.7, "end": 1.9},
+        {"idx": 5, "text": "training", "start": 1.9, "end": 2.4},
+        {"idx": 6, "text": "and", "start": 2.9, "end": 3.1},
+        {"idx": 7, "text": "we", "start": 3.1, "end": 3.3},
+        {"idx": 8, "text": "deploy", "start": 3.3, "end": 3.7},
+        {"idx": 9, "text": "cooper", "start": 3.7, "end": 4.1},
+        {"idx": 10, "text": "netties", "start": 4.1, "end": 4.6},
+    ]
+    ws.save_words(raw_words)
+    terms = [
+        {
+            "src": "NATS",
+            "tgt": "NATS",
+            "aliases": ["Gnats"],
+            "note": "",
+            "fix_source": True,
+        },
+        {
+            "src": "PyTorch",
+            "tgt": "PyTorch",
+            "aliases": ["pie torch"],
+            "note": "",
+            "fix_source": True,
+        },
+        {
+            "src": "Kubernetes",
+            "tgt": "Kubernetes",
+            "aliases": ["cooper netties"],
+            "note": "",
+            "fix_source": True,
+        },
+    ]
+    ws.save_terms("Infra", terms)
+
+    # Even if LLM puts a spurious period inside 'pie. torch' and rewrites 'cooper netties' -> 'Kubernetes.',
+    # Step 3 keeps the multi-word alias intact and builds exact word_span [0, 11]
+    monkeypatch.setattr(s31, "get_source_language", lambda: "en")
+    monkeypatch.setattr(s31, "load_key_or", lambda k, d=None: 1)
+    monkeypatch.setattr(
+        s31,
+        "ask_gpt",
+        lambda *a, **kw: {
+            "restored": "Gnats runs pie. torch for training, and we deploy Kubernetes."
+        },
+    )
+
+    with workspace_context(ws):
+        s31.split_by_spacy()
+
+        utts = ws.load_utterances()
+        assert len(utts) == 1
+        assert utts[0]["word_span"] == [0, 11]
+        assert (
+            utts[0]["src"]
+            == "Gnats runs pie torch for training, and we deploy cooper netties."
+        )
+
+        # 2. Step 4.2 replaces punctuation-separated aliases ("pie, torch") and supports toggling fix_source off
+        assert (
+            s42.apply_fix_source_terms("We use pie, torch and cooper-netties.", terms)
+            == "We use PyTorch and Kubernetes."
+        )
+        monkeypatch.setattr(s42, "_get_term_index", lambda: {"terms": terms})
+        chunks = s42.split_chunks_by_chars()
+        assert chunks == ["NATS runs PyTorch for training, and we deploy Kubernetes."]
+        assert (
+            ws.load_utterances()[0]["src_raw"]
+            == "Gnats runs pie torch for training and we deploy cooper netties"
+        )
+
+        # Toggling fix_source=False restores the punctuated pre-replacement sentence from src_punct
+        terms_off = [{**t, "fix_source": False} for t in terms]
+        monkeypatch.setattr(s42, "_get_term_index", lambda: {"terms": terms_off})
+        chunks_off = s42.split_chunks_by_chars()
+        assert chunks_off == [
+            "Gnats runs pie torch for training, and we deploy cooper netties."
+        ]
+
+        # Re-enable fix_source=True for Step 5 & Step 6
+        monkeypatch.setattr(s42, "_get_term_index", lambda: {"terms": terms})
+        s42.split_chunks_by_chars()
+
+        # 3. Step 5 _partition_word_span_for_cues partitions [0, 11) at exact word index 6 ("training,")
+        # despite 2-to-1 alias replacements ("pie torch" -> "PyTorch", "cooper netties" -> "Kubernetes")
+        words_loaded = ws.load_words()
+        cues = s5._partition_word_span_for_cues(
+            0,
+            11,
+            [
+                "NATS runs PyTorch for training,",
+                "and we deploy Kubernetes.",
+            ],
+            ["NATS使用PyTorch训练，", "并且我们部署Kubernetes。"],
+            words_loaded,
+        )
+        assert [c["word_span"] for c in cues] == [[0, 6], [6, 11]]
+        assert cues[0]["start"] == 0.0 and cues[0]["end"] == 2.4
+        assert cues[1]["start"] == 2.9 and cues[1]["end"] == 4.6
+
+        utts_with_cues = ws.load_utterances()
+        utts_with_cues[0]["sub_cues"] = cues
+        ws.save_utterances(utts_with_cues)
+
+        # 4. Step 6 get_sentence_timestamps resolves sub_cues timestamps even on partial df_words & changed initial char
+        df_words_full = pd.DataFrame(words_loaded)
+        stamps = s6.get_sentence_timestamps(
+            df_words_full,
+            pd.DataFrame(
+                {
+                    "Source": [
+                        "NATS runs PyTorch for training,",
+                        "and we deploy Kubernetes.",
+                    ]
+                }
+            ),
+        )
+        assert stamps == [(0.0, 2.4), (2.9, 4.6)]
+
+
+def test_review_regressions_code_switched_thai_decimals_and_src_punct_preservation(
+    monkeypatch, tmp_path
+):
+    """Verify the 7 independent review fixes:
+    1. Code-switched Chinese+English without spaces around full-width punctuation ('有个meeting。call me')
+       and Thai unspaced script with combining tone marks align (>= 0.80) and split properly.
+    2. Sentence-ending decimals/acronyms ('It costs 3.5. Next sentence.', 'in the U.S. They live...') split properly.
+    3. 55-word complex sentences are not prematurely split at 45 words, and 'That is...' independent sentences
+       are not merged by _stitch_incomplete_clause_spans, while 'So while...' fronted clauses merge.
+    4. _partition_word_span_for_cues advances char_cursor after an alias-aligned cue when >=3 cues repeat phrases.
+    5. _merge_standalone_punct_tokens guards against 0.0 timestamps overwriting real word timestamps.
+    6. PUT /api/tasks/{task_id}/utterances preserves src_punct when only tgt is edited.
+    7. get_sentence_timestamps caps fuzzy distance on <=4-char short sentences."""
+    from fastapi.testclient import TestClient
+    import api
+    import core._3_1_split_nlp as s31
+    import core._5_split_sub as s5
+
+    monkeypatch.setattr(s31, "load_key_or", lambda k, d=None: 1)
+
+    # 1a. Code-switched CJK + English with full-width period between two Latin words
+    monkeypatch.setattr(
+        s31,
+        "ask_gpt",
+        lambda *a, **kw: {"restored": "有个meeting。call me Lisa就好。"},
+    )
+    zh_en_sents = s31.restore_and_split_words(
+        ["有", "个", "meeting", "call", "me", "Lisa", "就", "好"], language="zh"
+    )
+    assert zh_en_sents == ["有个meeting。", "call me Lisa就好。"]
+
+    # 1b. Thai unspaced script with combining tone marks passes _verify_word_alignment and splits
+    thai_words = ["สวัสดี", "ครับ", "วันนี้", "อากาศ", "ดี"]
+    thai_restored = "สวัสดีครับ. วันนี้อากาศดี."
+    assert s31._verify_word_alignment(thai_words, thai_restored) >= 0.95
+    monkeypatch.setattr(s31, "ask_gpt", lambda *a, **kw: {"restored": thai_restored})
+    assert s31.restore_and_split_words(thai_words, language="th") == [
+        "สวัสดีครับ.",
+        "วันนี้อากาศดี.",
+    ]
+
+    # 2. Sentence-ending decimals and uppercase-followed acronyms split cleanly
+    monkeypatch.setattr(
+        s31,
+        "ask_gpt",
+        lambda *a, **kw: {
+            "restored": "It costs 3.5. We live in the U.S. They live in Canada."
+        },
+    )
+    dec_sents = s31.restore_and_split_words(
+        [
+            "It",
+            "costs",
+            "3.5",
+            "We",
+            "live",
+            "in",
+            "the",
+            "U.S.",
+            "They",
+            "live",
+            "in",
+            "Canada",
+        ],
+        language="en",
+    )
+    assert dec_sents == [
+        "It costs 3.5.",
+        "We live in the U.S.",
+        "They live in Canada.",
+    ]
+
+    # 3. 'That is a great point.' stays independent; 'So while this gun is good.' merges with main clause
+    words_that = ["That", "is", "a", "great", "point", "We", "should", "move", "on"]
+    p_that = {4: ".", 8: "."}
+    assert s31._stitch_incomplete_clause_spans(
+        [(0, 4), (5, 8)], words_that, p_that, [0.1] * 9
+    ) == [(0, 4), (5, 8)]
+
+    words_so_while = [
+        "So",
+        "while",
+        "this",
+        "gun",
+        "is",
+        "good",
+        "It",
+        "lacks",
+        "range",
+    ]
+    p_sw = {5: ".", 8: "."}
+    assert s31._stitch_incomplete_clause_spans(
+        [(0, 5), (6, 8)], words_so_while, p_sw, [0.1] * 9
+    ) == [(0, 8)]
+
+    # 55-word complex sentence stays intact (< LONG_SENTENCE_MAX_WORDS=120)
+    w_55 = [f"word{i}" for i in range(55)]
+    assert s31._split_long_span_at_clauses(
+        0, 54, w_55, {25: ",", 54: "."}, None, [0.5] * 55
+    ) == [(0, 54)]
+
+    # 4. _partition_word_span_for_cues advances char_cursor across 3 cues when cue 0 has an alias replacement
+    words_3cues = [
+        {"idx": i, "text": w, "start": float(i), "end": float(i) + 0.4}
+        for i, w in enumerate(
+            ["we", "use", "pie", "torch", "now", "we", "use", "it", "daily"]
+        )
+    ]
+    cues_3 = s5._partition_word_span_for_cues(
+        0,
+        9,
+        ["we use PyTorch now", "we use", "it daily"],
+        ["我们现在用PyTorch", "我们用", "每天用"],
+        words_3cues,
+    )
+    assert [c["word_span"] for c in cues_3] == [[0, 5], [5, 7], [7, 9]]
+
+    # 5. _merge_standalone_punct_tokens does not overwrite real word end with 0.0 from unaligned punct
+    _, merged_d = s31._merge_standalone_punct_tokens(
+        ["hello", "."],
+        [
+            {"text": "hello", "start": 1.0, "end": 1.8},
+            {"text": ".", "start": 0.0, "end": 0.0},
+        ],
+    )
+    assert merged_d is not None and merged_d[0]["end"] == 1.8
+
+    # 6. PUT /api/tasks/{task_id}/utterances preserves src_punct when only tgt is edited
+    out_root = tmp_path / "output"
+    out_root.mkdir()
+    monkeypatch.setattr("core.workspace.OUTPUT_ROOT", out_root)
+    monkeypatch.setattr(api, "OUTPUT", out_root)
+    ws = TaskWorkspace(out_root / "t_punct")
+    ws.ensure_dirs()
+    ws.save_utterances(
+        [
+            {
+                "id": 0,
+                "word_span": [0, 3],
+                "start": 0.0,
+                "end": 1.5,
+                "src_raw": "Gnats runs fast",
+                "src_punct": "Gnats runs fast.",
+                "src": "NATS runs fast.",
+                "tgt": "NATS运行很快。",
+            }
+        ]
+    )
+    client = TestClient(api.app)
+    res = client.put(
+        "/api/tasks/t_punct/utterances",
+        json={
+            "utterances": [
+                {
+                    "id": 0,
+                    "word_span": [0, 3],
+                    "start": 0.0,
+                    "end": 1.5,
+                    "src_raw": "Gnats runs fast",
+                    "src": "NATS runs fast.",
+                    "tgt": "NATS运行非常快！",
+                }
+            ]
+        },
+    )
+    assert res.status_code == 200
+    saved_u = ws.load_utterances()[0]
+    assert saved_u["tgt"] == "NATS运行非常快！"
+    assert saved_u["src_punct"] == "Gnats runs fast."

@@ -126,8 +126,8 @@ runner.add_listener(_on_runner_event)
 
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    stage: Literal["transcribe", "subtitles", "dubbing", "all"] = "all"
-    dubbing: bool = False
+    stage: Literal["transcribe", "subtitles", "dubbing", "all"] | None = None
+    dubbing: bool | None = None
     target_language: str | None = Field(default=None, min_length=1)
     source_language: str | None = Field(default=None, min_length=1)
     glossary_domain: str | None = None
@@ -143,7 +143,7 @@ class CreateTaskRequest(BaseModel):
     glossary_domain: str | None = None
     stage: Literal["transcribe", "subtitles", "dubbing", "all"] = "subtitles"
     dubbing: bool = False
-    autorun: bool = True
+    autorun: bool = False
 
 
 class InvalidateStageRequest(BaseModel):
@@ -439,6 +439,9 @@ def create_task(request: CreateTaskRequest):
         if not parsed.netloc:
             raise HTTPException(422, "Invalid URL")
         ws = create_task_workspace(request.title or "youtube_video", base_dir=OUTPUT)
+        needs_dub = request.stage == "dubbing" or (
+            request.stage == "all" and request.dubbing
+        )
         manifest = ws.load_manifest()
         manifest["title"] = request.title or source_str
         manifest["origin"] = {
@@ -449,6 +452,12 @@ def create_task(request: CreateTaskRequest):
             "mount_mode": "yt-dlp",
         }
         manifest["config_override"] = overrides
+        manifest.setdefault("execution", {}).update(
+            {
+                "desired_stage": request.stage,
+                "dubbing_enabled": needs_dub,
+            }
+        )
         ws.save_manifest(manifest)
 
         def _dl():
@@ -462,9 +471,6 @@ def create_task(request: CreateTaskRequest):
 
         dl_steps = [("Download video", _dl)]
         if request.autorun:
-            needs_dub = request.stage == "dubbing" or (
-                request.stage == "all" and request.dubbing
-            )
             dl_steps.extend(get_steps(request.stage, needs_dub))
         runner.enqueue(
             _wrap_workspace_steps(ws, dl_steps, overrides), task_id=ws.task_id
@@ -487,10 +493,16 @@ def create_task(request: CreateTaskRequest):
         title=request.title or src_path.stem,
         config_override=overrides,
     )
+    needs_dub = request.stage == "dubbing" or (
+        request.stage == "all" and request.dubbing
+    )
+    ws.update_manifest(
+        execution={
+            "desired_stage": request.stage,
+            "dubbing_enabled": needs_dub,
+        }
+    )
     if request.autorun:
-        needs_dub = request.stage == "dubbing" or (
-            request.stage == "all" and request.dubbing
-        )
         steps = _wrap_workspace_steps(
             ws, get_steps(request.stage, needs_dub), overrides
         )
@@ -507,7 +519,7 @@ def upload_task(
     target_language: str = Form("简体中文"),
     glossary_domain: str | None = Form(None),
     stage: Literal["transcribe", "subtitles", "dubbing", "all"] = Form("subtitles"),
-    autorun: bool = Form(True),
+    autorun: bool = Form(False),
 ):
     raw_name = file.filename or "uploaded_video.mp4"
     ext = Path(raw_name).suffix.lower() or ".mp4"
@@ -755,13 +767,19 @@ def get_task_utterances(task_id: str):
 @app.put("/api/tasks/{task_id}/utterances")
 def update_task_utterances(task_id: str, request: UtterancesUpdateRequest):
     ws = _resolve_workspace(task_id)
+    existing_utts = ws.load_utterances()
     normalized_utts = []
     for idx, u in enumerate(request.utterances):
         item = dict(u)
+        orig_u = existing_utts[idx] if idx < len(existing_utts) else {}
+        if "src_punct" not in item and orig_u.get("src_punct"):
+            item["src_punct"] = orig_u["src_punct"]
         src = str(item.get("src") or "").strip()
         tgt = str(item.get("tgt") or "").strip()
         tts_text = str(item.get("tts_text") or tgt).strip()
         item["src"] = src
+        if src != str(orig_u.get("src") or "").strip() or not item.get("src_punct"):
+            item["src_punct"] = src
         item["tgt"] = tgt
         item["tts_text"] = tts_text
         cues = item.get("sub_cues")

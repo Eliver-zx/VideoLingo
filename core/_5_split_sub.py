@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import inspect
 import math
 import re
@@ -774,7 +775,65 @@ def split_source_lines(lines: List[str]) -> List[str]:
 
 
 def _clean_alnum(text: str) -> str:
-    return re.sub(r"[^\w]", "", str(text).lower())
+    from core._3_1_split_nlp import _clean_word
+
+    return _clean_word(text)
+
+
+def _align_part_end_words(
+    w_start: int,
+    w_end: int,
+    src_parts: list[str],
+    words: list[dict[str, Any]],
+) -> dict[int, int]:
+    """Map each cue index `idx` to its inclusive ending absolute word index via token SequenceMatcher."""
+    from core._3_1_split_nlp import _split_atomic_tokens
+
+    span_toks: list[str] = []
+    span_abs_w: list[int] = []
+    for abs_w in range(w_start, w_end):
+        raw_w = str(words[abs_w].get("text", words[abs_w].get("word", "")))
+        for m in _split_atomic_tokens(raw_w):
+            cw = _clean_alnum(m)
+            if cw:
+                span_toks.append(cw)
+                span_abs_w.append(abs_w)
+
+    part_toks: list[str] = []
+    part_end_j: dict[int, int] = {}
+    for idx, s_part in enumerate(src_parts):
+        for m in _split_atomic_tokens(str(s_part)):
+            cw = _clean_alnum(m)
+            if cw:
+                part_toks.append(cw)
+        if part_toks:
+            part_end_j[idx] = len(part_toks) - 1
+
+    if not span_toks or not part_toks:
+        return {}
+
+    matcher = difflib.SequenceMatcher(None, span_toks, part_toks, autojunk=False)
+    j_to_i: dict[int, int] = {}
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for off in range(j2 - j1):
+                j_to_i[j1 + off] = i1 + off
+        elif tag == "replace" and i2 > i1 and j2 > j1:
+            s_len = i2 - i1
+            p_len = j2 - j1
+            for off in range(p_len - 1):
+                j_to_i[j1 + off] = i1 + min(
+                    s_len - 1, max(0, int((off + 1) * s_len / p_len) - 1)
+                )
+            j_to_i[j2 - 1] = i2 - 1
+
+    cue_end_abs_w: dict[int, int] = {}
+    for idx, end_j in part_end_j.items():
+        for probe_j in range(end_j, -1, -1):
+            if probe_j in j_to_i:
+                cue_end_abs_w[idx] = span_abs_w[j_to_i[probe_j]]
+                break
+    return cue_end_abs_w
 
 
 def _partition_word_span_for_cues(
@@ -803,11 +862,15 @@ def _partition_word_span_for_cues(
 
     span_clean = ""
     char_to_abs_word: list[int] = []
+    word_char_start: dict[int, int] = {}
     for abs_w in range(w_start, w_end):
+        word_char_start[abs_w] = len(span_clean)
         cw = _clean_alnum(words[abs_w].get("text", words[abs_w].get("word", "")))
         span_clean += cw
         char_to_abs_word.extend([abs_w] * len(cw))
+    word_char_start[w_end] = len(span_clean)
 
+    aligned_ends: dict[int, int] | None = None
     cues: list[dict[str, Any]] = []
     curr_w = w_start
     char_cursor = 0
@@ -829,12 +892,23 @@ def _partition_word_span_for_cues(
                 w_b = max(w_a + 1, char_to_abs_word[pos + len(part_clean) - 1] + 1)
                 char_cursor = pos + len(part_clean)
             else:
-                rem_words = max(1, w_end - curr_w)
-                rem_cues = num_cues - idx
-                step = max(1, round(rem_words / rem_cues))
-                w_a = curr_w
-                w_b = min(w_end - (rem_cues - 1), w_a + step)
-                w_b = max(w_a + 1, w_b)
+                if aligned_ends is None:
+                    aligned_ends = _align_part_end_words(
+                        w_start, w_end, src_parts, words
+                    )
+                if idx in aligned_ends and aligned_ends[idx] >= curr_w:
+                    w_a = curr_w
+                    max_allowed = max(w_a + 1, w_end - (num_cues - 1 - idx))
+                    w_b = min(max_allowed, aligned_ends[idx] + 1)
+                    w_b = max(w_a + 1, w_b)
+                else:
+                    rem_words = max(1, w_end - curr_w)
+                    rem_cues = num_cues - idx
+                    step = max(1, round(rem_words / rem_cues))
+                    w_a = curr_w
+                    w_b = min(w_end - (rem_cues - 1), w_a + step)
+                    w_b = max(w_a + 1, w_b)
+                char_cursor = word_char_start.get(w_b, len(span_clean))
             curr_w = min(w_b, w_end - 1)
 
         cues.append(
@@ -952,7 +1026,7 @@ def split_for_sub_main():
                 min(int(span[1]) if len(span) >= 2 else n_total_w, n_total_w),
             )
             if w_b - w_a > 1:
-                orig_word_gaps[u_idx] = [
+                raw_gaps = [
                     max(
                         0.0,
                         float(words[k + 1].get("start", 0.0))
@@ -960,6 +1034,24 @@ def split_for_sub_main():
                     )
                     for k in range(w_a, w_b - 1)
                 ]
+                src_ws = orig_src[u_idx].split()
+                if (
+                    " " in orig_src[u_idx]
+                    and len(src_ws) >= 2
+                    and len(src_ws) != (w_b - w_a)
+                ):
+                    end_map = _align_part_end_words(w_a, w_b, src_ws, words)
+                    orig_word_gaps[u_idx] = [
+                        raw_gaps[
+                            min(
+                                len(raw_gaps) - 1,
+                                max(0, end_map.get(sw_i, w_a + sw_i) - w_a),
+                            )
+                        ]
+                        for sw_i in range(len(src_ws) - 1)
+                    ]
+                else:
+                    orig_word_gaps[u_idx] = raw_gaps
             else:
                 orig_word_gaps[u_idx] = None
 
