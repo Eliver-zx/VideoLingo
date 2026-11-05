@@ -13,13 +13,13 @@ import queue
 import shutil
 import subprocess
 import sys
-from threading import Lock
+from threading import Event, Lock
 import time
 from typing import Any, Literal
 from urllib.parse import quote, urlparse
 import zipfile
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -89,6 +89,26 @@ WEBUI_STATIC_ASSETS = {
 
 _sse_subscribers: list[queue.Queue[dict[str, Any]]] = []
 _sse_lock = Lock()
+_shutdown_event = Event()
+
+
+def _trigger_shutdown() -> None:
+    """Signal all active SSE streams and background runner threads to stop immediately."""
+    _shutdown_event.set()
+    runner.stop()
+    with _sse_lock:
+        for q in list(_sse_subscribers):
+            try:
+                q.put_nowait({"type": "shutdown"})
+            except queue.Full:
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    q.put_nowait({"type": "shutdown"})
+                except queue.Full:
+                    pass
 
 
 def _on_runner_event(payload: dict[str, Any]) -> None:
@@ -316,7 +336,7 @@ def webui_index():
 
 
 @app.get("/api/events")
-async def sse_events():
+async def sse_events(request: Request):
     q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=128)
     with _sse_lock:
         _sse_subscribers.append(q)
@@ -330,13 +350,23 @@ async def sse_events():
                 "progress": runner.progress,
             }
             yield f"data: {json.dumps(init_payload, ensure_ascii=False)}\n\n"
-            while True:
+            while not _shutdown_event.is_set():
+                if await request.is_disconnected():
+                    break
                 try:
                     event = q.get_nowait()
+                    if event.get("type") == "shutdown" or _shutdown_event.is_set():
+                        break
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 except queue.Empty:
-                    await asyncio.sleep(0.4)
-                    yield 'data: {"type": "heartbeat"}\n\n'
+                    for _ in range(4):
+                        if _shutdown_event.is_set() or not q.empty():
+                            break
+                        await asyncio.sleep(0.1)
+                    if _shutdown_event.is_set() or await request.is_disconnected():
+                        break
+                    if q.empty():
+                        yield 'data: {"type": "heartbeat"}\n\n'
         finally:
             with _sse_lock:
                 if q in _sse_subscribers:
@@ -1465,8 +1495,27 @@ def webui_static_asset(asset_name: str):
     )
 
 
-if __name__ == "__main__":
+def _create_uvicorn_server(host: str = "127.0.0.1", port: int = 8501):
     import uvicorn
 
+    class _VideoLingoServer(uvicorn.Server):
+        def handle_exit(self, sig: int, frame: Any) -> None:
+            _trigger_shutdown()
+            super().handle_exit(sig, frame)
+
+        async def shutdown(self, sockets: list[Any] | None = None) -> None:
+            _trigger_shutdown()
+            await super().shutdown(sockets=sockets)
+
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        timeout_graceful_shutdown=1,
+    )
+    return _VideoLingoServer(config)
+
+
+if __name__ == "__main__":
     port = int(os.environ.get("VIDEOLINGO_API_PORT", "8501"))
-    uvicorn.run(app, host="127.0.0.1", port=port)
+    _create_uvicorn_server(host="127.0.0.1", port=port).run()

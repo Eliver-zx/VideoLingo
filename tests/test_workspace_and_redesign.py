@@ -2246,3 +2246,39 @@ def test_windows_nvenc_cuda_filter_and_ntfs_resilience(tmp_path: Path, monkeypat
     os.chmod(ro_file, 0o444)
     rmtree_robust(ro_dir)
     assert not ro_dir.exists()
+
+
+def test_sse_events_terminates_immediately_on_first_sigint():
+    """First Ctrl+C (SIGINT) via _VideoLingoServer.handle_exit wakes and closes active SSE streams without hanging."""
+    import asyncio
+    import signal
+    from types import SimpleNamespace
+
+    api._shutdown_event.clear()
+    try:
+
+        async def _exercise():
+            req = SimpleNamespace(
+                is_disconnected=lambda: asyncio.sleep(0, result=False)
+            )
+            resp = await api.sse_events(req)  # type: ignore[arg-type]
+            gen = aiter(resp.body_iterator)
+
+            first_chunk = await asyncio.wait_for(anext(gen), timeout=1.0)
+            assert '"type": "connected"' in str(first_chunk)
+            assert len(api._sse_subscribers) == 1
+
+            server = api._create_uvicorn_server(port=0)
+            assert server.config.timeout_graceful_shutdown == 1
+            server.handle_exit(signal.SIGINT, None)
+            assert api._shutdown_event.is_set()
+
+            remaining = []
+            async for chunk in gen:
+                remaining.append(chunk)
+            assert remaining == []
+            assert len(api._sse_subscribers) == 0
+
+        asyncio.run(_exercise())
+    finally:
+        api._shutdown_event.clear()
