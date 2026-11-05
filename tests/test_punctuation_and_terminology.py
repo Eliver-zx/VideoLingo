@@ -359,10 +359,18 @@ def test_get_summary_merges_chunks_and_custom_terms_consistently(monkeypatch, tm
     saved = ws.load_terms()
     assert "Chunk 0 theme." in saved["summary"]
     terms_by_src = {t["src"]: t["tgt"] for t in saved["terms"]}
-    assert terms_by_src["Vulkan"] == "Vulkan 接口"
+    assert "Vulkan" not in terms_by_src
     assert terms_by_src["Nanite"] == "Nanite 虚拟微多边形"
     assert terms_by_src["Nanites"] == "Nanite 虚拟微多边形"
     assert terms_by_src["Lumen"] == "Lumen 全局光照"
+
+    with workspace_context(ws):
+        note_prompt = summarize.search_things_to_note_in_prompt(
+            "We render with Vulkan and Nanite in real time."
+        )
+    assert note_prompt is not None
+    assert '"Vulkan": "Vulkan 接口"' in note_prompt
+    assert '"Nanite": "Nanite 虚拟微多边形"' in note_prompt
 
 
 # ------------------------------------------------------------------
@@ -688,14 +696,57 @@ def test_merge_terminology_results_unifies_llm_variants_into_canonical_aliases()
             },
         )
     ]
-    merged = _merge_terminology_results(chunk_results, custom_terms)
+    merged = _merge_terminology_results(
+        chunk_results,
+        [
+            *custom_terms,
+            {
+                "src": "UnmentionedGlossaryTerm",
+                "tgt": "未出现的旧词条",
+                "aliases": [],
+                "note": "不应出现在任务术语校对列表",
+                "source": "domain_kb",
+            },
+        ],
+    )
     by_src = {t["src"]: t for t in merged["terms"]}
+    assert "UnmentionedGlossaryTerm" not in by_src
     assert "pie torch" not in by_src
     assert "PyTorch" in by_src
     assert by_src["PyTorch"]["tgt"] == "PyTorch 框架"
     assert "pie torch" in by_src["PyTorch"]["aliases"]
     assert "pi torch" in by_src["PyTorch"]["aliases"]
     assert by_src["TensorRT"]["aliases"] == ["tensor artie"]
+    assert by_src["PyTorch"]["source"] == "task"
+    assert by_src["TensorRT"]["source"] == "task"
+
+
+def test_get_task_terms_api_hides_preexisting_glossary_sources(monkeypatch, tmp_path):
+    """GET /api/tasks/{task_id}/terms returns only newly scanned task terms and hides legacy pre-existing glossary rows."""
+    from fastapi.testclient import TestClient
+    import api
+
+    out_root = tmp_path / "output"
+    out_root.mkdir()
+    monkeypatch.setattr("core.workspace.OUTPUT_ROOT", out_root)
+    monkeypatch.setattr(api, "OUTPUT", out_root)
+
+    ws = TaskWorkspace(out_root / "task_terms_filter")
+    ws.ensure_dirs()
+    ws.save_terms(
+        "Weapon review",
+        [
+            {"src": "OldDomainTerm", "tgt": "旧领域词", "source": "domain_kb"},
+            {"src": "OldGlobalTerm", "tgt": "旧全局词", "source": "global_kb"},
+            {"src": "NewScannedTerm", "tgt": "新扫出的词", "source": "task"},
+        ],
+    )
+
+    client = TestClient(api.app)
+    res = client.get("/api/tasks/task_terms_filter/terms")
+    assert res.status_code == 200
+    returned_srcs = [t["src"] for t in res.json()["terms"]]
+    assert returned_srcs == ["NewScannedTerm"]
 
 
 def test_multiword_fuzzy_guards_and_longest_span_suppression(monkeypatch, tmp_path):

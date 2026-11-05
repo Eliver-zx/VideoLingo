@@ -764,11 +764,20 @@ def invalidate_task_stage(task_id: str, request: InvalidateStageRequest):
     return {"invalidated": invalidated}
 
 
+_PREEXISTING_TERM_SOURCES = {"domain_kb", "global_kb", "custom", "term_map"}
+
+
 @app.get("/api/tasks/{task_id}/terms")
 def get_task_terms(task_id: str):
     ws = _resolve_workspace(task_id)
     if ws.has_terms():
-        return ws.load_terms()
+        data = ws.load_terms()
+        data["terms"] = [
+            t
+            for t in (data.get("terms") or [])
+            if str(t.get("source") or "task") not in _PREEXISTING_TERM_SOURCES
+        ]
+        return data
     return {"summary": "", "terms": []}
 
 

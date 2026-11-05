@@ -1454,7 +1454,7 @@ def _merge_terminology_results(
     chunk_results: list[tuple[int, dict]],
     custom_terms_list: list[dict[str, Any]],
 ) -> dict:
-    """Deterministically unify terminology across chunks and authoritative custom terms."""
+    """Deterministically unify newly extracted terminology across chunks against authoritative custom terms."""
     chunk_results_sorted = sorted(chunk_results, key=lambda x: x[0])
 
     themes: list[str] = []
@@ -1464,6 +1464,8 @@ def _merge_terminology_results(
             themes.append(t)
     combined_theme = " ".join(themes[:2]) if themes else ""
 
+    custom_by_src_lower: dict[str, dict[str, Any]] = {}
+    custom_by_alias_lower: dict[str, str] = {}
     by_src_lower: dict[str, dict[str, Any]] = {}
     by_alias_lower: dict[str, str] = {}
     by_stem_key: dict[tuple[str, ...], str] = {}
@@ -1480,12 +1482,12 @@ def _merge_terminology_results(
         if aliases:
             entry["aliases"] = aliases
             for a in aliases:
-                by_alias_lower[a.lower()] = s_low
+                custom_by_alias_lower[a.lower()] = s_low
         if term.get("fix_source"):
             entry["fix_source"] = True
         if term.get("source"):
             entry["source"] = str(term["source"])
-        by_src_lower[s_low] = entry
+        custom_by_src_lower[s_low] = entry
         _, stems = _tokenize_and_normalize(src)
         if stems:
             by_stem_key[tuple(stems)] = tgt
@@ -1503,6 +1505,60 @@ def _merge_terminology_results(
             aliases = _normalize_aliases(raw_term.get("aliases"), src)
             _, stems = _tokenize_and_normalize(src)
             stem_tuple = tuple(stems) if stems else ()
+
+            custom_key = (
+                s_low
+                if s_low in custom_by_src_lower
+                else custom_by_alias_lower.get(s_low)
+            )
+            if not custom_key and aliases:
+                for a in aliases:
+                    a_low = a.lower()
+                    if a_low in custom_by_src_lower:
+                        custom_key = a_low
+                        break
+                    if a_low in custom_by_alias_lower:
+                        custom_key = custom_by_alias_lower[a_low]
+                        break
+
+            if custom_key and custom_key in custom_by_src_lower:
+                custom_entry = custom_by_src_lower[custom_key]
+                base_aliases = custom_entry.get("aliases") or []
+                known_low = {custom_key, *(a.lower() for a in base_aliases)}
+                cand_aliases = _normalize_aliases(
+                    [*([src] if custom_key != s_low else []), *aliases],
+                    custom_entry["src"],
+                )
+                has_new_alias = any(a.lower() not in known_low for a in cand_aliases)
+                if not has_new_alias and custom_key not in by_src_lower:
+                    continue
+
+                if custom_key not in by_src_lower:
+                    canonical_entry = {
+                        "src": custom_entry["src"],
+                        "tgt": custom_entry["tgt"],
+                        "note": custom_entry.get("note") or note,
+                        "source": "task",
+                    }
+                    if custom_entry.get("fix_source"):
+                        canonical_entry["fix_source"] = True
+                    if base_aliases:
+                        canonical_entry["aliases"] = list(base_aliases)
+                    by_src_lower[custom_key] = canonical_entry
+                else:
+                    canonical_entry = by_src_lower[custom_key]
+                    if not canonical_entry.get("note") and note:
+                        canonical_entry["note"] = note
+
+                merged_aliases = _normalize_aliases(
+                    [*(canonical_entry.get("aliases") or []), *cand_aliases],
+                    canonical_entry["src"],
+                )
+                if merged_aliases:
+                    canonical_entry["aliases"] = merged_aliases
+                    for a in merged_aliases:
+                        by_alias_lower[a.lower()] = custom_key
+                continue
 
             target_key = s_low if s_low in by_src_lower else by_alias_lower.get(s_low)
             if target_key and target_key in by_src_lower:
@@ -1528,7 +1584,7 @@ def _merge_terminology_results(
             elif stem_tuple:
                 by_stem_key[stem_tuple] = tgt
 
-            entry = {"src": src, "tgt": tgt, "note": note}
+            entry = {"src": src, "tgt": tgt, "note": note, "source": "task"}
             if aliases:
                 entry["aliases"] = aliases
                 for a in aliases:
@@ -1557,6 +1613,13 @@ def _consolidate_terms_with_llm(
     custom_by_low = {
         str(t["src"]).strip().lower(): t for t in custom_terms_list if t.get("src")
     }
+    custom_known_low = set(custom_by_low.keys())
+    for t in custom_terms_list:
+        for al in t.get("aliases") or []:
+            al_low = str(al).strip().lower()
+            if al_low:
+                custom_known_low.add(al_low)
+
     enriched_terms: list[dict[str, Any]] = []
     seen_srcs: set[str] = set()
     has_kb_candidates = False
@@ -1578,7 +1641,7 @@ def _consolidate_terms_with_llm(
         scanned_kb_hits = _scan_text_for_kb_terms(full_text, kb_data, max_hints=35)
         for kb_hit in scanned_kb_hits:
             hit_low = kb_hit["src"].lower()
-            if hit_low not in seen_srcs:
+            if hit_low not in seen_srcs and hit_low not in custom_known_low:
                 seen_srcs.add(hit_low)
                 cand_entry: dict[str, Any] = {
                     "src": kb_hit["src"],
@@ -1592,6 +1655,8 @@ def _consolidate_terms_with_llm(
                 enriched_terms.append(cand_entry)
                 has_kb_candidates = True
 
+    if not enriched_terms:
+        return merged_summary
     if len(chunk_results) <= 1 and not has_kb_candidates:
         return merged_summary
 
@@ -1621,15 +1686,13 @@ def _consolidate_terms_with_llm(
     if any(resp == cr for _, cr in chunk_results):
         return merged_summary
 
-    # Ensure every explicit custom term remains present and authoritative, and preserve original surface forms
-    consolidated_chunk = [
-        (0, {"theme": merged_summary.get("theme", ""), "terms": resp["terms"]})
-    ]
-    final_merged = _merge_terminology_results(consolidated_chunk, custom_terms_list)
-
-    # Also ensure any original surface forms from raw_terms that were merged into a canonical KB term
-    # are kept in `aliases` if they match the KB candidate of a consolidated term.
-    final_by_low = {t["src"].lower(): t for t in final_merged["terms"]}
+    # Preserve original surface forms from raw_terms that were merged into a canonical KB term
+    resp_terms = [dict(t) for t in resp["terms"] if isinstance(t, dict)]
+    resp_by_low = {
+        str(t.get("src") or "").strip().lower(): t
+        for t in resp_terms
+        if str(t.get("src") or "").strip()
+    }
     for raw_t in enriched_terms:
         if raw_t.get("source_hint") == "kb_scan_candidate":
             continue
@@ -1637,15 +1700,19 @@ def _consolidate_terms_with_llm(
         raw_aliases = _normalize_aliases(raw_t.get("aliases"), raw_src)
         for cand in raw_t.get("kb_candidates") or []:
             cand_low = str(cand.get("src") or "").strip().lower()
-            if cand_low in final_by_low and raw_src.lower() != cand_low:
-                target_entry = final_by_low[cand_low]
+            if cand_low in resp_by_low and raw_src.lower() != cand_low:
+                target_entry = resp_by_low[cand_low]
                 merged_al = _normalize_aliases(
                     [*(target_entry.get("aliases") or []), raw_src, *raw_aliases],
-                    target_entry["src"],
+                    str(target_entry["src"]),
                 )
                 if merged_al:
                     target_entry["aliases"] = merged_al
 
+    consolidated_chunk = [
+        (0, {"theme": merged_summary.get("theme", ""), "terms": resp_terms})
+    ]
+    final_merged = _merge_terminology_results(consolidated_chunk, custom_terms_list)
     final_merged["theme"] = merged_summary.get("theme", "")
     final_merged["topic"] = merged_summary.get("topic", "")
     return final_merged
