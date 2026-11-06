@@ -411,7 +411,7 @@ def test_align_timestamp_recomputes_duration_after_gap_and_overlap_smoothing():
     df_text = pd.DataFrame(
         {
             "text": ["hello", "world", "next", "line"],
-            "start": [0.0, 0.4, 1.4, 2.0],
+            "start": [0.0, 0.4, 1.25, 2.0],
             "end": [0.4, 1.0, 1.9, 3.0],
         }
     )
@@ -421,13 +421,13 @@ def test_align_timestamp_recomputes_duration_after_gap_and_overlap_smoothing():
             "Translation": ["你好世界", "下一行"],
         }
     )
-    # Gap between line 0 (ends 1.0) and line 1 (starts 1.4) is 0.4s (< 1.0s),
-    # so line 0 end timestamp is extended to 1.4s -> duration must become 1.4s, not 1.0s.
+    # Gap between line 0 (ends 1.0) and line 1 (starts 1.25) is 0.25s (<= 0.3s),
+    # so line 0 end timestamp is extended to 1.25s -> duration becomes 1.25s.
     res = gen_sub.align_timestamp(
         df_text, df_translate, [], output_dir=None, for_display=False
     )
-    assert res.loc[0, "duration"] == pytest.approx(1.4)
-    assert res.loc[1, "duration"] == pytest.approx(1.6)
+    assert res.loc[0, "duration"] == pytest.approx(1.25)
+    assert res.loc[1, "duration"] == pytest.approx(1.75)
 
 
 # ------------------------------------------------------------------

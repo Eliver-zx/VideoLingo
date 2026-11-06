@@ -361,7 +361,7 @@ def align_timestamp(
         curr_start, curr_end = df_trans_time.loc[i, "timestamp"]
         next_start, next_end = df_trans_time.loc[i + 1, "timestamp"]
         delta_time = next_start - curr_end
-        if 0 < delta_time < 1:
+        if 0 < delta_time <= 0.3:
             df_trans_time.at[i, "timestamp"] = (curr_start, next_start)
         elif delta_time < 0:
             midpoint = max(curr_start, min(next_end, curr_end + delta_time / 2))

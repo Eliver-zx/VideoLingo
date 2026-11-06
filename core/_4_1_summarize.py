@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import threading
+import unicodedata
 from typing import Any
 from difflib import SequenceMatcher
 
@@ -203,37 +204,193 @@ _INVARIANT_WORDS = {
     "redis",
     "aws",
     "devops",
+    "siva",
+    "mida",
+    "savathun",
+    "ghaul",
+    "calus",
+    "rhulk",
+    "nezarec",
+    "oryx",
+    "crota",
+    "atheon",
+    "taniks",
+    "aksis",
+    "riven",
+    "osiris",
+    "eris",
+    "caiatl",
+    "eramis",
+    "mithrax",
+    "fynch",
+    "nimbus",
+    "lodi",
+    "ahsa",
+    "akka",
+    "xivu",
+    "arath",
+    "nokris",
+    "omnigul",
+    "phogoth",
+    "sepiks",
+    "valus",
+    "bracus",
+    "kabr",
+    "praedyth",
+    "toland",
+    "ning",
+    "riis",
+    "nessus",
+    "edz",
 }
+
+_IRREGULAR_LEMMAS: dict[str, str] = {
+    "wolves": "wolf",
+    "knives": "knife",
+    "lives": "life",
+    "halves": "half",
+    "leaves": "leaf",
+    "thieves": "thief",
+    "selves": "self",
+    "elves": "elf",
+    "loaves": "loaf",
+    "calves": "calf",
+    "children": "child",
+    "men": "man",
+    "women": "woman",
+    "teeth": "tooth",
+    "feet": "foot",
+    "mice": "mouse",
+    "geese": "goose",
+    "phenomena": "phenomenon",
+    "criteria": "criterion",
+    "indices": "index",
+    "matrices": "matrix",
+    "vertices": "vertex",
+    "vortices": "vortex",
+    "frozen": "freeze",
+    "freezing": "freeze",
+    "woven": "weave",
+    "weaving": "weave",
+    "shaken": "shake",
+    "taken": "take",
+    "broken": "break",
+    "spoken": "speak",
+    "chosen": "choose",
+    "stolen": "steal",
+    "fallen": "fall",
+    "risen": "rise",
+    "driven": "drive",
+    "written": "write",
+    "hidden": "hide",
+    "bitten": "bite",
+    "ridden": "ride",
+}
+
+
+def _fold_text_for_tokens(text: str) -> str:
+    s = str(text).replace("’", "'").replace("‘", "'")
+    decomposed = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    s = re.sub(r"(?<=[a-zA-Z0-9])'s\b", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"(?<=[a-zA-Z0-9]s)'(?!\w)", "", s, flags=re.IGNORECASE)
+    return s
 
 
 def _stem_en_token(token: str) -> str:
     """Lightweight English plural/suffix normalization with invariant word protection."""
     t = token.lower()
+    if t in _IRREGULAR_LEMMAS:
+        return _IRREGULAR_LEMMAS[t]
     if len(t) <= 3 or not t.isascii() or not t.isalpha() or t in _INVARIANT_WORDS:
         return t
-    if t.endswith("ies") and len(t) > 5:
+    if t.endswith("ies") and len(t) > 4:
         return t[:-3] + "y"
-    if t.endswith("es") and len(t) > 4:
-        if t.endswith(("ches", "shes", "xes", "zes", "sses")):
-            return t[:-2]
-    if t.endswith("s") and not t.endswith(("ss", "us", "is", "as", "os", "ys")):
-        return t[:-1]
-    if t.endswith("ing") and len(t) >= 7:
+    if t.endswith("ied") and len(t) > 4:
+        return t[:-3] + "y"
+    if t.endswith("ves") and len(t) > 4:
+        return t[:-3] + "f"
+    if (
+        t.endswith("es")
+        and len(t) > 4
+        and t.endswith(("ches", "shes", "xes", "zes", "sses", "oes"))
+    ):
+        return t[:-2]
+    if t.endswith("ed") and len(t) >= 5:
+        base = t[:-2]
+        if base in _INVARIANT_WORDS:
+            return base
+        if len(base) >= 3 and base[-1] == base[-2] and base[-1] not in "lsz":
+            return base[:-1]
+        if len(base) >= 3:
+            return base
+    if t.endswith("ing") and len(t) >= 6:
         base = t[:-3]
         if base in _INVARIANT_WORDS:
             return base
-        if len(base) >= 4 and base[-1] == base[-2] and base[-1] not in "lsz":
-            base = base[:-1]
-        if len(base) >= 4:
+        if len(base) >= 3 and base[-1] == base[-2] and base[-1] not in "lsz":
+            return base[:-1]
+        if len(base) >= 3:
             return base
+    if t.endswith("s") and not t.endswith(("ss", "us", "is", "as", "os", "ys")):
+        return t[:-1]
     return t
+
+
+def _stem_key_variants(stems: list[str]) -> list[tuple[str, ...]]:
+    """Generate stem key variants accounting for silent trailing 'e' (e.g. ignite <-> ignit)."""
+    if not stems:
+        return []
+    variants_per_token: list[list[str]] = []
+    has_variant = False
+    for tok in stems:
+        if (
+            len(tok) >= 4
+            and tok.endswith("e")
+            and not tok.endswith(("ee", "ie", "ye", "oe"))
+        ):
+            variants_per_token.append([tok, tok[:-1]])
+            has_variant = True
+        else:
+            variants_per_token.append([tok])
+    if not has_variant:
+        return [tuple(stems)]
+    import itertools
+
+    return [tuple(p) for p in itertools.product(*variants_per_token)]
 
 
 def _tokenize_and_normalize(text: str) -> tuple[list[str], list[str]]:
     """Return ``(raw_lower_tokens, stemmed_tokens)`` for a text segment."""
-    raw = [m.group(0).lower() for m in _TOKEN_RE.finditer(str(text))]
+    folded = _fold_text_for_tokens(str(text))
+    raw = [m.group(0).lower() for m in _TOKEN_RE.finditer(folded)]
     stemmed = [_stem_en_token(tok) for tok in raw]
     return raw, stemmed
+
+
+def _norm_silent_e(tok: str) -> str:
+    return (
+        tok[:-1]
+        if len(tok) >= 4
+        and tok.endswith("e")
+        and not tok.endswith(("ee", "ie", "ye", "oe"))
+        else tok
+    )
+
+
+def _is_grammatical_inflection_of(cand: str, canonical: str) -> bool:
+    """Determine whether cand is merely a grammatical inflection of canonical."""
+    if not cand or not canonical:
+        return False
+    if not canonical.isascii() and cand.isascii():
+        return False
+    _, cand_stems = _tokenize_and_normalize(cand)
+    _, canon_stems = _tokenize_and_normalize(canonical)
+    if not cand_stems or len(cand_stems) != len(canon_stems):
+        return False
+    return [_norm_silent_e(x) for x in cand_stems] == [
+        _norm_silent_e(x) for x in canon_stems
+    ]
 
 
 def _similarity_score(a: str, b: str) -> float:
@@ -370,7 +527,13 @@ def _normalize_aliases(raw_aliases: Any, src: str = "") -> list[str]:
         return []
     src_low = src.strip().lower()
     return list(
-        dict.fromkeys(a for a in items if a.lower() != src_low and a.lower() != "nan")
+        dict.fromkeys(
+            a
+            for a in items
+            if a.lower() != src_low
+            and a.lower() != "nan"
+            and not (bool(src_low) and _is_grammatical_inflection_of(a, src))
+        )
     )
 
 
@@ -734,6 +897,23 @@ _KB_STOP_TOKENS = {
     "run",
     "use",
     "try",
+    "help",
+    "soon",
+    "below",
+    "explore",
+    "talk",
+    "quickly",
+    "problem",
+    "today",
+    "everyone",
+    "welcome",
+    "hello",
+    "comment",
+    "defeat",
+    "enemies",
+    "enemy",
+    "enhance",
+    "gate",
 }
 
 _KB_CONVERSATIONAL_STOPWORDS = {
@@ -954,9 +1134,9 @@ def _get_kb_index(
 
             _, stems = _tokenize_and_normalize(en)
             if stems and len(stems) <= 6:
-                st_tuple = tuple(stems)
-                if st_tuple not in stem_ngram_map:
-                    stem_ngram_map[st_tuple] = entry
+                for st_tuple in _stem_key_variants(stems):
+                    if st_tuple not in stem_ngram_map:
+                        stem_ngram_map[st_tuple] = entry
 
         kb_data = {
             "entries": kb_entries,
@@ -972,7 +1152,7 @@ def _get_kb_index(
 
 
 def _scan_text_for_kb_terms(
-    text: str, kb_data: dict[str, Any], max_hints: int = 40
+    text: str, kb_data: dict[str, Any], max_hints: int = 500
 ) -> list[dict[str, Any]]:
     """Pre-scan a transcript against the authoritative KB to surface official terms that chunk extraction might miss."""
     stem_ngram_map = kb_data.get("stem_ngram_map") or {}
@@ -983,7 +1163,6 @@ def _scan_text_for_kb_terms(
     if n == 0:
         return []
 
-    cap_words = {w.lower() for w in re.findall(r"\b[A-Z][a-zA-Z0-9\-']+\b", text)}
     matched_by_src: dict[str, dict[str, Any]] = {}
     covered_positions: set[int] = set()
 
@@ -1002,8 +1181,7 @@ def _scan_text_for_kb_terms(
                 continue
             surf = " ".join(window_raw)
             if k_len >= 2 or (
-                surf in cap_words
-                and len(surf) >= 5
+                len(surf) >= 2
                 and surf not in _KB_STOP_TOKENS
                 and surf not in _KB_CONVERSATIONAL_STOPWORDS
             ):
@@ -1152,7 +1330,9 @@ def _build_term_index(terms: list[dict[str, Any]]) -> dict:
 
             # Substring matching is ONLY safe for CJK terms; ASCII/Latin terms require word boundaries
             has_cjk = bool(_CJK_RE.search(surf_lower))
-            has_non_hyphen_symbol = bool(re.search(r"[^a-z0-9\s\-']", surf_lower))
+            has_prog_symbol = bool(
+                re.search(r"[+#$%&*=@^~<>]", surf_lower) or surf_lower.startswith(".")
+            )
             if has_cjk:
                 if surf_lower not in cjk_or_symbol_map:
                     cjk_or_symbol_map[surf_lower] = entry
@@ -1163,9 +1343,8 @@ def _build_term_index(terms: list[dict[str, Any]]) -> dict:
                 )
                 word_boundary_res.append((pattern, entry))
 
-            # Do not strip critical symbols (like '+', '#', '.') into plain word tokens
-            # that would falsely match everyday words ("C#" -> "c", ".NET" -> "net").
-            if has_non_hyphen_symbol and not has_cjk:
+            # Only skip stem_ngram_map and fuzzy matching for programming symbols or leading dots
+            if has_prog_symbol and not has_cjk:
                 continue
 
             raw_toks, stem_toks = _tokenize_and_normalize(surface)
@@ -1173,15 +1352,15 @@ def _build_term_index(terms: list[dict[str, Any]]) -> dict:
                 k = len(stem_toks)
                 if k > max_k:
                     max_k = k
-                key_tuple = tuple(stem_toks)
-                if key_tuple not in stem_ngram_map:
-                    stem_ngram_map[key_tuple] = entry
+                for key_tuple in _stem_key_variants(stem_toks):
+                    if key_tuple not in stem_ngram_map:
+                        stem_ngram_map[key_tuple] = entry
                 norm_str = " ".join(raw_toks)
                 by_k.setdefault(k, []).append(
                     {
                         "surface": surface,
                         "norm": norm_str,
-                        "stem_tokens": key_tuple,
+                        "stem_tokens": tuple(stem_toks),
                         "entry": entry,
                     }
                 )
@@ -1453,6 +1632,7 @@ def _extract_chunk_summary(
 def _merge_terminology_results(
     chunk_results: list[tuple[int, dict]],
     custom_terms_list: list[dict[str, Any]],
+    scanned_kb_terms: list[dict[str, Any]] | None = None,
 ) -> dict:
     """Deterministically unify newly extracted terminology across chunks against authoritative custom terms."""
     chunk_results_sorted = sorted(chunk_results, key=lambda x: x[0])
@@ -1524,14 +1704,10 @@ def _merge_terminology_results(
             if custom_key and custom_key in custom_by_src_lower:
                 custom_entry = custom_by_src_lower[custom_key]
                 base_aliases = custom_entry.get("aliases") or []
-                known_low = {custom_key, *(a.lower() for a in base_aliases)}
                 cand_aliases = _normalize_aliases(
                     [*([src] if custom_key != s_low else []), *aliases],
                     custom_entry["src"],
                 )
-                has_new_alias = any(a.lower() not in known_low for a in cand_aliases)
-                if not has_new_alias and custom_key not in by_src_lower:
-                    continue
 
                 if custom_key not in by_src_lower:
                     canonical_entry = {
@@ -1556,6 +1732,8 @@ def _merge_terminology_results(
                 )
                 if merged_aliases:
                     canonical_entry["aliases"] = merged_aliases
+                    if raw_term.get("fix_source") is not False:
+                        canonical_entry["fix_source"] = True
                     for a in merged_aliases:
                         by_alias_lower[a.lower()] = custom_key
                 continue
@@ -1575,6 +1753,8 @@ def _merge_terminology_results(
                 )
                 if merged_aliases:
                     canonical_entry["aliases"] = merged_aliases
+                    if raw_term.get("fix_source") is not False:
+                        canonical_entry["fix_source"] = True
                     for a in merged_aliases:
                         by_alias_lower[a.lower()] = target_key
                 continue
@@ -1587,9 +1767,42 @@ def _merge_terminology_results(
             entry = {"src": src, "tgt": tgt, "note": note, "source": "task"}
             if aliases:
                 entry["aliases"] = aliases
+                if raw_term.get("fix_source") is not False:
+                    entry["fix_source"] = True
                 for a in aliases:
                     by_alias_lower[a.lower()] = s_low
             by_src_lower[s_low] = entry
+
+    if scanned_kb_terms:
+        for term in scanned_kb_terms:
+            s = str(term.get("src") or "").strip()
+            tg = str(term.get("tgt") or "").strip()
+            if not s or not tg:
+                continue
+            s_low = s.lower()
+            if s_low not in by_src_lower:
+                by_src_lower[s_low] = {
+                    "src": s,
+                    "tgt": tg,
+                    "note": str(term.get("note") or "").strip(),
+                    "aliases": _normalize_aliases(term.get("aliases"), s),
+                    "fix_source": bool(term.get("fix_source", False)),
+                    "source": "task",
+                }
+            else:
+                existing = by_src_lower[s_low]
+                if term.get("fix_source"):
+                    existing["fix_source"] = True
+                if not existing.get("note") and term.get("note"):
+                    existing["note"] = str(term["note"]).strip()
+                kb_aliases = _normalize_aliases(term.get("aliases"), s)
+                if kb_aliases:
+                    merged_al = _normalize_aliases(
+                        [*(existing.get("aliases") or []), *kb_aliases],
+                        str(existing["src"]),
+                    )
+                    if merged_al:
+                        existing["aliases"] = merged_al
 
     return {
         "theme": combined_theme,
@@ -1604,6 +1817,7 @@ def _consolidate_terms_with_llm(
     custom_terms_list: list[dict[str, Any]],
     kb_data: dict[str, Any] | None = None,
     full_text: str = "",
+    scanned_kb_terms: list[dict[str, Any]] | None = None,
 ) -> dict:
     """Run an LLM Reduce pass to unify cross-chunk ASR variants and align with authoritative KB candidates."""
     raw_terms = merged_summary.get("terms") or []
@@ -1712,7 +1926,9 @@ def _consolidate_terms_with_llm(
     consolidated_chunk = [
         (0, {"theme": merged_summary.get("theme", ""), "terms": resp_terms})
     ]
-    final_merged = _merge_terminology_results(consolidated_chunk, custom_terms_list)
+    final_merged = _merge_terminology_results(
+        consolidated_chunk, custom_terms_list, scanned_kb_terms=scanned_kb_terms
+    )
     final_merged["theme"] = merged_summary.get("theme", "")
     final_merged["topic"] = merged_summary.get("topic", "")
     return final_merged
@@ -1728,6 +1944,7 @@ def get_summary():
     ]
 
     custom_terms_list = load_custom_terms()
+    kb_data = _get_kb_index(custom_terms_list)
     custom_terms_json = {"terms": custom_terms_list}
     if custom_terms_list:
         rprint(f"📖 Custom Terms Loaded: {len(custom_terms_list)} terms")
@@ -1743,6 +1960,28 @@ def get_summary():
         src_content = combine_chunks()
         chunks = [src_content] if src_content else [""]
 
+    all_scanned_kb_terms: dict[str, dict[str, Any]] = {}
+    chunk_injected_jsons: list[dict[str, Any]] = []
+
+    for chunk_text in chunks:
+        chunk_kb_hits = _scan_text_for_kb_terms(chunk_text, kb_data, max_hints=500)
+        for h in chunk_kb_hits:
+            s_low = str(h.get("src") or "").strip().lower()
+            if s_low and s_low not in all_scanned_kb_terms:
+                all_scanned_kb_terms[s_low] = h
+
+        if len(custom_terms_list) <= 50:
+            seen_srcs = {str(t.get("src") or "").strip().lower() for t in chunk_kb_hits}
+            injected = list(chunk_kb_hits)
+            for t in custom_terms_list:
+                s_low = str(t.get("src") or "").strip().lower()
+                if s_low and s_low not in seen_srcs:
+                    seen_srcs.add(s_low)
+                    injected.append(t)
+            chunk_injected_jsons.append({"terms": injected})
+        else:
+            chunk_injected_jsons.append({"terms": chunk_kb_hits})
+
     rprint(
         f"📝 Summarizing and extracting terminology across {len(chunks)} chunk(s) ..."
     )
@@ -1754,14 +1993,16 @@ def get_summary():
 
     chunk_results: list[tuple[int, dict]] = []
     if len(chunks) == 1:
-        chunk_results.append(_extract_chunk_summary(0, chunks[0], custom_terms_json))
+        chunk_results.append(
+            _extract_chunk_summary(0, chunks[0], chunk_injected_jsons[0])
+        )
         report_progress(0.18, "术语提取 1/1", "✅ 完成术语提取 1/1")
     else:
         max_workers = max(1, int(load_key_or("max_workers", 4) or 4))
         with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
                 executor.submit(
-                    _extract_chunk_summary, idx, chunk_text, custom_terms_json
+                    _extract_chunk_summary, idx, chunk_text, chunk_injected_jsons[idx]
                 )
                 for idx, chunk_text in enumerate(chunks)
             ]
@@ -1780,12 +2021,19 @@ def get_summary():
                     f.cancel()
                 raise
 
-    summary = _merge_terminology_results(chunk_results, custom_terms_list)
-    kb_data = _get_kb_index(custom_terms_list)
+    scanned_terms_list = list(all_scanned_kb_terms.values())
+    summary = _merge_terminology_results(
+        chunk_results, custom_terms_list, scanned_kb_terms=scanned_terms_list
+    )
     full_text = " ".join(chunks)
     report_progress(0.20, "术语归并消歧…")
     summary = _consolidate_terms_with_llm(
-        summary, chunk_results, custom_terms_list, kb_data=kb_data, full_text=full_text
+        summary,
+        chunk_results,
+        custom_terms_list,
+        kb_data=kb_data,
+        full_text=full_text,
+        scanned_kb_terms=scanned_terms_list,
     )
 
     ws.save_terms(summary.get("theme", ""), summary.get("terms", []))

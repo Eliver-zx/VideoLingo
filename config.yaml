@@ -95,13 +95,13 @@ subtitle:
       outline_color: '&H000000'
       outline_width: 1.5
     translation:
-      font_name: ''
-      font_size: 18
-      font_color: '&H00D7FF'
+      font_name: '抖音美好体'
+      font_size: 17
+      font_color: '&H00FFFF'
       outline_color: '&H000000'
-      outline_width: 2.0
-      back_color: '&HFF000000'
-      margin_v: 28
+      outline_width: 1.5
+      back_color: '&H33000000'
+      margin_v: 5
 
 # *Whether to reflect the translation result in the original text
 reflect_translate: false

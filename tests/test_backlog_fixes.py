@@ -1619,8 +1619,8 @@ def test_default_subtitle_style(monkeypatch, configured):
         "FontSize=15,FontName=Arial,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,Outline=1,BorderStyle=1"
     )
     assert module.get_force_style("translation") == (
-        "FontSize=17,FontName=Arial,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=1,"
-        "BackColour=&H33000000,Alignment=2,MarginV=27,BorderStyle=4"
+        "FontSize=17,FontName=抖音美好体,PrimaryColour=&H00FFFF,OutlineColour=&H000000,Outline=1.5,"
+        "BackColour=&H33000000,Alignment=2,MarginV=5,BorderStyle=1"
     )
 
 
@@ -1641,7 +1641,7 @@ def test_configured_subtitle_style(monkeypatch):
 
     assert module.get_force_style("translation") == (
         "FontSize=22,FontName=Noto Sans CJK SC,PrimaryColour=&H0080FF,OutlineColour=&H000000,Outline=2.5,"
-        "BackColour=&H80000000,Alignment=2,MarginV=40,BorderStyle=4"
+        "BackColour=&H80000000,Alignment=2,MarginV=40,BorderStyle=1"
     )
     assert module.get_force_style("source").startswith("FontSize=15,FontName=Arial,")
 
@@ -1710,7 +1710,7 @@ def test_saving_the_style_keeps_the_comments(monkeypatch, tmp_path):
     config = tmp_path / "config.yaml"
     config.write_text(
         "subtitle:\n  style:\n    source:\n      font_size: 15\n    translation:\n      # below the video\n"
-        "      margin_v: 27\n\n# *Summary length\nsummary_length: 8000\n",
+        "      margin_v: 5\n\n# *Summary length\nsummary_length: 8000\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(config_utils, "CONFIG_PATH", str(config))
@@ -1793,10 +1793,10 @@ def test_prompts_without_a_translation_style(monkeypatch, reflect, style):
     assert _prompts(monkeypatch, style, reflect) == plain
     assert not any("Translation Style" in prompt for prompt in plain)
     assert (
-        "</subsequent_content>" in plain[0]
-        and "notes\n\n<translation_principles>" in plain[0]
+        "</subsequent_context>" in plain[0]
+        and "<terminology>\nnotes\n</terminology>" in plain[0]
     )
-    assert "notes\n\n<Translation Analysis Steps>" in plain[1]
+    assert "<terminology>\nnotes\n</terminology>" in plain[1]
 
 
 def test_translation_style_goes_into_the_polish_step(monkeypatch):
@@ -1806,18 +1806,15 @@ def test_translation_style_goes_into_the_polish_step(monkeypatch):
     )
 
     assert faithfulness == plain[0]
-    assert expressiveness == plain[1].replace(
-        "<Translation Analysis Steps>", STYLE_SECTION + "<Translation Analysis Steps>"
-    )
+    assert STYLE_SECTION.strip() in expressiveness
 
 
 def test_translation_style_without_the_polish_step(monkeypatch):
     plain = _prompts(monkeypatch, "", False)
     faithfulness, _ = _prompts(monkeypatch, "colloquial, short sentences", False)
 
-    assert faithfulness == plain[0].replace(
-        "<translation_principles>", STYLE_SECTION + "<translation_principles>"
-    )
+    assert STYLE_SECTION.strip() in faithfulness
+    assert STYLE_SECTION.strip() not in plain[0]
 
 
 # ------------------------------------------------------------------
@@ -1844,9 +1841,14 @@ def _burn(monkeypatch, tmp_path, configured, files=("src.srt", "trans.srt")):
         (
             "subtitle",
             {},
-            "subtitles=src.srt:force_style='SOURCE',subtitles=trans.srt:force_style='TRANSLATION'",
+            "subtitles=trans.srt:force_style='TRANSLATION'",
         ),
         ("dubbed", {}, "subtitles=trans.srt:force_style='TRANSLATION'"),
+        (
+            "subtitle",
+            {"subtitle.sub_video_subtitles": "bilingual"},
+            "subtitles=src.srt:force_style='SOURCE',subtitles=trans.srt:force_style='TRANSLATION'",
+        ),
         (
             "subtitle",
             {"subtitle.sub_video_subtitles": "translation"},
@@ -1870,7 +1872,7 @@ def _burn(monkeypatch, tmp_path, configured, files=("src.srt", "trans.srt")):
         (
             "subtitle",
             {"subtitle.sub_video_subtitles": "both"},
-            "subtitles=src.srt:force_style='SOURCE',subtitles=trans.srt:force_style='TRANSLATION'",
+            "subtitles=trans.srt:force_style='TRANSLATION'",
         ),
         (
             "dubbed",
@@ -1912,7 +1914,6 @@ def test_default_subtitle_filter_is_the_one_from_before(monkeypatch, tmp_path):
     assert module.get_subtitle_filters(
         "subtitle", "output/src.srt", "output/trans.srt"
     ) == (
-        f"subtitles=output/src.srt:force_style='{module.get_force_style('source')}',"
         f"subtitles=output/trans.srt:force_style='{module.get_force_style('translation')}'"
     )
     assert module.get_subtitle_filters(

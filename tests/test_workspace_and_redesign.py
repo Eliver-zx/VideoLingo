@@ -2154,7 +2154,7 @@ def test_windows_nvenc_cuda_filter_and_ntfs_resilience(tmp_path: Path, monkeypat
     from core.utils import subtitle_style
     from core.workspace import replace_with_retry, rmtree_robust
 
-    # 1. NVENC encoder args (CQ 23 + 6000k maxrate + 12000k bufsize + spatial/temporal AQ + lookahead 20)
+    # 1. NVENC encoder args (speed-first p1 preset + 6000k bitrate + yuv420p)
     monkeypatch.setattr(subtitle_style.platform, "system", lambda: "Windows")
     monkeypatch.setattr(
         subtitle_style,
@@ -2162,11 +2162,16 @@ def test_windows_nvenc_cuda_filter_and_ntfs_resilience(tmp_path: Path, monkeypat
         lambda: frozenset({"h264_nvenc", "libx264"}),
     )
     nvenc_args = subtitle_style.get_optimal_video_encoder_args(use_gpu=True)
-    assert nvenc_args[:2] == ["-c:v", "h264_nvenc"]
-    assert nvenc_args[nvenc_args.index("-cq") + 1] == "23"
-    assert nvenc_args[nvenc_args.index("-maxrate") + 1] == "6000k"
-    assert nvenc_args[nvenc_args.index("-bufsize") + 1] == "12000k"
-    assert "-spatial-aq" in nvenc_args and "-temporal-aq" in nvenc_args
+    assert nvenc_args == [
+        "-c:v",
+        "h264_nvenc",
+        "-preset",
+        "p1",
+        "-b:v",
+        "6000k",
+        "-pix_fmt",
+        "yuv420p",
+    ]
 
     # 2. CUDA decode + scale_cuda NV12->YUV420P pre-conversion before libass
     monkeypatch.setattr(

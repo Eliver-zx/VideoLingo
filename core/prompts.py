@@ -107,70 +107,91 @@ Note: Start your answer with ```json and end with ```, do not add any other text
 
 ## ================================================================
 # @ _4_1_summarize.py
-def get_summary_prompt(source_content, custom_terms_json=None):
+def get_summary_prompt(
+    source_content, custom_terms_json=None, previously_extracted_terms=None
+):
     src_lang = get_source_language()
     tgt_lang = load_key("target_language")
 
-    # add custom terms note
-    terms_note = ""
-    if custom_terms_json and custom_terms_json.get("terms"):
-        terms_list = []
+    terms_list = []
+    if (
+        custom_terms_json
+        and isinstance(custom_terms_json, dict)
+        and custom_terms_json.get("terms")
+    ):
         for term in custom_terms_json["terms"]:
+            if not isinstance(term, dict):
+                continue
+            src = str(term.get("src") or "").strip()
+            if not src:
+                continue
+            tgt = str(term.get("tgt") or "").strip()
+            note = str(term.get("note") or "").strip()
             aliases = term.get("aliases") or []
             alias_str = (
                 f" [aliases: {', '.join(str(a) for a in aliases if str(a).strip())}]"
                 if aliases
                 else ""
             )
-            terms_list.append(
-                f"- {term['src']}{alias_str}: {term['tgt']} ({term.get('note', '')})"
-            )
-        terms_note = (
-            "\n### Reference & Existing Terms\n"
-            "Exclude exact matches already listed below, but DO extract any ASR spelling/phonetic variants "
-            "of these terms that appear in the text by setting `src` to the canonical term, `aliases` to the "
-            "exact surface variant(s) in `<text>`, and `tgt` to the existing translation:\n"
-            + "\n".join(terms_list)
+            note_str = f" ({note})" if note else ""
+            terms_list.append(f"- {src}{alias_str}: {tgt}{note_str}")
+
+    terms_note = "\n".join(terms_list) if terms_list else "None"
+
+    existing_terms_note = ""
+    if previously_extracted_terms:
+        prev_terms = (
+            previously_extracted_terms.get("terms", [])
+            if isinstance(previously_extracted_terms, dict)
+            else previously_extracted_terms
         )
+        if isinstance(prev_terms, list) and prev_terms:
+            prev_lines = [
+                f"- {str(t.get('src') or '').strip()}: {str(t.get('tgt') or '').strip()}"
+                + (f" ({str(t.get('note') or '').strip()})" if t.get("note") else "")
+                for t in prev_terms
+                if isinstance(t, dict) and str(t.get("src") or "").strip()
+            ]
+            if prev_lines:
+                existing_terms_note = (
+                    "\n# existing_terms_note\n"
+                    "### Previously Extracted Terms\n"
+                    "Please refer to these terms to maintain consistency across chunks and avoid duplicate entries:\n"
+                    + "\n".join(prev_lines)
+                )
 
     summary_prompt = f"""
-## Role
-You are a video translation expert and terminology curator, specializing in {src_lang} ASR transcript analysis and {tgt_lang} localization.
+## 1. 角色与目标
+你是一名专业术语专家与视频内容分析师，负责从 {src_lang} ASR（自动语音识别）转录稿中提取关键术语，用于 {tgt_lang} 字幕本地化与质量保证。
 
-## Task
-For the provided {src_lang} video transcript:
-1. Summarize the main topic and core point in two sentences (`theme`).
-2. Extract only the essential terminology and ASR variants needed to prevent mistranslation or inconsistency (`terms`).
+## 2. 核心任务
+1. **主题总结 (`theme`)**：用两句话精炼概括当前文本块的核心主题与讨论要点。
+2. **权威术语核对与别名提取**：下方 `# terms_note` 是当前文本块中预先匹配出的权威参考术语列表。
+   - 检查原文 `<text>` 中是否存在这些权威术语的 **ASR 语音/拼写讹误**（如因发音相近被语音转文字打错的词）。若有，将标准术语填入 `src`，标准译名填入 `tgt`，并将原文中出现的具体 ASR 错词/同音词填入 `aliases` 数组中。
+   - **绝对严禁**：严禁将名词单复数（如 shotgun/shotguns）、名词所有格（`'s`）或动词时态词形变化（`-ed`, `-ing`）等正常语法变形当作 ASR 错词填入 `aliases`！`aliases` **仅限真正的 ASR 拼写/同音识别错误**（例如 `"gally"` 对应 `"Gjallarhorn"`，`"trench barrel"` 被 ASR 识别成拼写错词等）。
+3. **提取新术语**：提取原文 `<text>` 中未在下方列出但属于专有名词、武器、技能、游戏/业务机制、地名、人名、领域行话的新术语，并给出准确的 {tgt_lang} 译名。
+   - 常用通用词汇（如 system, player, video, update 等字面直译无歧义词）严禁提取。
+   - `tgt` 必须为干净无括号的中文译名，解释说明放入 `note`。
 
+# terms_note
 {terms_note}
+{existing_terms_note}
 
-## Extraction Rules (Precision & Recall Balance)
-1. **What to Extract (Must meet at least one)**:
-   - **Proper Nouns & Entities**: Names of people, organizations, brands, products, works, locations, or specialized domain items.
-   - **Domain Jargon & Polysemous Terms**: Words that have an everyday meaning but carry a specialized meaning in this video's context (where literal translation would be wrong).
-   - **ASR Misrecognitions / Spelling Variants**: Terms in `<text>` that are phonetically misrecognized or misspelled by ASR. Put the **canonical standard spelling** in `src` (when identifiable, otherwise the surface form), list the **exact ASR surface variant(s) appearing in `<text>`** in `aliases`, and provide the accurate `{tgt_lang}` translation in `tgt`.
-   - **Technical Acronyms & Code Names**.
-2. **Counterfactual Exclusion Test (Strict Filter)**:
-   - Before extracting any term, ask: *"If this word is NOT in the glossary and a translator translates it literally, will it be wrong or inconsistent?"*
-   - If a literal translation is already unambiguous and accurate (e.g., generic words like `system`, `video`, `performance`, `database`, `algorithm`, `player`, `website`, `update`), **DO NOT extract it**.
-3. **Translation Requirement**:
-   - Provide the **clean, exact `{tgt_lang}` translation** in `tgt` ready for direct insertion into subtitles (only universally kept acronyms like `AI`, `API`, `CPU`, `GPU` may stay in their original form). **Never** put explanations or parenthetical notes inside `tgt` — put all explanations in `note`.
-
-## INPUT
+## 3. INPUT
 <text>
 {source_content}
 </text>
 
-## Output in only JSON format and no other text
+## 4. Output in only JSON format and no other text
 ```json
 {{
-  "theme": "Two-sentence video summary",
+  "theme": "用两句话总结文本块的核心内容与讨论主题",
   "terms": [
     {{
       "src": "canonical {src_lang} term",
-      "tgt": "{tgt_lang} translation",
-      "aliases": ["exact ASR phonetic/spelling variant in text (if any)"],
-      "note": "Brief context or note"
+      "tgt": "{tgt_lang} 翻译",
+      "aliases": ["原文中出现的 ASR 语音/拼写讹误（非语法变形，无则留空数组 []）"],
+      "note": "简要上下文或术语解释"
     }}
   ]
 }}
@@ -252,20 +273,20 @@ def generate_shared_prompt(
         if isinstance(after_content_prompt, list)
         else (after_content_prompt or "")
     )
+    summary_line = f"Summary: {summary_prompt}\n" if summary_prompt else ""
     return f"""### Context Information
-<previous_content>
+<previous_context>
 {prev_text}
-</previous_content>
+</previous_context>
 
-<subsequent_content>
+<subsequent_context>
 {after_text}
-</subsequent_content>
+</subsequent_context>
 
-### Content Summary
-{summary_prompt or ""}
-
-### Points to Note
-{things_to_note_prompt or ""}"""
+### 术语库-词典
+{summary_line}<terminology>
+{things_to_note_prompt or ""}
+</terminology>""".strip()
 
 
 def get_translation_style_prompt():
@@ -284,126 +305,140 @@ The user asks for the following style. Follow it in the translation, without cha
 
 def get_prompt_faithfulness(lines, shared_prompt):
     TARGET_LANGUAGE = load_key("target_language")
-    # The polish step applies the style when there is one, this step stays a direct translation
+    SRC_LANGUAGE = get_source_language()
     style_prompt = (
         "" if load_key("reflect_translate") else get_translation_style_prompt()
     )
-    # Split lines by \n
     line_splits = lines.split("\n")
 
     json_dict = {}
     for i, line in enumerate(line_splits, 1):
-        json_dict[f"{i}"] = {
+        json_dict[str(i)] = {
             "origin": line,
-            "direct": f"direct {TARGET_LANGUAGE} translation {i}.",
+            "direct": f"<<请逐行翻译为{TARGET_LANGUAGE}，确保忠实于原文，且仅输出翻译后结果>>",
         }
-    json_format = json.dumps(json_dict, indent=2, ensure_ascii=False)
+    json_format = json.dumps(json_dict, indent=4, ensure_ascii=False)
 
-    src_language = get_source_language()
     prompt_faithfulness = f"""
-## Role
-You are a senior Netflix subtitle localization specialist and native **{TARGET_LANGUAGE}** writer, fluent in both {src_language} and {TARGET_LANGUAGE}.
-Your goal is to produce **final-ready, natural, spoken {TARGET_LANGUAGE} subtitles** in a single pass — combining **100% semantic fidelity (zero alteration, zero fabrication, zero omission)** and strict glossary adherence with idiomatic native syntax.
+## Role: Expert Linguistic Translator
+{style_prompt}
+## Task Description:
+Translate the provided {SRC_LANGUAGE} text lines (from video context) into {TARGET_LANGUAGE} line by line. The primary goal is to **faithfully** reproduce the original meaning, tone, and nuances, while also ensuring the translation **conforms to the expressive conventions of {TARGET_LANGUAGE}**.
 
-## Task
-Translate the numbered {src_language} subtitle lines into faithful, idiomatic {TARGET_LANGUAGE} line by line.
+## Context:
+- Source Language: {SRC_LANGUAGE}
+- Target Language: {TARGET_LANGUAGE}
+- Content: Video subtitles/transcript lines.
+- Terminology & Context: Provided below under 'Terminology & Shared Context'.
 
+## Translation Guidelines:
+1. **Line-by-Line Translation**: Translate each line independently while maintaining semantic continuity from adjacent context lines.
+2. **Faithful Rendition**: Accurately convey the original semantics, tone (formal, informal, enthusiastic, serious), and subtle nuances.
+3. **Natural Flow and Cognitive Alignment**:
+   - The translation must align with {TARGET_LANGUAGE}'s patterns of thought, reading habits, and spoken rhythm.
+   - Natural clause punctuation: You may naturally add Chinese commas (，) between clauses to improve readability and break up stiff, robotic machine-translation run-on sentences.
+   - Disfluency removal: Remove meaningless spoken filler words (`uh`, `um`, `you know`, `like`), producing clean, professional subtitles.
+4. **Mandatory Terminology Consistency**:
+   - Strictly adhere to the official Chinese translations in `### 术语库-词典`.
+   - **Inflection Rule**: When a term appears in the original text in plural form, possessive (`'s`), or verb inflections (`-ed`, `-ing`), you **MUST** use the canonical official translation from `### 术语库-词典` corresponding to its base term, integrating it accurately and grammatically into the sentence. It is strictly forbidden to invent alternative translations or translate it literally.
+5. **Proper Noun Handling**:
+   - Preserve unlisted proper nouns (people, places, brands, model numbers) in their original form unless a standard recognized {TARGET_LANGUAGE} equivalent exists.
+6. **No Additions or Parentheses**:
+   - Do NOT add annotations, explanations, or source terms in parentheses (e.g., translate "Still Hunt" to "静谧狩猎", NEVER "静谧狩猎 (Still Hunt)").
+
+## Reference Examples:
+* Original: "Hey guys, welcome back to the channel!" -> Translation: "大家好，欢迎回到频道！" (Informal, direct, aligns with spoken language habits, natural punctuation)
+* Original: "The algorithm uses a Still Hunt approach." (Assuming "Still Hunt: 静谧狩猎" is in glossary) -> Translation: "该算法使用静谧狩猎方法。" (Strict terminology adherence, natural word order)
+* Original: "This is powered by the new Nvidia RTX 4090." -> Translation: "这由新的英伟达 RTX 4090 驱动。" (Proper noun preserved, structure is natural)
+* Original: "Crew and Alex, for example, are both on Trench Barrel aggressive shotguns..." (Assuming Crew/Alex not in glossary, "Trench Barrel: 战壕枪管", "aggressive frame: 攻击架构") -> Translation: "例如，Crew和Alex都装备了带有战壕枪管的攻击型霰弹枪..." (Terminology strictly preserved across inflection 'shotguns' -> '霰弹枪', names preserved, natural syntax)
+
+## Input Text Lines:
+<source_lines>
+{lines}
+</source_lines>
+
+## Terminology & Shared Context:
 {shared_prompt}
 
-{style_prompt}<translation_principles>
-1. **100% Semantic Fidelity & Accurate Syntactic Attachment (Zero Alteration, Zero Omission)**:
-   - Every factual detail, technical mechanism, number, comparison, condition, and speaker stance (`in theory`, `potentially`, `at least`, `technically`, `I know for sure`) MUST be preserved accurately. Never invent facts, alter meaning, or drop substantive information.
-   - **Resolve Modifier Attachment Carefully**: When a sentence ends with a numerical measurement or prepositional phrase after a comparison (e.g., `"takes X hits, which is much faster than a standard Y at 1.6 seconds"`), attach the measurement (`1.6 seconds`) to the subject being measured (`takes X hits, taking only 1.6 seconds, which is much faster than a standard Y`), never to the baseline noun `Y`. Translate compound technical modifiers by their real mechanism (e.g., rate/time vs. capacity) rather than surface word-for-word guessing.
-   - Use `<previous_content>`, `<subsequent_content>`, and `Content Summary` to resolve polysemous domain terms, pronouns, and omitted subjects according to the video's subject matter.
-2. **ASR Homophone & Phonetic Error Recovery**:
-   - Source lines come from ASR and contain phonetic typos or speaker self-corrections (e.g., `"X, Y, I believe X, I know for sure doesn't count"`). Recover the speaker's intended word from context and `Points to Note`, and translate the coherent intended statement smoothly without mimicking broken ASR stutters.
-3. **Strict Terminology & Clean Proper Nouns**:
-   - **Mandatory Glossary Match**: Whenever a term or any of its `also transcribed as` aliases in `Points to Note` appears in a line, you **MUST** use the exact target translation specified in `Points to Note` (never translate a listed proper noun literally).
-   - **Clean Output**: Keep unlisted person names, model numbers, or version codes in their original form. **Never** insert parenthetical source text, explanations in brackets, or translator notes into the subtitles.
-4. **Idiomatic {TARGET_LANGUAGE} Spoken Flow (Zero Translationese)**:
-   - **Strip Spoken Disfluencies**: Completely omit vocal hesitation noises (`uh`, `um`, `er`, `ah`), meaningless discourse fillers (`you know`, `like`, `right?` used as verbal tics, `being like, Okay, uh`), and accidental ASR word repetitions (translate repeated phrases once cleanly unless deliberate emphasis).
-   - **Unpack Post-Modifiers**: Restructure trailing relative/adverbial clauses (`that...`, `which is...`, `when it comes to...`, `in order to...`) into natural {TARGET_LANGUAGE} clause order instead of stacking awkward modifier chains or stiff literal calques.
-   - **Natural Register**: Match the speaker's natural analytical or conversational tone — fluent, clear, and idiomatic in {TARGET_LANGUAGE}, neither stiffly literal nor overly slangy.
-5. **Line-Locked Alignment & Balanced Clause Punctuation**:
-   - Maintain strict 1-to-1 line alignment with the numbered input lines; never shift semantic content across line numbers.
-   - Use natural {TARGET_LANGUAGE} clause punctuation at genuine clause boundaries, and avoid isolating a short 1–2 word sentence-initial conjunction or discourse adverb with a comma when it can flow naturally into the clause.
-</translation_principles>
+## Output Format:
+Provide the translation results strictly in the following JSON format. Fill in the `"direct"` field for each line number with your {TARGET_LANGUAGE} translation.
 
-## INPUT
-<subtitles>
-{lines}
-</subtitles>
-
-## Output in only JSON format and no other text
 ```json
 {json_format}
 ```
 
-Note: Start your answer with ```json and end with ```, do not add any other text.
-"""
-    return prompt_faithfulness.strip()
+Think step-by-step to ensure all instructions and constraints are met before generating the final JSON output.
+""".strip()
+    return prompt_faithfulness
 
 
 def get_prompt_expressiveness(faithfulness_result, lines, shared_prompt):
     TARGET_LANGUAGE = load_key("target_language")
-    json_format = {
-        key: {
-            "origin": value.get("origin", ""),
-            "direct": value["direct"],
-            "reflect": "your reflection on direct translation (or 'OK' if already accurate and natural)",
-            "free": "your refined translation (or exact copy of direct when reflect is 'OK')",
-        }
-        for key, value in faithfulness_result.items()
-    }
-    json_format = json.dumps(json_format, indent=2, ensure_ascii=False)
-
-    src_language = get_source_language()
+    SRC_LANGUAGE = get_source_language()
     style_prompt = get_translation_style_prompt()
+    json_format = {}
+    for key, value in faithfulness_result.items():
+        json_format[str(key)] = {
+            "origin": value.get("origin", ""),
+            "direct": value.get("direct", ""),
+            "reflect": "reflection on the direct translation version (or 'OK' if already accurate and natural)",
+            "free": f"<<请逐行重写为极其自然、地道的{TARGET_LANGUAGE}专业字幕，严格保留术语词典译名，且仅输出最终译文>>",
+        }
+    json_format_str = json.dumps(json_format, indent=4, ensure_ascii=False)
+
     prompt_expressiveness = f"""
-## Role
-You are a professional Netflix subtitle translator and language consultant.
-Your expertise lies not only in accurately understanding the original {src_language} but also in optimizing the {TARGET_LANGUAGE} translation to better suit the target language's expression habits and cultural background.
+## Role: Elite Linguistic Polisher & Guardian of Fidelity
+{style_prompt}
+## Task:
+Critically review the 'direct' {TARGET_LANGUAGE} translation provided for each {SRC_LANGUAGE} 'origin' line. Your primary responsibilities are twofold:
+1. **Guardian of Fidelity**: Ensure the translation is *uncompromisingly faithful* to the deepest meaning, intent, tone, and all nuances of the original {SRC_LANGUAGE} text.
+2. **Artisan of Fluency**: Elevate this faithful translation to achieve the highest level of fluency, naturalness, and idiomaticity, making it indistinguishable from expert-level {TARGET_LANGUAGE} discourse.
+You will produce a 'free' translation that meets these exacting standards, strictly adhering to terminology and proper noun rules.
 
-## Task
-We already have a direct translation version of the original {src_language} subtitles.
-Evaluate and refine each line ONLY where needed to produce accurate, natural {TARGET_LANGUAGE} subtitles:
+## Context:
+- Source Language: {SRC_LANGUAGE}
+- Target Language: {TARGET_LANGUAGE}
+- Input: 'Origin' {SRC_LANGUAGE} lines, their 'direct' (initial faithful) {TARGET_LANGUAGE} translations, and a glossary.
+- Goal: To produce a final 'free' translation that is both a perfect semantic match to the original and a masterpiece of natural {TARGET_LANGUAGE} expression, fully aligning with native cognitive patterns and communication habits.
 
-1. Check each `direct` translation against its `origin` using the 4-Point SubMQM Diagnostic below.
-2. If `direct` is already accurate, faithful to `Points to Note`, and natural in {TARGET_LANGUAGE}, write `"OK"` in `reflect` and copy the **exact full text of `direct`** into `free`.
-3. Only when a concrete issue is found, briefly note the fix in `reflect` and provide the refined {TARGET_LANGUAGE} subtitle in `free`.
-4. Do not add comments, parenthetical source terms, or explanations in the translation, and never leave `free` empty.
+## Core Instructions:
+1. **Scrutinize for Absolute Fidelity & Baseline Assessment**:
+   - **a. Verify against Origin (Critical Step)**: Meticulously compare the 'origin' ({SRC_LANGUAGE}) text with the 'direct' ({TARGET_LANGUAGE}) translation. Your foremost duty is to verify that the 'direct' translation flawlessly captures the complete meaning, intent, tone, and all subtle nuances of the original. Identify and rectify any loss, distortion, omission, or misrepresentation of meaning in the 'direct' translation before proceeding.
+   - **b. Assess Initial Naturalness**: Evaluate adherence to {TARGET_LANGUAGE} grammatical norms, established thinking patterns, reading flow, and auditory conventions.
+2. **Uphold Verified Fidelity**:
+   - The 'free' translation MUST preserve the full meaning, intent, tone, and nuances of the 'origin' text. No aspect of the original meaning shall be compromised for the sake of fluency or stylistic preference.
+3. **Elevate to Expert-Level Naturalness & Idiomaticity**:
+   - Align with {TARGET_LANGUAGE} cognitive sequencing, logical flow, and natural discourse structuring.
+   - Ensure effortless reading flow and authentic auditory cadence (the natural rhythm of spoken {TARGET_LANGUAGE}).
+   - Remove spoken hesitation fillers (`uh`, `um`, `you know`) and awkward translationese or stacked literal calques.
+   - Natural clause punctuation: You may naturally add Chinese commas (，) between clauses to improve readability and sentence rhythm.
+4. **Mandatory Terminology & Proper Noun Preservation**:
+   - **Strict Terminology Enforcement**: Strictly enforce the provided glossary and dictionary in `### 术语库-词典`. Every glossary translation correctly used in 'direct' MUST remain intact in 'free' — never abbreviate, paraphrase, or alter official terms during polishing. When terms appear with inflections (plurals, `'s`, `-ed`, `-ing`), maintain their standard canonical translation.
+   - **Proper Nouns**: Ensure proper nouns (not in glossary) remain intact or in their standard {TARGET_LANGUAGE} form.
+5. **No Additions / Annotations**:
+   - Do NOT add comments, explanations, or alternative translations in parentheses in the 'free' translation field. Never append original source terms in parentheses (e.g., "静谧狩猎", NOT "静谧狩猎 (Still Hunt)").
+6. **Principle of Necessary Enhancement (Keep-if-Flawless)**:
+   - If the 'direct' translation already meets the highest standards of fidelity, naturalness, and terminology adherence, state `"OK"` or `"Direct translation (verified) is flawless and meets all expert criteria."` in `"reflect"` and copy the direct translation into `"free"`. Do not make cosmetic changes for personal preference.
+   - If changes were made, briefly explain what was enhanced in `"reflect"` (e.g., "Elevated to idiomatic flow", "Corrected terminology", "Adjusted clause structure").
 
-{shared_prompt}
-
-{style_prompt}<Translation Analysis Steps>
-Please use a two-step thinking process to handle the text line by line:
-
-1. Direct Translation Reflection (`reflect` — 4-Point SubMQM Diagnostic):
-   - **Accuracy & ASR Recovery**: Check against `origin` for mistranslations, unrecovered ASR homophone/phonetic errors, or shifted meaning across line boundaries.
-   - **Terminology & Cleanliness**: Verify exact adherence to `Points to Note` and ensure no parenthetical source terms or translator notes were inserted.
-   - **Anti-Translationese**: Identify awkward literal calques, stacked modifiers, unnatural passive constructions, or rigid source-language word order that sounds robotic in {TARGET_LANGUAGE}.
-   - **Spoken Cadence, Filler Removal & Conciseness**: Omit meaningless spoken hesitation fillers (`uh`, `um`, `er`, `ah`, redundant discourse fillers) and check whether the line reads like natural spoken {TARGET_LANGUAGE} within a concise subtitle length while preserving natural internal clause punctuation.
-
-2. {TARGET_LANGUAGE} Free Translation (`free` — Targeted Refinement & Keep-if-Flawless):
-   - **Principle of Necessary Enhancement (Keep-if-Flawless)**: If `direct` already passes all four diagnostic checks and sounds like natural native {TARGET_LANGUAGE} speech, write `"OK"` in `reflect` and copy the **full text of `direct`** unchanged into `free` (never write `"OK"` inside `free`). Do not rewrite or substitute synonyms just for the sake of making changes.
-   - **Strict Terminology Preservation**: Every glossary translation from `Points to Note` that was correctly used in `direct` MUST remain intact in `free` — never abbreviate, paraphrase, or drop official terms during polishing.
-   - When issues are found in Step 1, rewrite the line into idiomatic, spoken {TARGET_LANGUAGE} that matches the video's register (e.g., conversational for tutorials/vlogs, precise for technical content, formal for documentaries).
-   - Keep each line's meaning strictly within its own line number (do not merge or shift content across adjacent lines).
-</Translation Analysis Steps>
-
-## INPUT
-<subtitles>
-{lines}
-</subtitles>
-
-## Output in only JSON format and no other text
+## Input Data (Original lines & Direct Translations):
 ```json
-{json_format}
+{json.dumps(faithfulness_result, ensure_ascii=False, indent=2)}
 ```
 
-Note: Start your answer with ```json and end with ```, do not add any other text.
-"""
-    return prompt_expressiveness.strip()
+## Terminology & Shared Context:
+{shared_prompt}
+
+## Output Format:
+Provide your refined translations and reflections strictly in the following JSON format. Fill in the `"reflect"` and `"free"` fields for each line number.
+
+```json
+{json_format_str}
+```
+
+Think step-by-step for each line: analyze, check rules, refine if needed, provide reflection, and format the output correctly.
+""".strip()
+    return prompt_expressiveness
 
 
 ## ================================================================

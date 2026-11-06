@@ -359,7 +359,7 @@ def test_get_summary_merges_chunks_and_custom_terms_consistently(monkeypatch, tm
     saved = ws.load_terms()
     assert "Chunk 0 theme." in saved["summary"]
     terms_by_src = {t["src"]: t["tgt"] for t in saved["terms"]}
-    assert "Vulkan" not in terms_by_src
+    assert terms_by_src["Vulkan"] == "Vulkan 接口"
     assert terms_by_src["Nanite"] == "Nanite 虚拟微多边形"
     assert terms_by_src["Nanites"] == "Nanite 虚拟微多边形"
     assert terms_by_src["Lumen"] == "Lumen 全局光照"
@@ -467,22 +467,25 @@ def test_generate_shared_prompt_formats_list_and_string_context_cleanly():
         "Term notes",
     )
     assert (
-        "<previous_content>\nPrev line 1.\nPrev line 2.\n</previous_content>"
+        "<previous_context>\nPrev line 1.\nPrev line 2.\n</previous_context>"
         in with_lists
     )
     assert (
-        "<subsequent_content>\nNext line 1.\nNext line 2.\n</subsequent_content>"
+        "<subsequent_context>\nNext line 1.\nNext line 2.\n</subsequent_context>"
         in with_lists
     )
+    assert "### 术语库-词典" in with_lists
+    assert "<terminology>\nTerm notes\n</terminology>" in with_lists
     assert "['Prev line 1.'" not in with_lists
 
     with_strings = generate_shared_prompt("prev", "next", "summary", "notes")
-    assert "<previous_content>\nprev\n</previous_content>" in with_strings
-    assert "<subsequent_content>\nnext\n</subsequent_content>" in with_strings
+    assert "<previous_content>" not in with_strings
+    assert "<previous_context>\nprev\n</previous_context>" in with_strings
+    assert "<subsequent_context>\nnext\n</subsequent_context>" in with_strings
 
     with_nones = generate_shared_prompt(None, None, None, None)
-    assert "<previous_content>\n\n</previous_content>" in with_nones
-    assert "<subsequent_content>\n\n</subsequent_content>" in with_nones
+    assert "<previous_context>\n\n</previous_context>" in with_nones
+    assert "<subsequent_context>\n\n</subsequent_context>" in with_nones
     assert "None" not in with_nones
 
 
@@ -543,7 +546,7 @@ def test_valid_translate_result_rejects_empty_strings_and_populates_missing_orig
 
 
 def test_translate_chunk_scans_previous_content_and_chunk_for_terms(monkeypatch):
-    """translate_chunk passes both previous_content (last 4 lines) and current chunk to terminology search."""
+    """translate_chunk passes ONLY the current chunk (not previous/after context) to terminology search."""
     import core._4_2_translate as translate
 
     captured = {}
@@ -570,14 +573,14 @@ def test_translate_chunk_scans_previous_content_and_chunk_for_terms(monkeypatch)
 
     assert captured["prev"] == ["L2", "L3 mentioning Raycasting", "L4", "L5"]
     assert captured["after"] == ["N1", "N2", "N3"]
-    assert "L3 mentioning Raycasting" in captured["search_scope"]
-    assert "Current chunk referring to it." in captured["search_scope"]
+    assert captured["search_scope"] == "Current chunk referring to it."
+    assert "L3 mentioning Raycasting" not in captured["search_scope"]
 
 
 def test_translation_prompts_contain_asr_recovery_and_keep_if_flawless_in_english(
     monkeypatch,
 ):
-    """Both translation prompts contain English instructions for ASR phonetic recovery and Keep-if-Flawless."""
+    """Both translation prompts contain 224-Forme glossary instructions, inflection alignment, and Keep-if-Flawless."""
     import core.prompts as prompts
 
     monkeypatch.setattr(
@@ -594,10 +597,10 @@ def test_translation_prompts_contain_asr_recovery_and_keep_if_flawless_in_englis
         shared,
     )
 
-    assert "ASR Homophone & Phonetic Error Recovery" in faith_prompt
-    assert "Strict Terminology & Clean Proper Nouns" in faith_prompt
+    assert "### 术语库-词典" in faith_prompt
+    assert "Mandatory Terminology Consistency" in faith_prompt
     assert "Principle of Necessary Enhancement (Keep-if-Flawless)" in express_prompt
-    assert "Anti-Translationese" in express_prompt
+    assert "Elite Linguistic Polisher & Guardian of Fidelity" in express_prompt
 
 
 def test_symbol_terms_do_not_pollute_stem_ngram_map_and_aliases_appear_in_prompt(
@@ -722,7 +725,7 @@ def test_merge_terminology_results_unifies_llm_variants_into_canonical_aliases()
 
 
 def test_get_task_terms_api_hides_preexisting_glossary_sources(monkeypatch, tmp_path):
-    """GET /api/tasks/{task_id}/terms returns only newly scanned task terms and hides legacy pre-existing glossary rows."""
+    """GET /api/tasks/{task_id}/terms returns the complete task terminology table including matched authoritative terms."""
     from fastapi.testclient import TestClient
     import api
 
@@ -746,7 +749,7 @@ def test_get_task_terms_api_hides_preexisting_glossary_sources(monkeypatch, tmp_
     res = client.get("/api/tasks/task_terms_filter/terms")
     assert res.status_code == 200
     returned_srcs = [t["src"] for t in res.json()["terms"]]
-    assert returned_srcs == ["NewScannedTerm"]
+    assert returned_srcs == ["OldDomainTerm", "OldGlobalTerm", "NewScannedTerm"]
 
 
 def test_multiword_fuzzy_guards_and_longest_span_suppression(monkeypatch, tmp_path):
@@ -1063,7 +1066,8 @@ def test_prompts_are_domain_and_language_agnostic_and_merge_tiny_clauses_preserv
         target_language="Español",
     )
 
-    assert not re.search(r"[\u4e00-\u9fff]", faith_prompt)
+    assert "### 术语库-词典" in faith_prompt
+    assert "<<请逐行翻译为Español，确保忠实于原文，且仅输出翻译后结果>>" in faith_prompt
     assert not re.search(r"[\u4e00-\u9fff]", consolidate_prompt)
 
     # Sentence-initial lead-in ('但遗憾的是，' = 5 CJK chars, weighted 10.75) merges into following clause
@@ -1096,7 +1100,6 @@ def test_prompt_validators_and_json_escaping_contracts(monkeypatch):
     - get_prompt_expressiveness contains no Chinese characters when target_language is Español
     - _valid_summary rejects empty src/tgt and _merge_terminology_results coerces note=None to ''
     - _restore_window_punctuation valid_punct rejects truncated/unaligned LLM responses."""
-    import re
 
     import core._3_1_split_nlp as s31
     import core._4_1_summarize as s41
@@ -1108,14 +1111,15 @@ def test_prompt_validators_and_json_escaping_contracts(monkeypatch):
     monkeypatch.setattr(prompts, "load_key_or", lambda k, d="": "")
     monkeypatch.setattr(prompts, "get_source_language", lambda: "English")
 
-    # 1. get_prompt_expressiveness has zero hardcoded Chinese when target is Español
+    # 1. get_prompt_expressiveness includes 224-Forme glossary header and Spanish target directive
     shared = prompts.generate_shared_prompt(["Prev"], ["Next"], "Summary", "Notes")
     express_prompt = prompts.get_prompt_expressiveness(
         {"1": {"origin": "Hello world.", "direct": "Hola mundo."}},
         "Hello world.",
         shared,
     )
-    assert not re.search(r"[\u4e00-\u9fff]", express_prompt)
+    assert "### 术语库-词典" in express_prompt
+    assert "Español" in express_prompt
 
     # 2. get_align_prompt properly escapes quotes inside JSON block
     align_p = prompts.get_align_prompt(
@@ -1582,3 +1586,103 @@ def test_review_regressions_code_switched_thai_decimals_and_src_punct_preservati
     saved_u = ws.load_utterances()[0]
     assert saved_u["tgt"] == "NATS运行非常快！"
     assert saved_u["src_punct"] == "Gnats runs fast."
+
+
+def test_inflections_match_search_without_source_replacement_while_asr_aliases_replace(
+    monkeypatch, tmp_path
+):
+    """Singular/plural, possessives ('s), and -ed/-ing inflections match search_things_to_note_in_prompt
+    without being stored in aliases or replacing source text, while ASR phonetic aliases replace source text."""
+    import core._4_1_summarize as s41
+    import core._4_2_translate as s42
+
+    ws = TaskWorkspace(tmp_path / "inflection_ws")
+    ws.ensure_dirs()
+    monkeypatch.setattr(s41, "GLOBAL_GLOSSARY_PATH", str(tmp_path / "no_global.csv"))
+    monkeypatch.setattr(s41, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
+    monkeypatch.setattr(s41, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
+    monkeypatch.setattr(s41, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json"))
+
+    # 1. _normalize_aliases strips grammatical inflections while keeping genuine ASR phonetic aliases
+    assert s41._normalize_aliases(["Wolves", "wolf's", "gally", "Gally"], "Wolf") == [
+        "gally",
+        "Gally",
+    ]
+    assert s41._normalize_aliases(
+        ["weakened", "weakening", "weakens", "weeken"], "Weaken"
+    ) == ["weeken"]
+    assert (
+        s41._normalize_aliases(
+            ["Agers Scepter", "Ager’s Scepters", "ager scepter"], "Ager's Scepter"
+        )
+        == []
+    )
+    assert s41._normalize_aliases(["savathun"], "Savathûn") == ["savathun"]
+
+    terms = [
+        {"src": "Wolf", "tgt": "群狼", "aliases": ["Wolves"], "source": "task"},
+        {
+            "src": "Weaken",
+            "tgt": "削弱",
+            "aliases": ["weakened", "weakening"],
+            "source": "task",
+        },
+        {
+            "src": "Scorch",
+            "tgt": "灼烧",
+            "aliases": ["scorched", "scorching"],
+            "source": "task",
+        },
+        {"src": "Jolt", "tgt": "颠簸", "aliases": ["jolted"], "source": "task"},
+        {
+            "src": "Ignite",
+            "tgt": "点燃",
+            "aliases": ["ignited", "igniting"],
+            "source": "task",
+        },
+        {
+            "src": "Ager's Scepter",
+            "tgt": "阿格尔的权杖",
+            "aliases": ["Agers Scepter"],
+            "source": "task",
+        },
+        {
+            "src": "Gjallarhorn",
+            "tgt": "加拉尔号角",
+            "aliases": ["gally"],
+            "source": "task",
+        },
+        {
+            "src": "Savathûn",
+            "tgt": "萨瓦图恩",
+            "aliases": ["sabathun"],
+            "source": "task",
+        },
+    ]
+    ws.save_terms("Destiny 2", terms)
+
+    # 2. apply_fix_source_terms replaces ASR aliases ('gally', 'sabathun') but NEVER replaces inflections
+    src_line = "The Wolves are weakened, scorched, jolted, and igniting while using Agers Scepter and gally against sabathun."
+    fixed_line = s42.apply_fix_source_terms(src_line, terms)
+    assert (
+        fixed_line
+        == "The Wolves are weakened, scorched, jolted, and igniting while using Agers Scepter and Gjallarhorn against Savathûn."
+    )
+
+    # 3. search_things_to_note_in_prompt matches all canonical entries from the inflected words in the chunk
+    with workspace_context(ws):
+        note_prompt = s41.search_things_to_note_in_prompt(fixed_line)
+    assert note_prompt is not None
+    for canonical, zh in (
+        ("Wolf", "群狼"),
+        ("Weaken", "削弱"),
+        ("Scorch", "灼烧"),
+        ("Jolt", "颠簸"),
+        ("Ager's Scepter", "阿格尔的权杖"),
+        ("Gjallarhorn", "加拉尔号角"),
+        ("Savathûn", "萨瓦图恩"),
+    ):
+        assert f'"{canonical}"' in note_prompt and f'"{zh}"' in note_prompt
+    assert '"点燃"' in note_prompt and (
+        '"Ignite"' in note_prompt or '"Ignition"' in note_prompt
+    )

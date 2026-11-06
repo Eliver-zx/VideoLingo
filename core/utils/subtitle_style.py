@@ -23,13 +23,13 @@ DEFAULT_STYLE = {
         "outline_width": 1,
     },
     "translation": {
-        "font_name": "",
+        "font_name": "抖音美好体",
         "font_size": 17,
         "font_color": "&H00FFFF",
         "outline_color": "&H000000",
-        "outline_width": 1,
+        "outline_width": 1.5,
         "back_color": "&H33000000",
-        "margin_v": 27,
+        "margin_v": 5,
     },
 }
 COLOR_KEYS = {"font_color", "outline_color", "back_color"}
@@ -37,25 +37,27 @@ COLOR_KEYS = {"font_color", "outline_color", "back_color"}
 BURN_MODES = ("bilingual", "translation", "source")
 # The key of each video in config.yaml and what it shows without the key
 BURN_MODE_KEYS = {
-    "subtitle": ("subtitle.sub_video_subtitles", "bilingual"),
+    "subtitle": ("subtitle.sub_video_subtitles", "translation"),
     "dubbed": ("subtitle.dub_video_subtitles", "translation"),
 }
 
 
 def default_font():
     # Linux needs the Google Noto fonts: apt-get install fonts-noto
-    return {"Linux": "NotoSansCJK-Regular", "Darwin": "Arial Unicode MS"}.get(
-        platform.system(), "Arial"
-    )
+    return {
+        "Linux": "NotoSansCJK-Regular",
+        "Darwin": "抖音美好体",
+        "Windows": "抖音美好体",
+    }.get(platform.system(), "抖音美好体")
 
 
 def cjk_default_font() -> str:
     """System-native CJK font family name recognized by libass / Fontconfig / DirectWrite / CoreText."""
     return {
-        "Darwin": "PingFang SC",
+        "Darwin": "抖音美好体",
         "Linux": "Noto Sans CJK SC",
-        "Windows": "Microsoft YaHei",
-    }.get(platform.system(), "Arial")
+        "Windows": "抖音美好体",
+    }.get(platform.system(), "抖音美好体")
 
 
 def to_ass_color(value):
@@ -143,7 +145,7 @@ def get_force_style(kind):
             f"BackColour={style['back_color']}",
             "Alignment=2",
             f"MarginV={style['margin_v']}",
-            "BorderStyle=4",
+            "BorderStyle=1",
         ]
     else:
         parts.append("BorderStyle=1")
@@ -241,6 +243,9 @@ def build_ass_from_srt_pair(
     short_side = min(w, h)
     scale = short_side / 288.0
 
+    if mode != "translation" and (not source_srt or not Path(source_srt).is_file()):
+        mode = "translation"
+
     src_style = get_subtitle_style("source")
     tr_style = get_subtitle_style("translation")
 
@@ -248,22 +253,19 @@ def build_ass_from_srt_pair(
     tr_font = tr_style["font_name"] or cjk_default_font()
     src_size = max(12, int(round(float(src_style["font_size"]) * scale)))
     tr_size = max(14, int(round(float(tr_style["font_size"]) * scale)))
-    src_outline = max(1, int(round(float(src_style["outline_width"]) * scale * 0.6)))
-    tr_outline = max(1, int(round(float(tr_style["outline_width"]) * scale * 0.6)))
+    src_outline = max(1, int(round(float(src_style["outline_width"]) * scale)))
+    tr_outline = max(1, int(round(float(tr_style["outline_width"]) * scale)))
     src_margin_v = max(12, int(round(10 * scale)))
-    tr_margin_v = max(
-        src_margin_v + src_size + 6, int(round(float(tr_style["margin_v"]) * scale))
-    )
+    if mode == "bilingual":
+        tr_margin_v = max(
+            src_margin_v + src_size + 6, int(round(float(tr_style["margin_v"]) * scale))
+        )
+    else:
+        tr_margin_v = max(12, int(round(float(tr_style["margin_v"]) * scale)))
     margin_lr = max(20, int(round(w * 0.04)))
 
-    if mode != "translation" and (not source_srt or not Path(source_srt).is_file()):
-        mode = "translation"
-
-    tr_back = str(tr_style["back_color"]).upper()
-    # Transparent background (`&HFF...`) renders with contour outline + soft shadow (BorderStyle=1)
-    # instead of an opaque bounding box (BorderStyle=4).
-    tr_border_style = 1 if tr_back.startswith("&HFF") else 4
-    tr_shadow = 1 if tr_border_style == 1 else 0
+    tr_border_style = 1
+    tr_shadow = 1
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -286,15 +288,55 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             events.append(f"Dialogue: 0,{s_ts},{e_ts},Source,,0,0,0,,{txt}")
     if mode in ("bilingual", "translation") and translation_srt:
         for s_ts, e_ts, txt in parse_srt_file(translation_srt):
-            margin_override = 0 if mode == "bilingual" else src_margin_v
-            events.append(
-                f"Dialogue: 1,{s_ts},{e_ts},Translation,,0,0,{margin_override},,{txt}"
-            )
+            events.append(f"Dialogue: 1,{s_ts},{e_ts},Translation,,0,0,0,,{txt}")
 
     out = Path(ass_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(header + "\n".join(events) + "\n", encoding="utf-8")
+    _ensure_libass_ffmpeg_on_path()
     return out
+
+
+@functools.lru_cache(maxsize=1)
+def _ensure_libass_ffmpeg_on_path() -> None:
+    """On macOS where Homebrew core ffmpeg 8+ omits libass, prepend ffmpeg-full or static_ffmpeg if installed."""
+    if platform.system() != "Darwin":
+        return
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-nostdin", "-hide_banner", "-filters"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=5,
+        )
+        out = proc.stdout or ""
+        if len(out) < 500 or re.search(r"\bass\b", out):
+            return
+    except Exception:
+        return
+
+    home = Path.home()
+    candidates = [
+        Path("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"),
+        Path("/usr/local/opt/ffmpeg-full/bin/ffmpeg"),
+        *sorted(
+            home.glob("miniconda3/lib/python*/site-packages/static_ffmpeg/bin/*/ffmpeg")
+        ),
+        *sorted(
+            home.glob("anaconda3/lib/python*/site-packages/static_ffmpeg/bin/*/ffmpeg")
+        ),
+    ]
+    for cand in candidates:
+        if cand.is_file():
+            os.environ["PATH"] = (
+                f"{cand.parent}{os.pathsep}{os.environ.get('PATH', '')}"
+            )
+            _available_ffmpeg_encoders.cache_clear()
+            _available_ffmpeg_filters.cache_clear()
+            break
 
 
 def escape_ffmpeg_filter_path(path: str | Path) -> str:
@@ -434,39 +476,26 @@ def get_optimal_video_encoder_args(use_gpu: bool = False) -> list[str]:
         encoders = _available_ffmpeg_encoders()
         sys_name = platform.system()
         if sys_name == "Darwin" and "h264_videotoolbox" in encoders:
-            return ["-c:v", "h264_videotoolbox", "-q:v", "65", "-pix_fmt", "yuv420p"]
+            return [
+                "-c:v",
+                "h264_videotoolbox",
+                "-realtime",
+                "true",
+                "-prio_speed",
+                "true",
+                "-b:v",
+                "6000k",
+                "-pix_fmt",
+                "yuv420p",
+            ]
         if "h264_nvenc" in encoders:
             return [
                 "-c:v",
                 "h264_nvenc",
                 "-preset",
-                "p5",
-                "-tune",
-                "hq",
-                "-profile:v",
-                "high",
-                "-rc",
-                "vbr",
-                "-cq",
-                "23",
+                "p1",
                 "-b:v",
-                "0",
-                "-maxrate",
                 "6000k",
-                "-bufsize",
-                "12000k",
-                "-spatial-aq",
-                "1",
-                "-aq-strength",
-                "8",
-                "-temporal-aq",
-                "1",
-                "-rc-lookahead",
-                "20",
-                "-bf",
-                "3",
-                "-b_ref_mode",
-                "middle",
                 "-pix_fmt",
                 "yuv420p",
             ]
@@ -481,8 +510,8 @@ def get_optimal_video_encoder_args(use_gpu: bool = False) -> list[str]:
         "libx264",
         "-preset",
         "veryfast",
-        "-crf",
-        "20",
+        "-b:v",
+        "6000k",
         "-pix_fmt",
         "yuv420p",
     ]

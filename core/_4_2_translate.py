@@ -5,7 +5,11 @@ import re
 import pandas as pd
 from core.concurrency import ContextThreadPoolExecutor
 from core.translate_lines import translate_lines
-from core._4_1_summarize import _get_term_index, search_things_to_note_in_prompt
+from core._4_1_summarize import (
+    _get_term_index,
+    _tokenize_and_normalize,
+    search_things_to_note_in_prompt,
+)
 from core._6_gen_sub import align_timestamp
 from core.utils import (
     check_cancel,
@@ -21,22 +25,69 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 console = Console()
 
 
+def _norm_e(tok: str) -> str:
+    return (
+        tok[:-1]
+        if len(tok) >= 4
+        and tok.endswith("e")
+        and not tok.endswith(("ee", "ie", "ye", "oe"))
+        else tok
+    )
+
+
+def _is_inflection_candidate(cand: str, canonical: str) -> bool:
+    if not cand or not canonical:
+        return False
+    if not canonical.isascii() and cand.isascii():
+        return False
+    _, cand_stems = _tokenize_and_normalize(cand)
+    _, canon_stems = _tokenize_and_normalize(canonical)
+    if not cand_stems or len(cand_stems) != len(canon_stems):
+        return False
+    return [_norm_e(x) for x in cand_stems] == [_norm_e(x) for x in canon_stems]
+
+
 def apply_fix_source_terms(text: str, terms: list[dict]) -> str:
     """Rewrite ASR alias variants into canonical ``src`` when ``fix_source`` is enabled on a term."""
     if not text or not terms:
         return text
+    canonical_lows = {
+        str(e.get("src") or "").strip().lower()
+        for e in terms
+        if isinstance(e, dict) and str(e.get("src") or "").strip()
+    }
     out = text
     for entry in terms:
-        if not isinstance(entry, dict) or not entry.get("fix_source"):
+        if not isinstance(entry, dict):
+            continue
+        is_task_alias = (
+            bool(entry.get("aliases"))
+            and str(entry.get("source") or "task") == "task"
+            and entry.get("fix_source") is not False
+        )
+        if not (entry.get("fix_source") or is_task_alias):
             continue
         canonical = str(entry.get("src") or "").strip()
         if not canonical:
             continue
         raw_aliases = entry.get("aliases") or []
-        candidates = [str(a).strip() for a in raw_aliases if str(a).strip()] + [
-            canonical
-        ]
+        candidates: list[str] = []
+        for a in raw_aliases:
+            a_str = str(a).strip()
+            if not a_str:
+                continue
+            a_low = a_str.lower()
+            if (
+                a_low != canonical.lower()
+                and a_low not in canonical_lows
+                and not _is_inflection_candidate(a_str, canonical)
+            ):
+                candidates.append(a_str)
+        if entry.get("fix_source"):
+            candidates.append(canonical)
         for cand in sorted(set(candidates), key=len, reverse=True):
+            if not cand:
+                continue
             if re.match(r"^[\w\s\.\-]+$", cand, flags=re.ASCII):
                 toks = re.findall(r"\w+", cand, flags=re.ASCII)
                 if len(toks) >= 2:
@@ -57,7 +108,7 @@ def apply_fix_source_terms(text: str, terms: list[dict]) -> str:
 
 
 # Function to split text into chunks
-def split_chunks_by_chars(chunk_size=2400, max_i=15):
+def split_chunks_by_chars(chunk_size: int | None = None, max_i: int = 20):
     """Split text into chunks based on character count, return a list of multi-line text chunks"""
     ws = get_active_workspace()
     utts = ws.load_utterances()
@@ -69,7 +120,14 @@ def split_chunks_by_chars(chunk_size=2400, max_i=15):
         return []
 
     terms = _get_term_index().get("terms", [])
-    has_fix = any(isinstance(t, dict) and t.get("fix_source") for t in terms)
+    has_fix = any(
+        isinstance(t, dict)
+        and (
+            t.get("fix_source")
+            or (t.get("aliases") and str(t.get("source") or "task") == "task")
+        )
+        for t in terms
+    )
     has_prev_punct = any(isinstance(u, dict) and u.get("src_punct") for u in utts)
     if has_fix or has_prev_punct:
         base_sentences = [
@@ -92,7 +150,10 @@ def split_chunks_by_chars(chunk_size=2400, max_i=15):
     chunk = ""
     sentence_count = 0
     for sentence in sentences:
-        if len(chunk) + len(sentence + "\n") > chunk_size or sentence_count == max_i:
+        exceeds_chars = chunk_size is not None and (
+            len(chunk) + len(sentence + "\n") > chunk_size
+        )
+        if exceeds_chars or sentence_count == max_i:
             if (
                 chunk.strip()
             ):  # a first sentence longer than chunk_size leaves nothing to flush
@@ -143,18 +204,7 @@ class ChunkTranslateResult(tuple):
 def translate_chunk(chunk, chunks, theme_prompt, i):
     previous_content_prompt = get_previous_content(chunks, i)
     after_content_prompt = get_after_content(chunks, i)
-    prev_str = (
-        "\n".join(previous_content_prompt)
-        if isinstance(previous_content_prompt, list)
-        else str(previous_content_prompt or "")
-    )
-    after_str = (
-        "\n".join(after_content_prompt)
-        if isinstance(after_content_prompt, list)
-        else str(after_content_prompt or "")
-    )
-    search_scope = "\n".join(part for part in (chunk, prev_str, after_str) if part)
-    things_to_note_prompt = search_things_to_note_in_prompt(search_scope)
+    things_to_note_prompt = search_things_to_note_in_prompt(chunk)
     res = translate_lines(
         chunk,
         previous_content_prompt,
@@ -218,7 +268,7 @@ def _load_cached_raw_translation(
 @check_file_exists("translate")
 def translate_all():
     console.print("[bold green]Start Translating All...[/bold green]")
-    chunks = split_chunks_by_chars(chunk_size=2400, max_i=15)
+    chunks = split_chunks_by_chars(max_i=20)
     expected_sources = [
         line for chunk in chunks for line in chunk.split("\n") if line.strip()
     ]

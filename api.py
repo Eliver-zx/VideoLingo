@@ -796,20 +796,11 @@ def invalidate_task_stage(task_id: str, request: InvalidateStageRequest):
     return {"invalidated": invalidated}
 
 
-_PREEXISTING_TERM_SOURCES = {"domain_kb", "global_kb", "custom", "term_map"}
-
-
 @app.get("/api/tasks/{task_id}/terms")
 def get_task_terms(task_id: str):
     ws = _resolve_workspace(task_id)
     if ws.has_terms():
-        data = ws.load_terms()
-        data["terms"] = [
-            t
-            for t in (data.get("terms") or [])
-            if str(t.get("source") or "task") not in _PREEXISTING_TERM_SOURCES
-        ]
-        return data
+        return ws.load_terms()
     return {"summary": "", "terms": []}
 
 
@@ -844,9 +835,6 @@ def update_task_terms(task_id: str, request: TermsUpdateRequest):
     summary = (
         request.summary if request.summary is not None else current.get("summary", "")
     )
-    ws.save_terms(summary, request.terms)
-    loaded = ws.load_terms()
-
     to_promote = [
         t
         for t in request.terms
@@ -857,6 +845,8 @@ def update_task_terms(task_id: str, request: TermsUpdateRequest):
         if (to_promote and task_domain)
         else 0
     )
+    ws.save_terms(summary, request.terms)
+    loaded = ws.load_terms()
     return {
         "saved": len(loaded["terms"]),
         "promoted_to_domain": promoted,
