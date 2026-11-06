@@ -164,6 +164,11 @@ _model_cache/
 .DS_Store
 AllinOne.ipynb
 config.backup.yaml
+/config.yaml
+/glossary/
+/custom_terms.xlsx
+/Term.csv
+/term-map.json
 
 # runtime
 runtime/

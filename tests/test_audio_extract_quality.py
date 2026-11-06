@@ -397,7 +397,12 @@ def test_optional_config_key_falls_back_without_error(monkeypatch):
 
 def test_shipped_config_restores_v2_extraction_defaults():
     yaml = pytest.importorskip("yaml")
-    config = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
+    cfg_src = (
+        ROOT / "config.example.yaml"
+        if (ROOT / "config.example.yaml").is_file()
+        else ROOT / "config.yaml"
+    )
+    config = yaml.safe_load(cfg_src.read_text(encoding="utf-8"))
     assert config["audio"] == {"raw_sample_rate": 44100, "raw_bitrate": "192k"}
 
 

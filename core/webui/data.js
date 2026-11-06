@@ -15,6 +15,7 @@
 
     /** @type {Array<{id: string, kind: string, step: string, title: string, meta: string, time: string, desc: string}>} */
     const DEFAULT_PIPELINE_BATCH_NODES = [
+      { id: 'runtime-log', kind: 'summary', step: 'LOG', title: '运行日志', meta: '0 条', time: '', desc: '运行日志 (runtime.log)' },
       { id: 'all', kind: 'summary', step: 'ALL', title: '全部字幕', meta: '0 句', time: '', desc: '全部字幕 (0 句)' },
       { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: '未开始', time: '', desc: '语音识别' },
       { id: 'nlp-all', kind: 'step', step: '02', title: '标点与断句', meta: '0 句', time: '', desc: '标点与断句' },

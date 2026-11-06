@@ -12,6 +12,7 @@ import unicodedata
 from ruamel.yaml import YAML
 
 CONFIG_PATH = "config.yaml"
+CONFIG_EXAMPLE_PATH = Path(__file__).resolve().parents[2] / "config.example.yaml"
 lock = threading.Lock()
 
 yaml = YAML()
@@ -53,6 +54,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "qwen_model": "1.7b",
         "qwen_engine": "auto",
         "model": "large-v3",
+        "mimo_api_key": "",
+        "mimo_model": "mimo-v2.5-asr",
         "elevenlabs_api_key": "",
         "mai_api_key": "",
         "mai_region": "",
@@ -295,6 +298,8 @@ def _load_cached_config_dict(config_path: str | Path = CONFIG_PATH) -> dict[str,
     global _CACHED_CONFIG_STAT, _CACHED_CONFIG_DATA
     target = Path(config_path)
     with lock:
+        if not target.is_file() and CONFIG_EXAMPLE_PATH.is_file():
+            target = CONFIG_EXAMPLE_PATH
         resolved = str(target.resolve())
         st = target.stat()
         stat_key = (resolved, st.st_ino, st.st_mtime_ns, st.st_size)
@@ -413,10 +418,24 @@ def _sync_active_override_on_update(key: str, new_value: Any) -> None:
     _TASK_CONFIG_OVERRIDES.set(updated)
 
 
+def _materialize_config_file(target: Path) -> None:
+    if target.is_file():
+        return
+    if CONFIG_EXAMPLE_PATH.is_file():
+        with open(CONFIG_EXAMPLE_PATH, "r", encoding="utf-8") as src_f:
+            seed = yaml.load(src_f)
+        if isinstance(seed, dict):
+            _atomic_dump_yaml(seed, target)
+            return
+    _atomic_dump_yaml(copy.deepcopy(DEFAULT_CONFIG), target)
+
+
 def update_key(key: str, new_value: Any, add_missing: bool = False) -> bool:
     """Atomically set an existing key in `config.yaml`; `add_missing=True` also creates missing parent/leaf keys."""
     with lock:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as file:
+        target = Path(CONFIG_PATH)
+        _materialize_config_file(target)
+        with open(target, "r", encoding="utf-8") as file:
             data = yaml.load(file)
         if data is None:
             data = {}
@@ -439,7 +458,7 @@ def update_key(key: str, new_value: Any, add_missing: bool = False) -> bool:
             # Keep manual source-language changes atomic for UI and CLI callers.
             if key == "whisper.language" and new_value != "auto":
                 current["detected_language"] = new_value
-            _atomic_dump_yaml(data, CONFIG_PATH)
+            _atomic_dump_yaml(data, target)
             _sync_active_override_on_update(key, new_value)
             return True
         else:
@@ -451,7 +470,9 @@ def update_keys(updates: dict[str, Any], add_missing: bool = True) -> bool:
     if not updates:
         return True
     with lock:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as file:
+        target = Path(CONFIG_PATH)
+        _materialize_config_file(target)
+        with open(target, "r", encoding="utf-8") as file:
             data = yaml.load(file)
         if data is None:
             data = {}
@@ -478,7 +499,7 @@ def update_keys(updates: dict[str, Any], add_missing: bool = True) -> bool:
             else:
                 raise KeyError(f"Key '{keys[-1]}' not found in configuration")
 
-        _atomic_dump_yaml(data, CONFIG_PATH)
+        _atomic_dump_yaml(data, target)
         for key, new_value in updates.items():
             _sync_active_override_on_update(key, new_value)
         return True
@@ -489,7 +510,7 @@ def ensure_config_schema(config_path: str | Path | None = None) -> bool:
     target = Path(config_path if config_path is not None else CONFIG_PATH)
     if not target.is_file():
         with lock:
-            _atomic_dump_yaml(copy.deepcopy(DEFAULT_CONFIG), target)
+            _materialize_config_file(target)
         return True
 
     with lock:

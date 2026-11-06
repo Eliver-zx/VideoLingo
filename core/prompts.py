@@ -167,11 +167,13 @@ def get_summary_prompt(
 ## 2. 核心任务
 1. **主题总结 (`theme`)**：用两句话精炼概括当前文本块的核心主题与讨论要点。
 2. **权威术语核对与别名提取**：下方 `# terms_note` 是当前文本块中预先匹配出的权威参考术语列表。
-   - 检查原文 `<text>` 中是否存在这些权威术语的 **ASR 语音/拼写讹误**（如因发音相近被语音转文字打错的词）。若有，将标准术语填入 `src`，标准译名填入 `tgt`，并将原文中出现的具体 ASR 错词/同音词填入 `aliases` 数组中。
-   - **绝对严禁**：严禁将名词单复数（如 shotgun/shotguns）、名词所有格（`'s`）或动词时态词形变化（`-ed`, `-ing`）等正常语法变形当作 ASR 错词填入 `aliases`！`aliases` **仅限真正的 ASR 拼写/同音识别错误**（例如 `"gally"` 对应 `"Gjallarhorn"`，`"trench barrel"` 被 ASR 识别成拼写错词等）。
-3. **提取新术语**：提取原文 `<text>` 中未在下方列出但属于专有名词、武器、技能、游戏/业务机制、地名、人名、领域行话的新术语，并给出准确的 {tgt_lang} 译名。
-   - 常用通用词汇（如 system, player, video, update 等字面直译无歧义词）严禁提取。
-   - `tgt` 必须为干净无括号的中文译名，解释说明放入 `note`。
+   - 检查原文 `<text>` 中是否实际使用了这些术语及其 **ASR 语音/拼写讹误**（如因发音相近被语音转文字打错的词）。若有，将标准术语填入 `src`，标准译名填入 `tgt`，并将原文中出现的具体 ASR 错词/同音词填入 `aliases` 数组中。
+   - 若 `# terms_note` 中的某条一词多义词（如 `Super`, `adds`, `build`）在当前 `<text>` 中仅作为普通日常副词/动词使用（如 `"super complicated"`, `"want to add"`），请忽略该词，不要将其输出到 `terms`。
+   - **绝对严禁**：严禁将名词单复数（如 shotgun/shotguns）、名词所有格（`'s`）、动词时态变化（`-ed`, `-ing`）或包含该词的其他独立词组（如把 `"build score"` 当成 `"build"` 的别名）填入 `aliases`！`aliases` **仅限指代同一实体的真正 ASR 拼写/同音识别错误或常用简称**。
+3. **提取新术语**：提取原文 `<text>` 中未在下方列出但属于专有名词、扩展包/副本/活动名、核心系统与界面模块、武器、技能、游戏/业务机制、地名、人名、领域行话的新术语，并给出准确的 {tgt_lang} 译名。
+   - **优先提取完整复合专有名词**（如 `Seasonal Hub`、`Vanguard Alerts`、`Player Stakes`、`Order System`、`Returner's Gift`），不要拆成孤立的单个普通词。
+   - 常用通用词汇（如 system, player, video, update, missions, activities 等字面直译无歧义词）严禁提取。
+   - `tgt` 必须为干净无括号、无句号的中文译名，解释说明放入 `note`。
 
 # terms_note
 {terms_note}
@@ -343,8 +345,9 @@ Translate the provided {SRC_LANGUAGE} text lines (from video context) into {TARG
    - **Inflection Rule**: When a term appears in the original text in plural form, possessive (`'s`), or verb inflections (`-ed`, `-ing`), you **MUST** use the canonical official translation from `### 术语库-词典` corresponding to its base term, integrating it accurately and grammatically into the sentence. It is strictly forbidden to invent alternative translations or translate it literally.
 5. **Proper Noun Handling**:
    - Preserve unlisted proper nouns (people, places, brands, model numbers) in their original form unless a standard recognized {TARGET_LANGUAGE} equivalent exists.
-6. **No Additions or Parentheses**:
+6. **No Additions, Parentheses, or Book Title Marks**:
    - Do NOT add annotations, explanations, or source terms in parentheses (e.g., translate "Still Hunt" to "静谧狩猎", NEVER "静谧狩猎 (Still Hunt)").
+   - Do NOT use book title marks (`《》` or `〈〉`) in subtitles; use quotation marks (`“”`) or plain text for game/work titles instead.
 
 ## Reference Examples:
 * Original: "Hey guys, welcome back to the channel!" -> Translation: "大家好，欢迎回到频道！" (Informal, direct, aligns with spoken language habits, natural punctuation)
@@ -415,8 +418,9 @@ You will produce a 'free' translation that meets these exacting standards, stric
 4. **Mandatory Terminology & Proper Noun Preservation**:
    - **Strict Terminology Enforcement**: Strictly enforce the provided glossary and dictionary in `### 术语库-词典`. Every glossary translation correctly used in 'direct' MUST remain intact in 'free' — never abbreviate, paraphrase, or alter official terms during polishing. When terms appear with inflections (plurals, `'s`, `-ed`, `-ing`), maintain their standard canonical translation.
    - **Proper Nouns**: Ensure proper nouns (not in glossary) remain intact or in their standard {TARGET_LANGUAGE} form.
-5. **No Additions / Annotations**:
+5. **No Additions / Annotations / Book Title Marks**:
    - Do NOT add comments, explanations, or alternative translations in parentheses in the 'free' translation field. Never append original source terms in parentheses (e.g., "静谧狩猎", NOT "静谧狩猎 (Still Hunt)").
+   - Do NOT use book title marks (`《》` or `〈〉`) in subtitles; use quotation marks (`“”`) or plain text for game/work titles instead.
 6. **Principle of Necessary Enhancement (Keep-if-Flawless)**:
    - If the 'direct' translation already meets the highest standards of fidelity, naturalness, and terminology adherence, state `"OK"` or `"Direct translation (verified) is flawless and meets all expert criteria."` in `"reflect"` and copy the direct translation into `"free"`. Do not make cosmetic changes for personal preference.
    - If changes were made, briefly explain what was enhanced in `"reflect"` (e.g., "Elevated to idiomatic flow", "Corrected terminology", "Adjusted clause structure").

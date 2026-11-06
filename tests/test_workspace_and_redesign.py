@@ -200,7 +200,12 @@ def test_proportional_subtitle_split_reruns_on_max_length_increase(
     tmp_path: Path, monkeypatch
 ):
     """Step 5 records (max_length, multiplier) in project.sqlite utterances and re-runs when max_length increases."""
-    root_cfg = Path(__file__).resolve().parents[1] / "config.yaml"
+    root_dir = Path(__file__).resolve().parents[1]
+    root_cfg = (
+        root_dir / "config.example.yaml"
+        if (root_dir / "config.example.yaml").is_file()
+        else root_dir / "config.yaml"
+    )
     (tmp_path / "config.yaml").write_text(
         root_cfg.read_text(encoding="utf-8"), encoding="utf-8"
     )
@@ -1784,7 +1789,12 @@ def test_config_stat_cache_zero_latency_sync_and_bidirectional_overrides(
     tmp_path: Path, monkeypatch
 ):
     """load_key caches parsed YAML via (path, st_mtime_ns, st_size), syncs immediately on update_key or external file edits, and normalizes task_config_context overrides."""
-    root_cfg = Path(__file__).resolve().parents[1] / "config.yaml"
+    root_dir = Path(__file__).resolve().parents[1]
+    root_cfg = (
+        root_dir / "config.example.yaml"
+        if (root_dir / "config.example.yaml").is_file()
+        else root_dir / "config.yaml"
+    )
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(root_cfg.read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.setattr(config_utils, "CONFIG_PATH", str(cfg_file))
@@ -2154,7 +2164,7 @@ def test_windows_nvenc_cuda_filter_and_ntfs_resilience(tmp_path: Path, monkeypat
     from core.utils import subtitle_style
     from core.workspace import replace_with_retry, rmtree_robust
 
-    # 1. NVENC encoder args (speed-first p1 preset + 6000k bitrate + yuv420p)
+    # 1. NVENC encoder args (speed-first p1 preset + VBR max 6000k + yuv420p)
     monkeypatch.setattr(subtitle_style.platform, "system", lambda: "Windows")
     monkeypatch.setattr(
         subtitle_style,
@@ -2167,11 +2177,43 @@ def test_windows_nvenc_cuda_filter_and_ntfs_resilience(tmp_path: Path, monkeypat
         "h264_nvenc",
         "-preset",
         "p1",
-        "-b:v",
+        "-rc",
+        "vbr",
+        "-cq",
+        "23",
+        "-maxrate",
         "6000k",
+        "-bufsize",
+        "12000k",
         "-pix_fmt",
         "yuv420p",
     ]
+
+    monkeypatch.setattr(subtitle_style.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        subtitle_style,
+        "_available_ffmpeg_encoders",
+        lambda: frozenset({"h264_videotoolbox", "libx264"}),
+    )
+    vt_args = subtitle_style.get_optimal_video_encoder_args(use_gpu=True)
+    assert vt_args == [
+        "-c:v",
+        "h264_videotoolbox",
+        "-q:v",
+        "65",
+        "-maxrate",
+        "6000k",
+        "-bufsize",
+        "12000k",
+        "-pix_fmt",
+        "yuv420p",
+    ]
+    monkeypatch.setattr(subtitle_style.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        subtitle_style,
+        "_available_ffmpeg_encoders",
+        lambda: frozenset({"h264_nvenc", "libx264"}),
+    )
 
     # 2. CUDA decode + scale_cuda NV12->YUV420P pre-conversion before libass
     monkeypatch.setattr(

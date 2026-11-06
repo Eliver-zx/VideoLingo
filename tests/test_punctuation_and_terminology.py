@@ -1759,3 +1759,50 @@ def test_inflections_match_search_without_source_replacement_while_asr_aliases_r
     assert '"点燃"' in note_prompt and (
         '"Ignite"' in note_prompt or '"Ignition"' in note_prompt
     )
+
+
+def test_book_marks_replaced_with_quotes_and_clause_stitching_guard():
+    """Verify book title marks are replaced with quotation marks without half-stripping, and complete sentences before 'While X, Y.' are not comma-stitched."""
+    import core._3_1_split_nlp as s31
+    import core._5_split_sub as s5
+    import core._6_gen_sub as s6
+
+    # 1. Book title marks replaced by quotes and never half-stripped by _LEADING_PUNCT_RE
+    src_line = " Destiny 2 can definitely be an intimidating game to get into, and there is a lot that the game never tells you."
+    tr_line = "《命运2》确实是一款让人望而生畏的入门游戏，而且游戏里有很多东西从来不会告诉你。"
+    res = s5._try_local_clause_split(src_line, tr_line, 60, 1.5)
+    assert res is not None
+    split_src, split_tr, _ = res
+    assert len(split_tr) == 2
+    assert split_tr[0].startswith("“命运2”")
+    assert "《" not in "".join(split_tr) and "》" not in "".join(split_tr)
+    assert s6.clean_translation("《命运2》回归玩家〈指南〉") == "“命运2”回归玩家‘指南’"
+
+    # 2. _stitch_incomplete_clause_spans does not stitch a complete sentence with a following "While X, Y." two-clause sentence
+    words = [
+        "Right",
+        "now",
+        "the",
+        "Portal",
+        "is",
+        "the",
+        "core",
+        "of",
+        "Destiny",
+        "2",
+        "while",
+        "that",
+        "might",
+        "change",
+        "soon",
+        "it",
+        "is",
+        "worth",
+        "understanding",
+    ]
+    punct = {9: ".", 14: ",", 18: "."}
+    gaps = [0.05] * len(words)
+    spans = [(0, 9), (10, 18)]
+    stitched = s31._stitch_incomplete_clause_spans(spans, words, punct, gaps)
+    assert stitched == [(0, 9), (10, 18)]
+    assert punct[9] == "."

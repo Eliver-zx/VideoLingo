@@ -28,7 +28,7 @@ whisper:
   # Recognition language ISO 639-1, or "auto"
   language: 'en'
   detected_language: 'en'
-  # Recognition runtime: "local" (default), "elevenlabs", "mai", "deepgram", "assembly", "zero", "replicate_parakeet", "replicate_whisper".
+  # Recognition runtime: "local" (default), "mimo", "elevenlabs", "mai", "deepgram", "assembly", "zero", "replicate_parakeet", "replicate_whisper".
   runtime: 'local'
   # Local ASR backend: "qwen" (default: Qwen3-ASR + Qwen3-ForcedAligner-0.6B) or "whisperx".
   # whisperx is not installed by the installer. Install its packages yourself from
@@ -41,6 +41,9 @@ whisper:
   # *WhisperX only: large-v3. A name containing "turbo" (including large-v3-turbo) is
   # rewritten to large-v3 before loading. For zh, WhisperX forces Belle/large-v3 and ignores this.
   model: 'large-v3'
+  # Xiaomi MiMo ASR settings
+  mimo_api_key: ''
+  mimo_model: 'mimo-v2.5-asr'
   # ElevenLabs API key (experimental)
   elevenlabs_api_key: 'your_elevenlabs_api_key'
   # Azure Speech key and region for optional MAI-Transcribe-2. Leave the region

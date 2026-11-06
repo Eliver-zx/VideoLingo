@@ -314,6 +314,8 @@ def _stem_en_token(token: str) -> str:
     t = token.lower()
     if t in _IRREGULAR_LEMMAS:
         return _IRREGULAR_LEMMAS[t]
+    if t == "adds":
+        return "add"
     if len(t) <= 3 or not t.isascii() or not t.isalpha() or t in _INVARIANT_WORDS:
         return t
     if t.endswith("ies") and len(t) > 4:
@@ -593,7 +595,7 @@ def _extract_generic_kb_pairs(
         )
         if isinstance(src_val, str) and isinstance(tgt_val, str):
             s = src_val.strip()
-            t = tgt_val.strip()
+            t = tgt_val.strip().rstrip("。.")
             if len(s) >= 2 and t and s.lower() != "nan" and t.lower() != "nan":
                 key = s.lower()
                 if key not in out:
@@ -610,7 +612,7 @@ def _extract_generic_kb_pairs(
         for k, v in node.items():
             if isinstance(v, str):
                 ks = str(k).strip()
-                vs = v.strip()
+                vs = v.strip().rstrip("。.")
                 if len(ks) >= 2 and vs and ks.lower() not in _KB_META_KEYS:
                     key = ks.lower()
                     if key not in out:
@@ -947,6 +949,19 @@ _KB_STOP_TOKENS = {
     "enemy",
     "enhance",
     "gate",
+    "mission",
+    "missions",
+    "moment",
+    "moments",
+    "letter",
+    "letters",
+    "chosen",
+    "gift",
+    "gifts",
+    "thank",
+    "thanks",
+    "story",
+    "social",
 }
 
 _KB_CONVERSATIONAL_STOPWORDS = {
@@ -1807,7 +1822,7 @@ def _merge_terminology_results(
                 )
                 if merged_aliases:
                     canonical_entry["aliases"] = merged_aliases
-                    if raw_term.get("fix_source") is not False:
+                    if raw_term.get("fix_source") is True:
                         canonical_entry["fix_source"] = True
                     else:
                         canonical_entry.setdefault("fix_source", False)
@@ -1836,7 +1851,6 @@ def _merge_terminology_results(
             }
             if aliases:
                 entry["aliases"] = aliases
-                entry["fix_source"] = raw_term.get("fix_source") is not False
                 for a in aliases:
                     by_alias_lower[a.lower()] = s_low
             by_src_lower[s_low] = entry
@@ -1965,11 +1979,10 @@ def _consolidate_terms_with_llm(
                 has_kb_candidates = True
         enriched_terms.append(item)
 
-    if scanned_kb_terms is None and kb_data and kb_data.get("entries") and full_text:
-        scanned_kb_hits = _scan_text_for_kb_terms(full_text, kb_data, max_hints=35)
-        for kb_hit in scanned_kb_hits:
-            hit_low = kb_hit["src"].lower()
-            if hit_low not in seen_srcs and hit_low not in custom_known_low:
+    if scanned_kb_terms:
+        for kb_hit in scanned_kb_terms:
+            hit_low = str(kb_hit.get("src") or "").strip().lower()
+            if hit_low and hit_low not in seen_srcs:
                 seen_srcs.add(hit_low)
                 cand_entry: dict[str, Any] = {
                     "src": kb_hit["src"],
@@ -1982,11 +1995,28 @@ def _consolidate_terms_with_llm(
                     cand_entry["context_snippet"] = kb_hit["context_snippet"]
                 enriched_terms.append(cand_entry)
                 has_kb_candidates = True
+    elif kb_data and kb_data.get("entries") and full_text:
+        scanned_kb_hits = _scan_text_for_kb_terms(full_text, kb_data, max_hints=35)
+        for kb_hit in scanned_kb_hits:
+            hit_low = kb_hit["src"].lower()
+            if hit_low not in seen_srcs:
+                seen_srcs.add(hit_low)
+                cand_entry = {
+                    "src": kb_hit["src"],
+                    "tgt": kb_hit["tgt"],
+                    "note": kb_hit.get("note")
+                    or "Official glossary match in transcript",
+                    "source_hint": "kb_scan_candidate",
+                }
+                if kb_hit.get("context_snippet"):
+                    cand_entry["context_snippet"] = kb_hit["context_snippet"]
+                enriched_terms.append(cand_entry)
+                has_kb_candidates = True
 
     if not enriched_terms:
-        return _attach_scanned_kb_terms(merged_summary, scanned_kb_terms)
+        return merged_summary
     if len(chunk_results) <= 1 and not has_kb_candidates:
-        return _attach_scanned_kb_terms(merged_summary, scanned_kb_terms)
+        return merged_summary
 
     check_cancel()
     prompt = get_consolidate_terms_prompt(
@@ -2008,14 +2038,14 @@ def _consolidate_terms_with_llm(
             label="TERMS",
             level="warn",
         )
-        return _attach_scanned_kb_terms(merged_summary, scanned_kb_terms)
+        return merged_summary
 
     if not isinstance(resp, dict) or not isinstance(resp.get("terms"), list):
-        return _attach_scanned_kb_terms(merged_summary, scanned_kb_terms)
+        return merged_summary
 
     # Guard against naive unit-test mocks that return a single chunk's response verbatim
     if any(resp == cr for _, cr in chunk_results):
-        return _attach_scanned_kb_terms(merged_summary, scanned_kb_terms)
+        return merged_summary
 
     # Preserve original surface forms from raw_terms that were merged into a canonical KB term
     resp_terms = [dict(t) for t in resp["terms"] if isinstance(t, dict)]
@@ -2028,24 +2058,45 @@ def _consolidate_terms_with_llm(
         if raw_t.get("source_hint") == "kb_scan_candidate":
             continue
         raw_src = str(raw_t.get("src") or "").strip()
+        raw_low = raw_src.lower()
+        if not raw_low or raw_low in resp_by_low:
+            continue
         raw_aliases = _normalize_aliases(raw_t.get("aliases"), raw_src)
+        raw_comp = re.sub(r"[^a-z0-9]", "", raw_low)
         for cand in raw_t.get("kb_candidates") or []:
             cand_low = str(cand.get("src") or "").strip().lower()
-            if cand_low in resp_by_low and raw_src.lower() != cand_low:
+            if cand_low in resp_by_low and raw_low != cand_low:
                 target_entry = resp_by_low[cand_low]
+                target_aliases_low = {
+                    str(a).strip().lower() for a in (target_entry.get("aliases") or [])
+                }
+                cand_comp = re.sub(r"[^a-z0-9]", "", cand_low)
+                is_same_entity = (
+                    raw_low in target_aliases_low
+                    or any(a.lower() in target_aliases_low for a in raw_aliases)
+                    or (
+                        raw_comp
+                        and (
+                            cand_comp.startswith(raw_comp)
+                            or raw_comp.startswith(cand_comp)
+                        )
+                    )
+                    or _similarity_score(raw_comp, cand_comp) >= 78.0
+                )
+                if not is_same_entity:
+                    continue
                 merged_al = _normalize_aliases(
                     [*(target_entry.get("aliases") or []), raw_src, *raw_aliases],
                     str(target_entry["src"]),
                 )
                 if merged_al:
                     target_entry["aliases"] = merged_al
+                break
 
     consolidated_chunk = [
         (0, {"theme": merged_summary.get("theme", ""), "terms": resp_terms})
     ]
-    final_merged = _merge_terminology_results(
-        consolidated_chunk, custom_terms_list, scanned_kb_terms=scanned_kb_terms
-    )
+    final_merged = _merge_terminology_results(consolidated_chunk, custom_terms_list)
     final_merged["theme"] = merged_summary.get("theme", "")
     final_merged["topic"] = merged_summary.get("topic", "")
     return final_merged

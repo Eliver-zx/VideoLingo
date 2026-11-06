@@ -307,8 +307,9 @@ def split_audio(
         tag="asr",
         label="VAD",
     )
-    audio = AudioSegment.from_file(audio_file)
-    duration = float(mediainfo(audio_file)["duration"])
+    duration = get_audio_duration(audio_file)
+    if duration <= 0:
+        duration = float(mediainfo(audio_file)["duration"])
     if duration <= target_len + win:
         report_progress(
             1.0,
@@ -318,6 +319,7 @@ def split_audio(
             label="VAD",
         )
         return [(0, duration)]
+    audio = AudioSegment.from_file(audio_file)
     segments, pos = [], 0.0
     safe_margin = 0.5  # 静默点前后安全边界，单位秒
 

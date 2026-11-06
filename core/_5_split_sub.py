@@ -35,7 +35,14 @@ from core.workspace import get_active_workspace
 split_sentence = _default_split_sentence
 get_align_prompt = _default_get_align_prompt
 
-_LEADING_PUNCT_RE = re.compile(r"^[\s，。、“”‘’！!？?：:；;（）()【】\[\]《》<>…—\-·]+")
+_LEADING_PUNCT_RE = re.compile(r"^[\s，。、！!？?：:；;）)】\]》>…—\-·]+")
+_BOOK_MARK_TABLE = str.maketrans({"《": "“", "》": "”", "〈": "‘", "〉": "’"})
+
+
+def _normalize_book_marks(text: str) -> str:
+    return str(text).translate(_BOOK_MARK_TABLE)
+
+
 _CLAUSE_PUNCT = set(",;:，、；：—")
 _BREAK_CONJUNCTIONS = {
     "and",
@@ -394,7 +401,8 @@ def _try_local_clause_split(
 ) -> Tuple[List[str], List[str], str] | None:
     """Split ``tr_line`` and ``src_line`` locally in O(1) using internal clause punctuation when
     existing clause boundaries already satisfy subtitle length constraints without an LLM call."""
-    tr_clean = _LEADING_PUNCT_RE.sub("", str(tr_line)).strip() or str(tr_line).strip()
+    tr_norm = _normalize_book_marks(tr_line)
+    tr_clean = _LEADING_PUNCT_RE.sub("", tr_norm).strip() or tr_norm.strip()
     raw_clauses = [c.strip() for c in _CLAUSE_SPLIT_RE.split(tr_clean) if c.strip()]
     max_clause_w = max_sub_length / max(0.1, target_sub_multiplier)
     clauses = _merge_tiny_clauses(
@@ -606,10 +614,8 @@ def split_align_subs(
                 tr_work[i] = t_parts
                 remerged_tr_lines[i] = tr_remerged
             else:
-                tr_clean = (
-                    _LEADING_PUNCT_RE.sub("", str(tr_lines[i])).strip()
-                    or str(tr_lines[i]).strip()
-                )
+                tr_norm = _normalize_book_marks(tr_lines[i])
+                tr_clean = _LEADING_PUNCT_RE.sub("", tr_norm).strip() or tr_norm.strip()
                 tr_w = calc_len(tr_clean) * float(TARGET_SUB_MULTIPLIER)
                 # When the translation already fits comfortably on a single subtitle line
                 # (<= MAX_SUB_LENGTH) and no single internal clause exceeds MAX_SUB_LENGTH,
@@ -684,10 +690,8 @@ def split_align_subs(
                     src_lines[i], tr_lines[i], split_src
                 )
             else:
-                tr_clean = (
-                    _LEADING_PUNCT_RE.sub("", str(tr_lines[i])).strip()
-                    or str(tr_lines[i]).strip()
-                )
+                tr_norm = _normalize_book_marks(tr_lines[i])
+                tr_clean = _LEADING_PUNCT_RE.sub("", tr_norm).strip() or tr_norm.strip()
                 split_tr = _call_split_sentence(
                     tr_clean, num_parts=2, language=target_language
                 ).strip()
@@ -991,7 +995,7 @@ def split_for_sub_main():
             f"No translated utterances found in workspace database: {ws.db_path}"
         )
     src = [str(u.get("src") or "") for u in utterances]
-    trans = [str(u.get("tgt") or "") for u in utterances]
+    trans = [_normalize_book_marks(str(u.get("tgt") or "")) for u in utterances]
 
     if find_subtitle_file():
         for u in utterances:

@@ -7,6 +7,13 @@ from core.task_runner import StopTask
 from core.utils import ask_gpt, check_cancel, load_key, log_event
 
 
+_BOOK_MARK_TABLE = str.maketrans({"《": "“", "》": "”", "〈": "‘", "〉": "’"})
+
+
+def _normalize_book_marks(text: str) -> str:
+    return str(text).translate(_BOOK_MARK_TABLE)
+
+
 class TranslateResultTuple(tuple):
     """2-tuple (translate_result, lines) carrying `.direct_lines` without global state."""
 
@@ -119,7 +126,9 @@ def translate_lines(
         faith_result[i].setdefault(
             "origin", line_list[idx] if idx < len(line_list) else ""
         )
-        faith_result[i]["direct"] = faith_result[i]["direct"].replace("\n", " ")
+        faith_result[i]["direct"] = _normalize_book_marks(
+            faith_result[i]["direct"].replace("\n", " ")
+        )
     direct_lines = [faith_result[i]["direct"].strip() for i in faith_result]
 
     # If reflect_translate is False or not set, use faithful translation directly
@@ -149,7 +158,9 @@ def translate_lines(
         }
 
     for key in express_result:
-        free_val = express_result[key]["free"].replace("\n", " ").strip()
+        free_val = _normalize_book_marks(
+            express_result[key]["free"].replace("\n", " ").strip()
+        )
         if free_val.upper() in ("OK", "SAME", "UNCHANGED", "KEEP"):
             express_result[key]["free"] = faith_result[key]["direct"].strip()
         else:

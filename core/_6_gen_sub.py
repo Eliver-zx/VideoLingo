@@ -79,11 +79,14 @@ def _levenshtein_fast(a: str, b: str) -> int:
     return prev[-1]
 
 
+_BOOK_MARK_TABLE = str.maketrans({"《": "“", "》": "”", "〈": "‘", "〉": "’"})
+
+
 def format_subtitle_text(x):
-    """Format subtitle text: remove spaces between CJK and Latin/digits, replace CJK clause punctuation with spaces."""
+    """Format subtitle text: remove spaces between CJK and Latin/digits, convert book title marks to quotes, and replace CJK clause punctuation with spaces."""
     if pd.isna(x):
         return ""
-    text = str(x)
+    text = str(x).translate(_BOOK_MARK_TABLE)
     digit_pattern = r"[\d\uff10-\uff19]"
     text = re.sub(r"([\u4e00-\u9fff])\s+(" + digit_pattern + r")", r"\1\2", text)
     text = re.sub(r"(" + digit_pattern + r")\s+([\u4e00-\u9fff])", r"\1\2", text)
@@ -439,7 +442,7 @@ def gen_source_subtitles():
 def clean_translation(x):
     if pd.isna(x):
         return ""
-    return str(x).strip("。，、？！：；").strip()
+    return str(x).translate(_BOOK_MARK_TABLE).strip("。，、？！：；").strip()
 
 
 def align_timestamp_main():

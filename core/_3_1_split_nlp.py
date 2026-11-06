@@ -689,6 +689,10 @@ def _stitch_incomplete_clause_spans(
             (pk := punct_by_word.get(k, "")) and pk in CLAUSE_PUNCT_CHARS
             for k in range(cur_s, cur_e)
         )
+        nxt_has_internal_comma = any(
+            (pk := punct_by_word.get(k, "")) and pk in CLAUSE_PUNCT_CHARS
+            for k in range(nxt_s, nxt_e)
+        )
         should_merge = False
         if combined_len <= STITCH_MAX_COMBINED_WORDS and end_p not in (
             "?",
@@ -710,6 +714,9 @@ def _stitch_incomplete_clause_spans(
                 nxt_first in _CLAUSE_CONJUNCTIONS
                 and nxt_len <= 20
                 and gap <= CLAUSE_STITCH_MAX_GAP
+                and not (
+                    nxt_first in _FRONTED_CLAUSE_STARTERS and nxt_has_internal_comma
+                )
             ):
                 should_merge = True
 

@@ -258,29 +258,31 @@
             </div>
           </section>
 
+          <!-- 右侧详情槽 C: 运行日志面板 (log/runtime.log，执行步骤第一个显示) -->
+          <section class="console-dock hidden" id="console-dock">
+            <div class="console-bar" id="console-bar-toggle-area">
+              <div class="console-bar-left">
+                <span class="subpane-title">
+                  <svg class="icon" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                  <span>运行日志</span>
+                </span>
+                <span class="field-key">runtime.log</span>
+                <span class="console-preview" id="console-latest-preview">等待任务运行…</span>
+              </div>
+              <div class="row" style="gap:6px; flex-shrink:0;">
+                <button type="button" class="xs" id="btn-filter-warn-log">仅看告警 (0)</button>
+                <button type="button" class="xs" id="btn-copy-log">复制</button>
+                <button type="button" class="ghost xs hidden" id="btn-toggle-console">收起</button>
+              </div>
+            </div>
+            <div class="terminal-box" id="global-log-console"></div>
+          </section>
+
+          </div>
         </div>
       </div>
 
-      <!-- BOTTOM DOCKABLE TERMINAL CONSOLE (log/runtime.log) -->
-      <section class="console-dock collapsed" id="console-dock">
-        <div class="console-bar">
-          <div class="console-bar-left" id="console-bar-toggle-area" title="点击展开或收起运行日志">
-            <span class="subpane-title">
-              <svg class="icon" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-              <span>运行日志</span>
-            </span>
-            <span class="field-key">runtime.log</span>
-            <span class="console-preview" id="console-latest-preview">等待任务运行…</span>
-          </div>
-          <div class="row" style="gap:6px; flex-shrink:0;">
-            <button type="button" class="xs" id="btn-filter-warn-log">仅看告警 (0)</button>
-            <button type="button" class="xs" id="btn-copy-log">复制</button>
-            <button type="button" class="ghost xs" id="btn-toggle-console">展开 ▴</button>
-          </div>
-        </div>
-        <div class="terminal-box" id="global-log-console"></div>
-      </section>
-
+      <!-- 右侧详情槽 C: 运行日志面板 (与字幕/术语面板同级切换，执行步骤第一个显示) -->
     </div>
   </section>
 
@@ -698,6 +700,7 @@
               <span class="field-label"><span>识别服务</span><span class="field-key">whisper.runtime</span></span>
               <select id="cfg-asr-runtime" data-cfg="whisper.runtime">
                 <option value="local" selected>本地推理 (Qwen3-ASR / WhisperX)</option>
+                <option value="mimo">小米 MiMo ASR</option>
                 <option value="mai">微软 MAI-Transcribe-2</option>
                 <option value="deepgram">Deepgram Nova-3</option>
                 <option value="elevenlabs">ElevenLabs Scribe</option>
@@ -755,6 +758,25 @@
                 <span class="field-label"><span>WhisperX 模型</span><span class="field-key">whisper.model</span></span>
                 <select data-cfg="whisper.model">
                   <option value="large-v3" selected>large-v3</option>
+                </select>
+              </label>
+            </div>
+
+            <div data-asr-panel="mimo" class="grid-3 hidden">
+              <label class="field">
+                <span class="field-label"><span>MiMo API Key</span><span class="field-key">whisper.mimo_api_key</span></span>
+                <input type="password" placeholder="输入小米 MiMo API Key" data-cfg="whisper.mimo_api_key">
+              </label>
+              <label class="field">
+                <span class="field-label"><span>MiMo 模型名称</span><span class="field-key">whisper.mimo_model</span></span>
+                <input type="text" value="mimo-v2.5-asr" placeholder="如 mimo-v2.5-asr" data-cfg="whisper.mimo_model">
+              </label>
+              <label class="field">
+                <span class="field-label"><span>对齐加速后端</span><span class="field-key">whisper.qwen_engine</span></span>
+                <select data-cfg="whisper.qwen_engine">
+                  <option value="auto" selected>自动 (Apple Silicon 优先 MLX)</option>
+                  <option value="mlx">MLX</option>
+                  <option value="transformers">Transformers</option>
                 </select>
               </label>
             </div>

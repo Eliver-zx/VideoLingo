@@ -479,7 +479,7 @@ def wrap_gpu_subtitle_filter(
 
 
 def get_optimal_video_encoder_args(use_gpu: bool = False) -> list[str]:
-    """Select the fastest compatible H.264 encoder for the current platform with safe `yuv420p` output."""
+    """Select the fastest compatible H.264 encoder for the current platform with VBR capped at 6000k and `yuv420p` output."""
     if use_gpu:
         encoders = _available_ffmpeg_encoders()
         sys_name = platform.system()
@@ -487,12 +487,12 @@ def get_optimal_video_encoder_args(use_gpu: bool = False) -> list[str]:
             return [
                 "-c:v",
                 "h264_videotoolbox",
-                "-realtime",
-                "true",
-                "-prio_speed",
-                "true",
-                "-b:v",
+                "-q:v",
+                "65",
+                "-maxrate",
                 "6000k",
+                "-bufsize",
+                "12000k",
                 "-pix_fmt",
                 "yuv420p",
             ]
@@ -502,15 +502,45 @@ def get_optimal_video_encoder_args(use_gpu: bool = False) -> list[str]:
                 "h264_nvenc",
                 "-preset",
                 "p1",
-                "-b:v",
+                "-rc",
+                "vbr",
+                "-cq",
+                "23",
+                "-maxrate",
                 "6000k",
+                "-bufsize",
+                "12000k",
                 "-pix_fmt",
                 "yuv420p",
             ]
         if "h264_qsv" in encoders:
-            return ["-c:v", "h264_qsv", "-global_quality", "23", "-pix_fmt", "yuv420p"]
+            return [
+                "-c:v",
+                "h264_qsv",
+                "-global_quality",
+                "23",
+                "-maxrate",
+                "6000k",
+                "-bufsize",
+                "12000k",
+                "-pix_fmt",
+                "yuv420p",
+            ]
         if "h264_amf" in encoders:
-            return ["-c:v", "h264_amf", "-quality", "balanced", "-pix_fmt", "yuv420p"]
+            return [
+                "-c:v",
+                "h264_amf",
+                "-quality",
+                "balanced",
+                "-rc",
+                "vbr_peak",
+                "-maxrate",
+                "6000k",
+                "-bufsize",
+                "12000k",
+                "-pix_fmt",
+                "yuv420p",
+            ]
         # Legacy test compatibility when a mocked ffmpeg does not actually run encoder probing
         return ["-c:v", "h264_nvenc"]
     return [
@@ -518,8 +548,12 @@ def get_optimal_video_encoder_args(use_gpu: bool = False) -> list[str]:
         "libx264",
         "-preset",
         "veryfast",
-        "-b:v",
+        "-crf",
+        "23",
+        "-maxrate",
         "6000k",
+        "-bufsize",
+        "12000k",
         "-pix_fmt",
         "yuv420p",
     ]

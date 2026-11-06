@@ -23,7 +23,10 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def configured_workdir(tmp_path, monkeypatch):
     root = Path(__file__).resolve().parents[1]
-    cfg = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+    cfg_src = root / "config.yaml"
+    if not cfg_src.is_file():
+        cfg_src = root / "config.example.yaml"
+    cfg = yaml.safe_load(cfg_src.read_text(encoding="utf-8"))
     cfg["api"].update(
         key=os.environ["VIDEOLINGO_TEST_API_KEY"],
         base_url=os.environ.get(
@@ -76,6 +79,7 @@ def test_video_translation_and_dubbing(configured_workdir):
 
     runner = TaskRunner()
     runner.start(get_steps("all", dubbing=True))
+    assert runner._thread is not None
     runner._thread.join(timeout=1200)
     assert not runner._thread.is_alive(), "Pipeline timed out"
     assert runner.state == "completed", runner.error_msg

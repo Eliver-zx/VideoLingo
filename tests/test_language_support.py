@@ -128,7 +128,12 @@ def project(tmp_path, monkeypatch):
     from core.workspace import TaskWorkspace
 
     def make(language, words):
-        text = (ROOT / "config.yaml").read_text(encoding="utf-8")
+        cfg_src = (
+            ROOT / "config.example.yaml"
+            if (ROOT / "config.example.yaml").is_file()
+            else ROOT / "config.yaml"
+        )
+        text = cfg_src.read_text(encoding="utf-8")
         text = text.replace(
             "  language: 'en'\n  detected_language: 'en'",
             f"  language: 'auto'\n  detected_language: '{language}'",

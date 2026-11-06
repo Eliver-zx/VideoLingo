@@ -135,34 +135,25 @@
     }
 
     /* =========================================================
-       CONSOLE DRAWER
+       CONSOLE STAGE PANE (log/runtime.log)
        ========================================================= */
     .console-dock {
-      block-size: 168px;
-      border-block-start: 1px solid var(--border);
       background: var(--bg-pane);
       display: flex;
       flex-direction: column;
-      flex-shrink: 0;
-      transition: block-size 200ms var(--ease);
-    }
-
-    .console-dock.collapsed {
-      block-size: var(--h-subbar);
-      background: var(--bg-sidebar);
-    }
-
-    .console-dock.collapsed .terminal-box {
-      display: none;
+      overflow: hidden;
+      min-inline-size: 0;
+      min-block-size: 0;
     }
 
     .console-bar {
       block-size: var(--h-subbar);
-      padding: 0 10px 0 14px;
+      padding: 0 14px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
+      border-block-end: 1px solid var(--border);
       flex-shrink: 0;
     }
 
@@ -172,7 +163,6 @@
       gap: 8px;
       min-inline-size: 0;
       flex: 1;
-      cursor: pointer;
     }
 
     .console-preview {
@@ -186,10 +176,6 @@
       border-inline-start: 1px solid var(--border-strong);
       min-inline-size: 0;
       flex: 1;
-    }
-
-    .console-dock:not(.collapsed) .console-preview {
-      display: none;
     }
 
     .terminal-box {

@@ -95,15 +95,22 @@
     });
 
     // =========================================================================
-    // 2. 右侧详情槽原地切换 (Subtitle Stream vs Step 03 Terms Workbench)
+    // 2. 右侧详情槽原地切换 (Subtitle Stream vs Step 03 Terms Workbench vs Runtime Log)
     // =========================================================================
     const paneSubtitle = document.getElementById('subtitle-detail-pane');
     const paneTerms = document.getElementById('terms-review-panel');
+    const consoleDock = document.getElementById('console-dock');
 
     function syncDetailPane() {
       const isTerms = activeBatchId === 'terms-03';
-      paneSubtitle.classList.toggle('hidden', isTerms);
-      paneTerms.classList.toggle('hidden', !isTerms);
+      const isLog = activeBatchId === 'runtime-log';
+      paneSubtitle?.classList.toggle('hidden', isTerms || isLog);
+      paneTerms?.classList.toggle('hidden', !isTerms);
+      consoleDock?.classList.toggle('hidden', !isLog);
+      if (isLog && consoleDock) {
+        const box = document.getElementById('global-log-console');
+        if (box) box.scrollTop = box.scrollHeight;
+      }
     }
 
     // =========================================================================
@@ -446,6 +453,7 @@
         STREAM_TABLE_ROWS.splice(0, STREAM_TABLE_ROWS.length, ...rows);
 
         const baseNodes = [
+          { id: 'runtime-log', kind: 'summary', step: 'LOG', title: '运行日志', meta: `${REAL_SYSTEM_LOGS.length} 条`, time: '', desc: '运行日志 (runtime.log)' },
           { id: 'all', kind: 'summary', step: 'ALL', title: '全部字幕', meta: `${utts.length} 句`, time: '', desc: `全部字幕 (${utts.length} 句)` },
           { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: sd.asr ? '已完成' : '未开始', time: '', desc: '语音识别' },
           { id: 'nlp-all', kind: 'step', step: '02', title: '标点与断句', meta: `${utts.length} 句`, time: '', desc: `标点与断句 · ${utts.length} 句` },
@@ -488,6 +496,7 @@
         PIPELINE_BATCH_NODES.splice(
           0,
           PIPELINE_BATCH_NODES.length,
+          { id: 'runtime-log', kind: 'summary', step: 'LOG', title: '运行日志', meta: `${REAL_SYSTEM_LOGS.length} 条`, time: '', desc: '运行日志 (runtime.log)' },
           { id: 'all', kind: 'summary', step: 'ALL', title: '全部字幕', meta: '0 句', time: '', desc: '全部字幕 (0 句)' },
           { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: sd.asr ? '已完成' : '未开始', time: '', desc: '语音识别' },
           { id: 'nlp-all', kind: 'step', step: '02', title: '标点与断句', meta: '0 句', time: '', desc: '标点与断句' },
@@ -913,7 +922,7 @@
           activeBatchId = node.getAttribute('data-batch-id');
           renderBatchTree();
           syncDetailPane();
-          if (activeBatchId !== 'terms-03') {
+          if (activeBatchId !== 'terms-03' && activeBatchId !== 'runtime-log') {
             renderStreamTable();
           }
         });
@@ -1661,7 +1670,7 @@
     });
 
     // =========================================================================
-    // 7. 底部可折叠终端日志渲染与过滤
+    // 7. 运行日志阶段面板渲染与过滤
     // =========================================================================
     let warnOnlyLog = false;
     function renderSystemLogs() {
@@ -1670,6 +1679,12 @@
       const warnBtn = document.getElementById('btn-filter-warn-log');
       if (warnBtn) {
         warnBtn.textContent = warnOnlyLog ? '全部日志' : `仅看告警 (${warnCount})`;
+      }
+      const logNode = PIPELINE_BATCH_NODES.find(n => n.id === 'runtime-log');
+      if (logNode) {
+        logNode.meta = `${REAL_SYSTEM_LOGS.length} 条`;
+        const logNodeEl = document.querySelector('#batch-tree-list [data-batch-id="runtime-log"] .batch-meta');
+        if (logNodeEl) logNodeEl.textContent = logNode.meta;
       }
       const list = warnOnlyLog ? REAL_SYSTEM_LOGS.filter(x => x.warn) : REAL_SYSTEM_LOGS;
       if (list.length === 0) {
@@ -1738,9 +1753,6 @@
 
     document.getElementById('btn-filter-warn-log').addEventListener('click', () => {
       warnOnlyLog = !warnOnlyLog;
-      if (consoleDock.classList.contains('collapsed')) {
-        toggleConsoleDock();
-      }
       renderSystemLogs();
     });
 
@@ -1752,14 +1764,13 @@
       setTimeout(() => { btn.textContent = '复制'; }, 1200);
     });
 
-    const consoleDock = document.getElementById('console-dock');
     const btnToggleConsole = document.getElementById('btn-toggle-console');
     function toggleConsoleDock() {
-      const collapsed = consoleDock.classList.toggle('collapsed');
-      btnToggleConsole.textContent = collapsed ? '展开 ▴' : '收起 ▾';
+      activeBatchId = activeBatchId === 'runtime-log' ? 'all' : 'runtime-log';
+      renderBatchTree();
+      syncDetailPane();
     }
-    btnToggleConsole.addEventListener('click', toggleConsoleDock);
-    document.getElementById('console-bar-toggle-area')?.addEventListener('click', toggleConsoleDock);
+    btnToggleConsole?.addEventListener('click', toggleConsoleDock);
     // =========================================================================
     // 8. Subtitle Edit 交接动作与轻量成片预览弹窗
     // =========================================================================
@@ -2544,10 +2555,10 @@
         'audio.raw_bitrate': '192k',
       };
       Object.entries(defaults).forEach(([k, v]) => {
-        const el = document.querySelector(`[data-cfg="${k}"]`);
-        if (!el) return;
-        if (el.type === 'checkbox') el.checked = Boolean(v);
-        else el.value = String(v);
+        document.querySelectorAll(`[data-cfg="${k}"]`).forEach(el => {
+          if (el.type === 'checkbox') el.checked = Boolean(v);
+          else el.value = String(v);
+        });
       });
       document.getElementById('btn-reset-ass-style')?.click();
       syncAsrRuntimePanel();
@@ -2636,6 +2647,12 @@
           if (path) {
             const val = readCfgControlValue(inp);
             pendingConfigUpdates[path] = val;
+            document.querySelectorAll(`[data-cfg="${path}"]`).forEach(peer => {
+              if (peer !== inp) {
+                if (peer.type === 'checkbox') peer.checked = Boolean(val);
+                else peer.value = String(val ?? '');
+              }
+            });
             if (path === 'glossary_domain') {
               currentConfig.glossary_domain = val;
               const taskDomInput = document.getElementById('task-domain');
