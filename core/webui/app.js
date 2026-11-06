@@ -2419,16 +2419,37 @@
     });
 
     document.getElementById('btn-reset-ass-style')?.addEventListener('click', () => {
-      document.getElementById('ass-tr-size').value = '18';
-      document.getElementById('ass-tr-color').value = '&H00D7FF';
-      document.getElementById('ass-tr-color-picker').value = '#ffd700';
-      document.getElementById('ass-tr-outline-w').value = '2.0';
-      document.getElementById('ass-tr-margin').value = '28';
-      document.getElementById('ass-src-size').value = '14';
-      document.getElementById('ass-src-color').value = '#FFFFFF';
-      document.getElementById('ass-src-color-picker').value = '#ffffff';
+      const resets = [
+        ['ass-tr-font', '抖音美好体'],
+        ['ass-tr-size', '17'],
+        ['ass-tr-color', '&H00FFFF'],
+        ['ass-tr-outline-color', '#000000'],
+        ['ass-tr-outline-w', '1.5'],
+        ['ass-tr-margin', '5'],
+        ['ass-src-font', ''],
+        ['ass-src-size', '14'],
+        ['ass-src-color', '#FFFFFF'],
+        ['ass-src-outline-color', '#000000'],
+      ];
+      for (const [id, val] of resets) {
+        const el = document.getElementById(id);
+        if (el) {
+          el.value = val;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }
+      const trPicker = document.getElementById('ass-tr-color-picker');
+      if (trPicker) trPicker.value = '#ffff00';
+      const srcPicker = document.getElementById('ass-src-color-picker');
+      if (srcPicker) srcPicker.value = '#ffffff';
+      const backInput = document.querySelector('[data-cfg="subtitle.style.translation.back_color"]');
+      if (backInput) {
+        backInput.value = '&H33000000';
+        backInput.dispatchEvent(new Event('input', { bubbles: true }));
+        backInput.dispatchEvent(new Event('change', { bubbles: true }));
+      }
       updateAssPreview();
-      document.getElementById('ass-tr-size').dispatchEvent(new Event('input'));
     });
 
     document.getElementById('btn-detect-mai-region')?.addEventListener('click', async e => {

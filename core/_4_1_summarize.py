@@ -1689,8 +1689,7 @@ def _merge_terminology_results(
             entry["aliases"] = aliases
             for a in aliases:
                 custom_by_alias_lower[a.lower()] = s_low
-        if term.get("fix_source"):
-            entry["fix_source"] = True
+        entry["fix_source"] = bool(term.get("fix_source", False))
         if term.get("source"):
             entry["source"] = str(term["source"])
         custom_by_src_lower[s_low] = entry
@@ -1744,10 +1743,9 @@ def _merge_terminology_results(
                         "src": custom_entry["src"],
                         "tgt": custom_entry["tgt"],
                         "note": custom_entry.get("note") or note,
+                        "fix_source": bool(custom_entry.get("fix_source", False)),
                         "source": "task",
                     }
-                    if custom_entry.get("fix_source"):
-                        canonical_entry["fix_source"] = True
                     if base_aliases:
                         canonical_entry["aliases"] = list(base_aliases)
                     by_src_lower[custom_key] = canonical_entry
@@ -1785,6 +1783,8 @@ def _merge_terminology_results(
                     canonical_entry["aliases"] = merged_aliases
                     if raw_term.get("fix_source") is not False:
                         canonical_entry["fix_source"] = True
+                    else:
+                        canonical_entry.setdefault("fix_source", False)
                     for a in merged_aliases:
                         by_alias_lower[a.lower()] = target_key
                 continue
@@ -1801,11 +1801,16 @@ def _merge_terminology_results(
                 for st_var in _stem_key_variants(stems):
                     by_stem_key.setdefault(st_var, tgt)
 
-            entry = {"src": src, "tgt": tgt, "note": note, "source": "task"}
+            entry = {
+                "src": src,
+                "tgt": tgt,
+                "note": note,
+                "fix_source": bool(raw_term.get("fix_source", False)),
+                "source": "task",
+            }
             if aliases:
                 entry["aliases"] = aliases
-                if raw_term.get("fix_source") is not False:
-                    entry["fix_source"] = True
+                entry["fix_source"] = raw_term.get("fix_source") is not False
                 for a in aliases:
                     by_alias_lower[a.lower()] = s_low
             by_src_lower[s_low] = entry

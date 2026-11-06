@@ -313,10 +313,10 @@ def _ensure_libass_ffmpeg_on_path() -> None:
             timeout=5,
         )
         out = proc.stdout or ""
-        if len(out) < 500 or re.search(r"\bass\b", out):
+        if proc.returncode == 0 and (len(out) < 500 or re.search(r"\bass\b", out)):
             return
-    except Exception:
-        return
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        pass
 
     home = Path.home()
     candidates = [

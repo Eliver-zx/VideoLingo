@@ -75,8 +75,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "ytb_resolution": "1080",
     "subtitle": {
         "max_length": 75,
-        "target_multiplier": 1.3,
-        "sub_video_subtitles": "bilingual",
+        "target_multiplier": 1.2,
+        "sub_video_subtitles": "translation",
         "dub_video_subtitles": "translation",
         "style": {
             "source": {
@@ -87,13 +87,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 "outline_width": 1.5,
             },
             "translation": {
-                "font_name": "",
-                "font_size": 18,
-                "font_color": "&H00D7FF",
+                "font_name": "抖音美好体",
+                "font_size": 17,
+                "font_color": "&H00FFFF",
                 "outline_color": "&H000000",
-                "outline_width": 2.0,
-                "back_color": "&HFF000000",
-                "margin_v": 28,
+                "outline_width": 1.5,
+                "back_color": "&H33000000",
+                "margin_v": 5,
             },
         },
     },

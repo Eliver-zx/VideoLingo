@@ -1714,12 +1714,20 @@ def test_inflections_match_search_without_source_replacement_while_asr_aliases_r
             {
                 "src": "Well of Radiance",
                 "tgt": "光焰之井",
-                "aliases": ["Well"],
+                "aliases": ["Well", "Rad Well"],
                 "fix_source": False,
             }
         ],
     )
-    assert not merged_custom["terms"][0].get("fix_source", False)
+    assert merged_custom["terms"][0]["fix_source"] is False
+    assert (
+        s42.apply_fix_source_terms("Stand in the Rad Well now.", merged_custom["terms"])
+        == "Stand in the Rad Well now."
+    )
+    ws_custom = TaskWorkspace(tmp_path / "custom_fix_false_ws")
+    ws_custom.ensure_dirs()
+    ws_custom.save_terms("Raid", merged_custom["terms"])
+    assert ws_custom.load_terms()["terms"][0]["fix_source"] is False
 
     # 4. _get_kb_index + _scan_text_for_kb_terms matches dotted acronyms ('DARCI' -> 'D.A.R.C.I.') and KB aliases ('gally')
     kb_idx = s41._get_kb_index(terms)
