@@ -20,8 +20,8 @@ from core.utils import (
     check_cancel,
     check_file_exists,
     load_key_or,
+    log_event,
     report_progress,
-    rprint,
 )
 from core.workspace import (
     DEFAULT_GLOSSARY_DOMAIN,
@@ -702,7 +702,12 @@ def load_custom_terms() -> list[dict[str, Any]]:
                     source="domain_kb",
                 )
         except Exception as exc:
-            rprint(f"[yellow]⚠️ Could not read {domain_csv}: {exc}[/yellow]")
+            log_event(
+                f"无法读取领域词典 {domain_csv}: {exc}",
+                tag="warn",
+                label="TERMS",
+                level="warn",
+            )
 
     if use_global and os.path.exists(GLOBAL_GLOSSARY_PATH):
         try:
@@ -716,7 +721,12 @@ def load_custom_terms() -> list[dict[str, Any]]:
                     source="global_kb",
                 )
         except Exception as exc:
-            rprint(f"[yellow]⚠️ Could not read {GLOBAL_GLOSSARY_PATH}: {exc}[/yellow]")
+            log_event(
+                f"无法读取全局词典 {GLOBAL_GLOSSARY_PATH}: {exc}",
+                tag="warn",
+                label="TERMS",
+                level="warn",
+            )
 
     if os.path.exists(CUSTOM_TERMS_PATH):
         try:
@@ -727,7 +737,12 @@ def load_custom_terms() -> list[dict[str, Any]]:
                     aliases_val = row.get("aliases", "") if hasattr(row, "get") else ""
                     _add_term(row.iloc[0], row.iloc[1], note_val, aliases=aliases_val)
         except Exception as exc:
-            rprint(f"[yellow]⚠️ Could not read {CUSTOM_TERMS_PATH}: {exc}[/yellow]")
+            log_event(
+                f"无法读取自定义术语表 {CUSTOM_TERMS_PATH}: {exc}",
+                tag="warn",
+                label="TERMS",
+                level="warn",
+            )
 
     if os.path.exists(OPTIONAL_CSV_TERMS_PATH):
         try:
@@ -739,8 +754,11 @@ def load_custom_terms() -> list[dict[str, Any]]:
                     continue
                 _add_term(row["src"], row["tgt"], row.get("note", ""))
         except Exception as exc:
-            rprint(
-                f"[yellow]⚠️ Could not read {OPTIONAL_CSV_TERMS_PATH}: {exc}[/yellow]"
+            log_event(
+                f"无法读取附加术语表 {OPTIONAL_CSV_TERMS_PATH}: {exc}",
+                tag="warn",
+                label="TERMS",
+                level="warn",
             )
 
     if os.path.exists(OPTIONAL_JSON_TERMS_PATH) or (
@@ -772,8 +790,11 @@ def load_custom_terms() -> list[dict[str, Any]]:
                             source="term_map",
                         )
         except Exception as exc:
-            rprint(
-                f"[yellow]⚠️ Could not read {OPTIONAL_JSON_TERMS_PATH}: {exc}[/yellow]"
+            log_event(
+                f"无法读取词典映射 {OPTIONAL_JSON_TERMS_PATH}: {exc}",
+                tag="warn",
+                label="TERMS",
+                level="warn",
             )
 
     return list(merged.values())
@@ -1109,7 +1130,12 @@ def _get_kb_index(
                         raw_data, kb_entries, source_tag="term_map"
                     )
                 except Exception as exc:
-                    rprint(f"[yellow]⚠️ Could not read {json_path}: {exc}[/yellow]")
+                    log_event(
+                        f"无法读取词典文件 {json_path}: {exc}",
+                        tag="warn",
+                        label="TERMS",
+                        level="warn",
+                    )
 
         exact_lower_map: dict[str, dict[str, Any]] = {}
         compact_map: dict[str, list[dict[str, Any]]] = {}
@@ -1976,8 +2002,11 @@ def _consolidate_terms_with_llm(
     except StopTask:
         raise
     except Exception as exc:
-        rprint(
-            f"[yellow]⚠️ LLM term consolidation failed, using deterministic merge: {exc}[/yellow]"
+        log_event(
+            f"LLM 术语归并失败，回退至确定性合并: {exc}",
+            tag="warn",
+            label="TERMS",
+            level="warn",
         )
         return _attach_scanned_kb_terms(merged_summary, scanned_kb_terms)
 
@@ -2033,12 +2062,11 @@ def get_summary():
 
     custom_terms_list = load_custom_terms()
     kb_data = _get_kb_index(custom_terms_list)
-    custom_terms_json = {"terms": custom_terms_list}
     if custom_terms_list:
-        rprint(f"📖 Custom Terms Loaded: {len(custom_terms_list)} terms")
-        rprint(
-            "📝 Terms Content:",
-            json.dumps(custom_terms_json, indent=2, ensure_ascii=False),
+        log_event(
+            f"已加载自定义与领域术语 {len(custom_terms_list)} 条",
+            tag="llm",
+            label="TERMS",
         )
 
     chunks = split_summary_chunks(
@@ -2070,13 +2098,12 @@ def get_summary():
         else:
             chunk_injected_jsons.append({"terms": chunk_kb_hits})
 
-    rprint(
-        f"📝 Summarizing and extracting terminology across {len(chunks)} chunk(s) ..."
-    )
     report_progress(
         0.02,
         f"术语提取 0/{len(chunks)}",
-        f"📝 开始提取术语与视频主题（共 {len(chunks)} 个分块）...",
+        f"开始提取术语与视频主题（共 {len(chunks)} 个分块）",
+        tag="llm",
+        label="TERMS",
     )
 
     chunk_results: list[tuple[int, dict]] = []
@@ -2084,7 +2111,9 @@ def get_summary():
         chunk_results.append(
             _extract_chunk_summary(0, chunks[0], chunk_injected_jsons[0])
         )
-        report_progress(0.18, "术语提取 1/1", "✅ 完成术语提取 1/1")
+        report_progress(
+            0.72, "术语提取 1/1", "完成术语提取 1/1", tag="llm", label="TERMS"
+        )
     else:
         max_workers = max(1, int(load_key_or("max_workers", 4) or 4))
         with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -2100,9 +2129,11 @@ def get_summary():
                     chunk_results.append(future.result())
                     done_cnt = len(chunk_results)
                     report_progress(
-                        0.02 + 0.16 * (done_cnt / len(chunks)),
+                        0.02 + 0.70 * (done_cnt / len(chunks)),
                         f"术语提取 {done_cnt}/{len(chunks)}",
-                        f"📝 术语提取分块完成 [{done_cnt}/{len(chunks)}]",
+                        f"术语提取分块完成 [{done_cnt}/{len(chunks)}]",
+                        tag="llm",
+                        label="TERMS",
                     )
             except BaseException:
                 for f in futures:
@@ -2112,7 +2143,9 @@ def get_summary():
     scanned_terms_list = list(all_scanned_kb_terms.values())
     summary = _merge_terminology_results(chunk_results, custom_terms_list)
     full_text = " ".join(chunks)
-    report_progress(0.20, "术语归并消歧…")
+    report_progress(
+        0.80, "术语归并消歧…", "正在归并消歧提取的术语", tag="llm", label="TERMS"
+    )
     summary = _consolidate_terms_with_llm(
         summary,
         chunk_results,
@@ -2124,12 +2157,12 @@ def get_summary():
 
     ws.save_terms(summary.get("theme", ""), summary.get("terms", []))
     report_progress(
-        0.25,
+        1.0,
         f"已提取 {len(summary['terms'])} 条术语",
-        f"💾 术语提取完成（共 {len(summary['terms'])} 条）",
+        f"术语提取完成（共 {len(summary['terms'])} 条）",
+        tag="llm",
+        label="TERMS",
     )
-
-    rprint(f"💾 Summary saved to `{ws.db_path}` ({len(summary['terms'])} terms)")
 
 
 if __name__ == "__main__":

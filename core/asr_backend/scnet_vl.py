@@ -438,15 +438,41 @@ from core.workspace import replace_with_retry as _replace_with_retry
 
 
 def _download_checkpoint(url: str, target_path: Path) -> None:
+    from core.utils import check_cancel, report_progress
+
     target_path.parent.mkdir(parents=True, exist_ok=True)
     if target_path.exists() and target_path.stat().st_size > 0:
         return
+    report_progress(
+        0.02,
+        "下载 SCNet 权重…",
+        f"正在下载人声分离权重 {target_path.name}",
+        tag="asr",
+        label="SCNET",
+    )
     with tempfile.NamedTemporaryFile(
         dir=str(target_path.parent), delete=False, suffix=".part"
     ) as tmp:
         tmp_path = Path(tmp.name)
+    last_pct = -5
+
+    def _reporthook(block_num: int, block_size: int, total_size: int) -> None:
+        nonlocal last_pct
+        check_cancel()
+        if total_size > 0:
+            pct = min(100, int((block_num * block_size * 100) / total_size))
+            if pct - last_pct >= 5:
+                last_pct = pct
+                report_progress(
+                    0.02 + 0.08 * (pct / 100.0),
+                    f"下载 SCNet {pct}%",
+                    f"正在下载 SCNet 模型权重 ({pct}%)",
+                    tag="asr",
+                    label="SCNET",
+                )
+
     try:
-        urllib.request.urlretrieve(url, str(tmp_path))
+        urllib.request.urlretrieve(url, str(tmp_path), reporthook=_reporthook)
         _replace_with_retry(tmp_path, target_path)
     except Exception:
         tmp_path.unlink(missing_ok=True)

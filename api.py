@@ -113,9 +113,47 @@ def _trigger_shutdown() -> None:
 
 def _on_runner_event(payload: dict[str, Any]) -> None:
     task_id = payload.get("task_id")
-    if task_id and payload.get("type") != "task_progress":
-        ws = TaskWorkspace(OUTPUT / task_id) if (OUTPUT / task_id).is_dir() else None
-        if ws and ws.manifest_path.is_file():
+    ws = (
+        TaskWorkspace(OUTPUT / task_id)
+        if (task_id and (OUTPUT / task_id).is_dir())
+        else None
+    )
+    if ws is not None:
+        if payload.get("stages_done") is None and payload.get("type") in (
+            "task_started",
+            "task_paused",
+            "task_resumed",
+            "task_completed",
+            "task_error",
+            "task_stopped",
+        ):
+            try:
+                stages_done = ws.compute_stages_done()
+                payload["stages_done"] = stages_done
+                if runner.active_task_id == task_id:
+                    runner.stages_done = dict(stages_done)
+            except OSError:
+                pass
+        ev_type = payload.get("type")
+        msg = (
+            payload.get("message")
+            or (payload.get("pause_message") if ev_type == "task_paused" else None)
+            or (payload.get("error") if ev_type == "task_error" else None)
+        )
+        if msg:
+            try:
+                ws.log_dir.mkdir(parents=True, exist_ok=True)
+                time_str = payload.get("time") or ""
+                label_str = payload.get("log_label") or "RUN"
+                with open(ws.log_dir / "runtime.log", "a", encoding="utf-8") as log_f:
+                    log_f.write(f"{time_str} [{label_str}] {msg}\n")
+            except OSError:
+                pass
+        if ws.manifest_path.is_file() and payload.get("type") not in (
+            "task_progress",
+            "task_log",
+            "task_artifact",
+        ):
             try:
                 ws.update_manifest(
                     execution={
@@ -130,11 +168,8 @@ def _on_runner_event(payload: dict[str, Any]) -> None:
                         "error": payload.get("error"),
                     }
                 )
-            except OSError as exc:
-                print(
-                    f"Warning: Failed to update task manifest for {task_id}: {exc}",
-                    file=sys.stderr,
-                )
+            except OSError:
+                pass
     with _sse_lock:
         for q in list(_sse_subscribers):
             try:
@@ -288,18 +323,7 @@ def _workspace_summary(ws: TaskWorkspace) -> dict[str, Any]:
                 f"Expected list in {trunc_path}, got {type(data).__name__}"
             )
         truncated = data
-    stages_done = {
-        "asr": ws.has_words(),
-        "split": ws.has_utterances(),
-        "terms": ws.has_terms(),
-        "translate": ws.has_translations(),
-        "subtitles": (ws.root / "trans.srt").is_file()
-        and (ws.root / "src.srt").is_file(),
-        "sub_video": (ws.root / "output_sub.mp4").is_file(),
-        "dub_audio": (ws.audio_dir / "dub.wav").is_file()
-        or (ws.root / "dub.mp3").is_file(),
-        "dub_video": (ws.root / "output_dub.mp4").is_file(),
-    }
+    stages_done = ws.compute_stages_done()
     if runner.active_task_id == ws.task_id:
         manifest["execution"] = {
             **manifest.get("execution", {}),
@@ -350,6 +374,8 @@ async def sse_events(request: Request):
                 "state": runner.state,
                 "active_task_id": runner.active_task_id,
                 "progress": runner.progress,
+                "stages_done": dict(runner.stages_done) if runner.stages_done else None,
+                "recent_logs": runner.recent_logs(),
             }
             yield f"data: {json.dumps(init_payload, ensure_ascii=False)}\n\n"
             while not _shutdown_event.is_set():

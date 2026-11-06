@@ -449,3 +449,113 @@ def test_input_refuses_a_file_without_subtitles(client):
             ).status_code
             == 422
         )
+
+
+def test_nested_progress_scope_and_log_event_ring_buffer(tmp_path, monkeypatch):
+    from core._4_2_translate import ChunkTranslateResult, _flush_chunk_translation_live
+    from core.task_runner import TaskRunner, progress_scope
+
+    monkeypatch.chdir(tmp_path)
+    runner = TaskRunner(active_task_id="task_a", state="running")
+    events: list[dict] = []
+    runner.add_listener(events.append)
+    prev_current = TaskRunner._current
+    TaskRunner._current = runner
+    try:
+        with progress_scope(0.20, 0.80):
+            TaskRunner.report_progress(
+                0.0, "外层起点", "开始外层阶段", tag="asr", label="DEMUCS"
+            )
+            with progress_scope(0.50, 1.0):
+                TaskRunner.report_progress(
+                    0.50, "内层中点", "内层进度 50%", tag="asr", label="VAD"
+                )
+            TaskRunner.report_progress(
+                1.0,
+                "外层终点",
+                "[green]完成外层阶段[/green]",
+                tag="asr",
+                label="DEMUCS",
+            )
+            # Deduplication when message is None and sub_step + bucket are unchanged
+            TaskRunner.report_progress(1.0, "外层终点")
+
+        prog_events = [e for e in events if e.get("type") == "task_progress"]
+        assert len(prog_events) == 3
+        assert [e["sub_progress"] for e in prog_events] == [0.2, 0.65, 0.8]
+        assert (
+            prog_events[1]["log_tag"] == "asr" and prog_events[1]["log_label"] == "VAD"
+        )
+        assert prog_events[2]["message"] == "完成外层阶段"
+
+        TaskRunner.log_event(
+            "[yellow]⚠️ 命中重试[/yellow]", tag="warn", label="RETRY", level="warn"
+        )
+        log_events = [e for e in events if e.get("type") == "task_log"]
+        assert len(log_events) == 1
+        assert log_events[0]["message"] == "命中重试"
+        assert log_events[0]["warn"] is True
+        assert any(
+            item["msg"] == "命中重试" and item["warn"] for item in runner.recent_logs()
+        )
+
+        # Partial translation flush keeps has_translations() False until final save
+        ws_a = TaskWorkspace(Path("output") / "task_a")
+        ws_b = TaskWorkspace(Path("output") / "task_b")
+        ws_a.ensure_dirs()
+        ws_b.ensure_dirs()
+
+        utts_a = [
+            {"id": "u_0000", "index": 0, "src": "Hello world.", "tgt": ""},
+            {"id": "u_0001", "index": 1, "src": "Second line.", "tgt": ""},
+        ]
+        ws_a.save_utterances(utts_a, mark_translated=False)
+        assert ws_a.has_utterances() is True
+        assert ws_a.has_translations() is False
+
+        res_chunk = ChunkTranslateResult(
+            0, "Hello world.", "你好世界。", ["你好世界直译。"]
+        )
+        ts = _flush_chunk_translation_live(
+            ws_a,
+            utts_a,
+            [0, 1],
+            [(0, ["Hello world."]), (1, ["Second line."])],
+            res_chunk,
+            0.0,
+        )
+        assert ts > 0.0
+        assert ws_a.has_translations() is False
+        saved_partial = ws_a.load_utterances()
+        assert saved_partial[0]["tgt"] == "你好世界。"
+        assert saved_partial[0]["direct"] == "你好世界直译。"
+        assert saved_partial[1]["tgt"] == ""
+
+        # Active task artifact notification includes stages_done with translate=False during partial flush
+        # and does not re-log ambient pause_message when message is None
+        runner.pause_message = "Waiting for terminology review before translation"
+        log_count_before = len(runner.recent_logs())
+        events.clear()
+        ws_a.save_terms("AI Topic", [{"src": "Transformer", "tgt": "Transformer"}])
+        art_events = [e for e in events if e.get("type") == "task_artifact"]
+        assert len(art_events) == 1
+        assert art_events[0]["task_id"] == "task_a"
+        assert art_events[0]["artifact"] == "terms"
+        assert art_events[0]["stages_done"]["terms"] is True
+        assert art_events[0]["stages_done"]["translate"] is False
+        assert len(runner.recent_logs()) == log_count_before
+        runner.pause_message = ""
+
+        # Cross-task isolation: saving on ws_b while task_a is active does not overwrite task_a stages_done
+        events.clear()
+        ws_b.save_terms("Other Topic", [{"src": "CNN", "tgt": "卷积网络"}])
+        assert [e for e in events if e.get("type") == "task_artifact"] == []
+
+        # Final save on ws_a marks translations complete
+        utts_a[1]["tgt"] = "第二行。"
+        ws_a.save_utterances(utts_a)
+        assert ws_a.has_translations() is True
+        assert runner.stages_done["translate"] is True
+    finally:
+        runner.remove_listener(events.append)
+        TaskRunner._current = prev_current

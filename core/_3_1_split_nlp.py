@@ -4,8 +4,6 @@ import re
 import unicodedata
 from typing import Any
 
-from rich import print as rprint
-
 from core.concurrency import ContextThreadPoolExecutor
 from core.prompts import get_punctuation_prompt
 from core.utils import (
@@ -15,6 +13,8 @@ from core.utils import (
     get_source_language,
     join_words,
     load_key_or,
+    log_event,
+    report_progress,
 )
 from core.workspace import get_active_workspace
 
@@ -557,9 +557,11 @@ def _restore_window_punctuation(
     except Exception as exc:
         if type(exc).__name__ == "StopTask":
             raise
-        rprint(
-            f"[yellow]⚠️ Punctuation restoration fallback on chunk {win_idx} ({exc}); "
-            "using existing punctuation.[/yellow]"
+        log_event(
+            f"标点恢复窗口 #{win_idx + 1} 降级为原标点 ({exc})",
+            tag="warn",
+            label="NLP",
+            level="warn",
         )
         ends = _existing_sentence_ends(win_words, joiner=joiner, word_gaps=word_gaps)
         fallback_punct: dict[int, str] = {}
@@ -859,6 +861,14 @@ def restore_and_split_words(
 
     global_end_indices: set[int] = set()
     global_punct_by_word: dict[int, str] = {}
+    total_win = max(1, len(windows))
+    report_progress(
+        0.05,
+        f"标点恢复 0/{total_win}",
+        f"正在使用 LLM 恢复标点与句子边界（共 {total_win} 个滑动窗口）",
+        tag="nlp",
+        label="NLP",
+    )
 
     with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_win = {
@@ -869,14 +879,23 @@ def restore_and_split_words(
                 joiner,
                 lang,
                 word_gaps[w_start:w_end] if word_gaps is not None else None,
-            ): (w_start, w_end, own_start, own_end)
+            ): (idx, w_start, w_end, own_start, own_end)
             for idx, (w_start, w_end, own_start, own_end) in enumerate(windows)
         }
         try:
+            done_win = 0
             for future in concurrent.futures.as_completed(future_to_win):
                 check_cancel()
-                w_start, _w_end, own_start, own_end = future_to_win[future]
+                win_idx, w_start, _w_end, own_start, own_end = future_to_win[future]
                 res = future.result()
+                done_win += 1
+                report_progress(
+                    0.05 + 0.85 * (done_win / total_win),
+                    f"标点恢复 {done_win}/{total_win}",
+                    f"完成标点恢复窗口 #{win_idx + 1:02d} ({done_win}/{total_win})",
+                    tag="nlp",
+                    label="NLP",
+                )
                 local_ends, local_punct = res if isinstance(res, tuple) else (res, {})
                 for local_idx, p_ch in local_punct.items():
                     global_idx = w_start + local_idx
@@ -1069,15 +1088,23 @@ def split_by_spacy():
     ws = get_active_workspace()
 
     if ws.has_utterances():
-        rprint(
-            "[yellow]⚠️ Utterances already exist in workspace database, skip <split_by_spacy> step.[/yellow]"
+        report_progress(
+            1.0,
+            "复用已断句结果",
+            "工作区已存在断句记录，跳过标点与断句阶段",
+            tag="nlp",
+            label="NLP",
         )
         return
 
     language = get_source_language()
     joiner = get_joiner(language)
-    rprint(
-        f"[blue]🔍 Splitting sentences by LLM-restored punctuation (language: {language})...[/blue]"
+    report_progress(
+        0.02,
+        f"准备标点恢复 ({language})…",
+        f"开始执行 LLM 标点恢复与语义断句 (语言: {language})",
+        tag="nlp",
+        label="NLP",
     )
 
     word_dicts: list[dict[str, Any]] = ws.load_words()
@@ -1095,7 +1122,13 @@ def split_by_spacy():
     )
     ws.save_utterances(utterances)
 
-    rprint(f"[green]💾 {len(sentences)} sentences saved to `{ws.db_path}`[/green]")
+    report_progress(
+        1.0,
+        f"共切分 {len(sentences)} 句",
+        f"标点恢复与断句完成，共生成 {len(sentences)} 条语句",
+        tag="nlp",
+        label="NLP",
+    )
 
 
 if __name__ == "__main__":

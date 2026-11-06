@@ -7,9 +7,9 @@ from threading import Lock
 from urllib.parse import urlparse
 import json_repair
 from openai import OpenAI
+from core.task_runner import TaskRunner
 from core.utils.config_utils import load_key, load_key_or, is_placeholder_key
 from core.utils.models import resolve_task_path
-from rich import print as rprint
 from core.utils.decorator import except_handler
 
 # ------------
@@ -279,7 +279,9 @@ def ask_gpt(prompt, resp_type=None, valid_def=None, log_title="default"):
     )
     if cached is not False and cached is not None:
         if valid_def is None or valid_def(cached).get("status") == "success":
-            rprint("use cache response")
+            TaskRunner.log_event(
+                f"命中 LLM 缓存 ({log_title})", tag="llm", label="CACHE"
+            )
             return cached
 
     base_url = normalize_base_url(load_key("api.base_url"))

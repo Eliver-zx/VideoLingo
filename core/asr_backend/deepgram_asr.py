@@ -2,10 +2,14 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from rich import print as rprint
 
 from core.asr_backend.audio_preprocess import audio_slice_wav
-from core.utils import check_cancel, load_key_or, set_runtime_state as update_key
+from core.utils import (
+    check_cancel,
+    load_key_or,
+    report_progress,
+    set_runtime_state as update_key,
+)
 
 DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 SAMPLE_RATE = 16000
@@ -127,8 +131,12 @@ def transcribe_audio_deepgram(
     else:
         params["detect_language"] = "true"
 
-    rprint(
-        f"[cyan]🎤 Transcribing audio with Deepgram (model={model}, language={language})...[/cyan]"
+    report_progress(
+        0.30,
+        f"请求 Deepgram ({model})…",
+        f"正在请求 Deepgram 语音识别 (model={model}, language={language})",
+        tag="asr",
+        label="ASR",
     )
     start_t = time.perf_counter()
     check_cancel()
@@ -146,7 +154,13 @@ def transcribe_audio_deepgram(
     dg_json = response.json()
 
     elapsed = time.perf_counter() - start_t
-    rprint(f"[green]✓ Deepgram transcription completed in {elapsed:.2f}s[/green]")
+    report_progress(
+        0.98,
+        "Deepgram 识别完成",
+        f"Deepgram 语音识别完成 (耗时 {elapsed:.2f}s)",
+        tag="asr",
+        label="ASR",
+    )
 
     parsed = deepgram2whisper(dg_json, offset=offset, fallback_lang=language)
     if parsed.get("language"):

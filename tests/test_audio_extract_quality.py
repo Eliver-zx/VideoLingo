@@ -19,7 +19,6 @@ ROOT = Path(__file__).resolve().parents[1]
 def configure_extraction(
     monkeypatch, directory, config, encoder=True, real_encoder_probe=False
 ):
-    monkeypatch.setattr(audio_preprocess, "rprint", lambda *args: None)
     monkeypatch.setattr(audio_preprocess, "_AUDIO_DIR", str(directory))
     monkeypatch.setattr(audio_preprocess, "_RAW_AUDIO_FILE", str(directory / "raw.mp3"))
     monkeypatch.setattr(audio_preprocess, "resolve_task_path", lambda p: p)
@@ -317,7 +316,6 @@ def test_normalize_limits_gain_to_peak_headroom(tmp_path, monkeypatch):
     from pydub import AudioSegment
     from pydub.generators import Sine
 
-    monkeypatch.setattr(audio_preprocess, "rprint", lambda *args: None)
     burst = Sine(440, sample_rate=16000).to_audio_segment(duration=60, volume=-1.0)
     sparse = burst + AudioSegment.silent(duration=10000, frame_rate=16000)
     source = tmp_path / "sparse.wav"
@@ -336,7 +334,6 @@ def test_normalize_still_attenuates_loud_input(tmp_path, monkeypatch):
     from pydub import AudioSegment
     from pydub.generators import Sine
 
-    monkeypatch.setattr(audio_preprocess, "rprint", lambda *args: None)
     loud = Sine(440, sample_rate=16000).to_audio_segment(duration=1000, volume=-1.0)
     source = tmp_path / "loud.wav"
     loud.export(source, format="wav")
@@ -351,7 +348,6 @@ def test_normalize_still_attenuates_loud_input(tmp_path, monkeypatch):
 def test_normalize_survives_silence(tmp_path, monkeypatch):
     from pydub import AudioSegment
 
-    monkeypatch.setattr(audio_preprocess, "rprint", lambda *args: None)
     source = tmp_path / "silence.wav"
     AudioSegment.silent(duration=500, frame_rate=16000).export(source, format="wav")
     output = audio_preprocess.normalize_audio_volume(
@@ -369,7 +365,6 @@ def test_custom_voice_reference_is_merged_at_44k(tmp_path, monkeypatch):
     from pydub import AudioSegment
     from pydub.generators import Sine
 
-    monkeypatch.setattr(sf_fishtts, "rprint", lambda *args: None)
     clips = []
     for index in (1, 2):
         clip = tmp_path / f"{index}.wav"

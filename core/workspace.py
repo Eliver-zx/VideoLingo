@@ -944,6 +944,7 @@ class TaskWorkspace:
                 """,
                 (ts,),
             )
+        self.notify_artifact_update("words", tag="asr", label="ASR")
 
     def load_words(self) -> list[dict[str, Any]]:
         with self._db(write=False) as conn:
@@ -1049,6 +1050,7 @@ class TaskWorkspace:
                     ts,
                 ),
             )
+        self.notify_artifact_update("terms", tag="llm", label="TERMS")
 
     def load_terms(self) -> dict[str, Any]:
         with self._db(write=False) as conn:
@@ -1112,6 +1114,7 @@ class TaskWorkspace:
         utterances: list[dict[str, Any]],
         *,
         mtime: float | None = None,
+        mark_translated: bool | None = None,
     ) -> int:
         ts = float(mtime) if mtime is not None else time.time()
         rows: list[tuple[Any, ...]] = []
@@ -1177,10 +1180,13 @@ class TaskWorkspace:
                     """,
                     rows,
                 )
+            translations_saved = (
+                has_any_tgt if mark_translated is None else bool(mark_translated)
+            )
             for k, v in (
                 ("utterances_saved", True),
                 ("utterances_revision", next_rev),
-                ("translations_saved", has_any_tgt),
+                ("translations_saved", translations_saved),
                 ("sub_cues_saved", has_any_cues),
             ):
                 conn.execute(
@@ -1193,6 +1199,11 @@ class TaskWorkspace:
                     """,
                     (k, json.dumps(v), ts),
                 )
+        self.notify_artifact_update(
+            "utterances",
+            tag="llm" if has_any_tgt else "nlp",
+            label="TRANS" if has_any_tgt else "NLP",
+        )
         return next_rev
 
     def load_utterances(self) -> list[dict[str, Any]]:
@@ -1214,8 +1225,9 @@ class TaskWorkspace:
         return False
 
     def has_translations(self) -> bool:
-        if bool(self.get_kv("translations_saved", False)):
-            return True
+        saved = self.get_kv("translations_saved", None)
+        if saved is not None:
+            return bool(saved)
         utts = self.load_utterances()
         return bool(utts) and any(str(u.get("tgt") or "").strip() for u in utts)
 
@@ -1357,6 +1369,40 @@ class TaskWorkspace:
                 for r in records
             )
         )
+
+    def compute_stages_done(self) -> dict[str, bool]:
+        return {
+            "asr": self.has_words(),
+            "split": self.has_utterances(),
+            "terms": self.has_terms(),
+            "translate": self.has_translations(),
+            "subtitles": (self.root / "trans.srt").is_file()
+            and (self.root / "src.srt").is_file(),
+            "sub_video": (self.root / "output_sub.mp4").is_file(),
+            "dub_audio": (self.audio_dir / "dub.wav").is_file()
+            or (self.root / "dub.mp3").is_file(),
+            "dub_video": (self.root / "output_dub.mp4").is_file(),
+        }
+
+    def notify_artifact_update(
+        self,
+        kind: Any,
+        message: str | None = None,
+        *,
+        tag: Any = None,
+        label: str | None = None,
+    ) -> None:
+        from core.task_runner import TaskRunner
+
+        runner = TaskRunner._current
+        if runner is not None and runner.active_task_id == self.task_id:
+            TaskRunner.notify_artifact(
+                kind,
+                self.compute_stages_done(),
+                message=message,
+                tag=tag,
+                label=label,
+            )
 
     def is_step_done(self, step: str | Path) -> bool:
         key = Path(str(step).replace("\\", "/")).name

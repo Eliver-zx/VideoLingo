@@ -6,10 +6,6 @@ import math
 import re
 from typing import Any, List, Tuple
 
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-
 from core._1_ytdlp import find_subtitle_file
 from core._3_2_split_meaning import (
     BR_TAG,
@@ -30,12 +26,11 @@ from core.utils import (  # noqa: F401
     join_words,
     load_key,
     load_key_or,
-    rprint,
+    log_event,
+    report_progress,
 )
 from core.utils.config_utils import get_text_joiner
 from core.workspace import get_active_workspace
-
-console = Console()
 
 split_sentence = _default_split_sentence
 get_align_prompt = _default_get_align_prompt
@@ -134,13 +129,6 @@ def align_subs(
 
     # The parts are in the target language, so the source-language joiner does not apply
     tr_remerged = str(join_words(tr_parts, get_text_joiner("".join(tr_parts))))
-
-    table = Table(title="🔗 Aligned parts")
-    table.add_column("Language", style="cyan")
-    table.add_column("Parts", style="magenta")
-    table.add_row("SRC_LANG", "\n".join(src_parts))
-    table.add_row("TARGET_LANG", "\n".join(tr_parts))
-    console.print(table)
 
     return src_parts, tr_parts, tr_remerged
 
@@ -317,13 +305,6 @@ def align_source_by_ratio(
 
     if any(not p.strip() for p in src_parts) or len(src_parts) != len(tr_parts):
         return [src_sub], [tr_sub], tr_remerged
-
-    table = Table(title="🔗 Aligned parts")
-    table.add_column("Language", style="cyan")
-    table.add_column("Parts", style="magenta")
-    table.add_row("SRC_LANG", "\n".join(src_parts))
-    table.add_row("TARGET_LANG", "\n".join(tr_parts))
-    console.print(table)
 
     return src_parts, tr_parts, tr_remerged
 
@@ -542,8 +523,11 @@ def _batch_split_sentences_llm(
         except StopTask:
             raise
         except Exception as exc:
-            console.print(
-                f"[yellow]⚠️ Batch split failed ({exc}), falling back to per-line split...[/yellow]"
+            log_event(
+                f"批量长句切分失败 ({exc})，回退至单句切分",
+                tag="warn",
+                label="SPLIT",
+                level="warn",
             )
 
         for line_idx, text, num_parts in batch:
@@ -600,12 +584,6 @@ def split_align_subs(
             or calc_len(tr) * TARGET_SUB_MULTIPLIER > MAX_SUB_LENGTH
         ):
             to_split.append(i)
-            table = Table(title=f"📏 Line {i} needs to be split")
-            table.add_column("Type", style="cyan")
-            table.add_column("Content", style="magenta")
-            table.add_row("Source Line", src)
-            table.add_row("Target Line", tr)
-            console.print(table)
 
     if not use_legacy_align and not use_custom_split:
         llm_pending: list[tuple[int, str, int]] = []
@@ -658,8 +636,11 @@ def split_align_subs(
             for i, _tr_clean, _needed_k in llm_pending:
                 split_tr = (batch_splits.get(i) or "").strip()
                 if len([part for part in split_tr.split("\n") if part.strip()]) < 2:
-                    console.print(
-                        f"[yellow]⚠️ Line {i} could not be split, keeping it as is[/yellow]"
+                    log_event(
+                        f"第 {i + 1} 行长句未能切分，保持原句",
+                        tag="warn",
+                        label="SPLIT",
+                        level="warn",
                     )
                     continue
                 gaps_i = (
@@ -675,8 +656,11 @@ def split_align_subs(
                     or len(src_parts) < 2
                     or len(src_parts) != len(tr_parts)
                 ):
-                    console.print(
-                        f"[yellow]⚠️ Line {i} was aligned into a different number of parts, keeping it as is[/yellow]"
+                    log_event(
+                        f"第 {i + 1} 行双语切分段数不一致，保持原句",
+                        tag="warn",
+                        label="SPLIT",
+                        level="warn",
                     )
                     continue
                 src_work[i] = src_parts
@@ -689,8 +673,11 @@ def split_align_subs(
             if use_legacy_align:
                 split_src = _call_split_sentence(src_lines[i], num_parts=2).strip()
                 if len([part for part in split_src.split("\n") if part.strip()]) < 2:
-                    console.print(
-                        f"[yellow]⚠️ Line {i} could not be split, keeping it as is[/yellow]"
+                    log_event(
+                        f"第 {i + 1} 行长句未能切分，保持原句",
+                        tag="warn",
+                        label="SPLIT",
+                        level="warn",
                     )
                     return
                 src_parts, tr_parts, tr_remerged = align_subs(
@@ -705,8 +692,11 @@ def split_align_subs(
                     tr_clean, num_parts=2, language=target_language
                 ).strip()
                 if len([part for part in split_tr.split("\n") if part.strip()]) < 2:
-                    console.print(
-                        f"[yellow]⚠️ Line {i} could not be split, keeping it as is[/yellow]"
+                    log_event(
+                        f"第 {i + 1} 行长句未能切分，保持原句",
+                        tag="warn",
+                        label="SPLIT",
+                        level="warn",
                     )
                     return
                 gaps_i = (
@@ -719,8 +709,11 @@ def split_align_subs(
                 )
             # Source and translation must stay in step: a line is split on both sides or not at all
             if not tr_parts or len(src_parts) < 2 or len(src_parts) != len(tr_parts):
-                console.print(
-                    f"[yellow]⚠️ Line {i} was aligned into a different number of parts, keeping it as is[/yellow]"
+                log_event(
+                    f"第 {i + 1} 行双语切分段数不一致，保持原句",
+                    tag="warn",
+                    label="SPLIT",
+                    level="warn",
                 )
                 return
             src_work[i] = src_parts
@@ -734,7 +727,12 @@ def split_align_subs(
             if isinstance(error, StopTask):
                 raise error
             if error:
-                console.print(f"[yellow]⚠️ Line {i} is kept unsplit: {error}[/yellow]")
+                log_event(
+                    f"第 {i + 1} 行长句切分异常，保持原句: {error}",
+                    tag="warn",
+                    label="SPLIT",
+                    level="warn",
+                )
 
     # Flatten `src_work` and `tr_work`
     flat_src = [
@@ -969,15 +967,24 @@ def split_for_sub_main():
                     for c in all_cues
                 )
             ):
-                rprint(
-                    "[yellow]⚠️ Subtitle split cues already exist in workspace database and are up-to-date, "
-                    "skip <split_for_sub_main> step.[/yellow]"
+                report_progress(
+                    1.0,
+                    "复用已有字幕切分结果",
+                    "字幕显示切分已是最新，跳过重复切分",
+                    tag="llm",
+                    label="CACHE",
                 )
                 return
         except (ValueError, TypeError, KeyError, OSError):
             pass
 
-    console.print("[bold green]🚀 Start splitting subtitles...[/bold green]")
+    report_progress(
+        0.05,
+        "正在切分显示字幕…",
+        f"开始执行长字幕切分与对齐（共 {len(utterances)} 句）",
+        tag="llm",
+        label="SPLIT",
+    )
 
     if not utterances:
         raise FileNotFoundError(
@@ -987,9 +994,6 @@ def split_for_sub_main():
     trans = [str(u.get("tgt") or "") for u in utterances]
 
     if find_subtitle_file():
-        console.print(
-            "[cyan]📄 Subtitles of the user: the lines are kept as they are[/cyan]"
-        )
         for u in utterances:
             u["sub_split_config"] = {
                 "max_length": MAX_SUB_LENGTH,
@@ -1007,6 +1011,13 @@ def split_for_sub_main():
             ]
         rev = ws.save_utterances(utterances)
         ws.set_kv("sub_split_rev", rev)
+        report_progress(
+            1.0,
+            "保留外部字幕行结构",
+            "外部导入字幕保持原始行结构",
+            tag="llm",
+            label="SPLIT",
+        )
         return
 
     orig_src = src.copy()
@@ -1056,7 +1067,13 @@ def split_for_sub_main():
                 orig_word_gaps[u_idx] = None
 
     for attempt in range(3):
-        console.print(Panel(f"🔄 Split attempt {attempt + 1}", expand=False))
+        report_progress(
+            0.15 + attempt * 0.25,
+            f"字幕切分第 {attempt + 1}/3 轮",
+            f"执行字幕切分第 {attempt + 1} 轮",
+            tag="llm",
+            label="SPLIT",
+        )
         prev_src = src.copy()
         line_gaps: list[list[float] | None] | None = None
         if attempt == 0 and orig_word_gaps:
@@ -1137,6 +1154,13 @@ def split_for_sub_main():
 
     rev = ws.save_utterances(utterances)
     ws.set_kv("sub_split_rev", rev)
+    report_progress(
+        1.0,
+        f"已生成 {len(split_src)} 条字幕行",
+        f"字幕切分完成（{len(orig_src)} 句 -> {len(split_src)} 条字幕行）",
+        tag="llm",
+        label="SPLIT",
+    )
 
 
 if __name__ == "__main__":

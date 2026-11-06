@@ -1,10 +1,9 @@
-from core.task_runner import StopTask
+from core.task_runner import StopTask, TaskRunner
 from core.utils.models import resolve_task_path
 
 import functools
 import time
 import os
-from rich import print as rprint
 
 
 # ------------------------------
@@ -26,7 +25,12 @@ def except_handler(error_msg, retry=0, delay=1, default_return=None):
                     if isinstance(e, ValueError) and str(e) == "API key is not set":
                         raise
                     last_exception = e
-                    rprint(f"[red]{error_msg}: {e}, retry: {i + 1}/{retry}[/red]")
+                    TaskRunner.log_event(
+                        f"{error_msg}: {e} (重试 {i + 1}/{retry})",
+                        tag="warn",
+                        label="RETRY",
+                        level="warn",
+                    )
                     if i == retry:
                         if default_return is not None:
                             return default_return
@@ -51,14 +55,16 @@ def check_file_exists(step_or_path):
 
             ws = get_active_workspace()
             if ws.is_step_done(step_or_path):
-                rprint(
-                    f"[yellow]⚠️ Step <{step_or_path}> already completed, skip <{func.__name__}> step.[/yellow]"
+                TaskRunner.log_event(
+                    f"阶段 <{step_or_path}> 已完成，跳过 {func.__name__}",
+                    label="CACHE",
                 )
                 return
             resolved = resolve_task_path(step_or_path)
             if os.path.exists(resolved):
-                rprint(
-                    f"[yellow]⚠️ Step <{resolved}> already completed, skip <{func.__name__}> step.[/yellow]"
+                TaskRunner.log_event(
+                    f"产物 <{os.path.basename(resolved)}> 已存在，跳过 {func.__name__}",
+                    label="CACHE",
                 )
                 return
             return func(*args, **kwargs)

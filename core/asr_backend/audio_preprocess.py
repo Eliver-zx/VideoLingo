@@ -5,7 +5,13 @@ import subprocess
 from typing import Dict, List, Tuple
 import pandas as pd
 from pydub import AudioSegment
-from core.utils import load_key_or, set_runtime_state as update_key
+from core.utils import (
+    check_cancel,
+    load_key_or,
+    log_event,
+    report_progress,
+    set_runtime_state as update_key,
+)
 from core.utils.models import (
     _AUDIO_DIR,
     _RAW_AUDIO_FILE,
@@ -15,7 +21,6 @@ from core.utils.models import (
 from core.workspace import get_active_workspace
 from pydub.silence import detect_silence
 from pydub.utils import mediainfo
-from rich import print as rprint
 
 ensure_windows_ffmpeg_path()
 
@@ -135,8 +140,11 @@ def _raw_audio_command(input_file: str, high_quality: bool = True):
     # Output as WAV (PCM) which all ffmpeg builds support.
     # Downstream readers (pydub, librosa, whisperX) detect format by
     # file header, not extension, so .mp3 path with WAV content works.
-    rprint(
-        "[yellow]⚠️ libmp3lame not found in ffmpeg, falling back to WAV (PCM) encoding[/yellow]"
+    log_event(
+        "FFmpeg 未检测到 libmp3lame 编码器，自动回退为 WAV (PCM) 编码",
+        tag="warn",
+        label="FFMPEG",
+        level="warn",
     )
     return [
         "ffmpeg",
@@ -171,14 +179,19 @@ def normalize_audio_volume(
     if not math.isfinite(change_in_dBFS) or not math.isfinite(headroom):
         change_in_dBFS = 0.0
     elif change_in_dBFS > headroom:
-        rprint(
-            f"[yellow]⚠️ Gain limited to {headroom:+.1f}dB (wanted {change_in_dBFS:+.1f}dB) to keep peaks under {peak_ceiling_db:.1f}dBFS[/yellow]"
+        log_event(
+            f"音量增益限制为 {headroom:+.1f}dB（目标 {change_in_dBFS:+.1f}dB），防止峰值超过 {peak_ceiling_db:.1f}dBFS",
+            tag="warn",
+            label="AUDIO",
+            level="warn",
         )
         change_in_dBFS = headroom
     normalized_audio = audio.apply_gain(change_in_dBFS)
     normalized_audio.export(output_path, format=format)
-    rprint(
-        f"[green]✅ Audio normalized from {audio.dBFS:.1f}dB to {audio.dBFS + change_in_dBFS:.1f}dB[/green]"
+    log_event(
+        f"音频响度归一化完成: {audio.dBFS:.1f}dB -> {audio.dBFS + change_in_dBFS:.1f}dB",
+        tag="asr",
+        label="AUDIO",
     )
     return output_path
 
@@ -190,19 +203,25 @@ def convert_video_to_audio(
     raw_file = resolve_task_path(_RAW_AUDIO_FILE)
     os.makedirs(audio_dir, exist_ok=True)
     if force or not os.path.exists(raw_file):
-        mode_desc = (
-            "high quality audio"
-            if high_quality
-            else "lightweight ASR audio (16kHz mono)"
+        mode_desc = "高保真双声道音轨" if high_quality else "16kHz 单声道识别音轨"
+        report_progress(
+            0.10,
+            f"提取{mode_desc}…",
+            f"正在使用 FFmpeg 提取{mode_desc} ({os.path.basename(video_file)})",
+            tag="asr",
+            label="FFMPEG",
         )
-        rprint(f"[blue]🎬➡️🎵 Converting to {mode_desc} with FFmpeg ......[/blue]")
         subprocess.run(
             _raw_audio_command(video_file, high_quality=high_quality),
             check=True,
             stderr=subprocess.PIPE,
         )
-        rprint(
-            f"[green]🎬➡️🎵 Converted <{video_file}> to <{raw_file}> with FFmpeg\n[/green]"
+        report_progress(
+            1.0,
+            "音轨提取完成",
+            f"FFmpeg 音轨提取完成 -> {os.path.basename(raw_file)}",
+            tag="asr",
+            label="FFMPEG",
         )
 
 
@@ -213,13 +232,25 @@ def prepare_audio_for_asr(
     raw_file = resolve_task_path(_RAW_AUDIO_FILE)
     os.makedirs(audio_dir, exist_ok=True)
     if force or not os.path.exists(raw_file):
-        rprint("[blue]🎵 Preparing uploaded audio for ASR with FFmpeg ......[/blue]")
+        report_progress(
+            0.10,
+            "转码输入音频…",
+            f"正在使用 FFmpeg 预处理音频 ({os.path.basename(audio_file)})",
+            tag="asr",
+            label="FFMPEG",
+        )
         subprocess.run(
             _raw_audio_command(audio_file, high_quality=high_quality),
             check=True,
             stderr=subprocess.PIPE,
         )
-        rprint(f"[green]🎵 Prepared <{audio_file}> as <{raw_file}>\n[/green]")
+        report_progress(
+            1.0,
+            "音频预处理完成",
+            f"音频预处理完成 -> {os.path.basename(raw_file)}",
+            tag="asr",
+            label="FFMPEG",
+        )
 
 
 def get_audio_duration(audio_file: str) -> float:
@@ -255,8 +286,11 @@ def get_audio_duration(audio_file: str) -> float:
             + float(duration_parts[2])
         )
     except Exception as e:
-        rprint(
-            f"[red]❌ Error: Failed to get audio duration for {audio_file}: {e}[/red]"
+        log_event(
+            f"读取音频时长失败 ({os.path.basename(str(audio_file))}): {e}",
+            tag="warn",
+            label="FFMPEG",
+            level="warn",
         )
         duration = 0.0
     return duration
@@ -266,23 +300,41 @@ def split_audio(
     audio_file: str, target_len: float = 30 * 60, win: float = 60
 ) -> List[Tuple[float, float]]:
     ## 在 [target_len-win, target_len+win] 区间内用 pydub 检测静默，切分音频
-    rprint(
-        f"[blue]🎙️ Starting audio segmentation {audio_file} {target_len} {win}[/blue]"
+    report_progress(
+        0.10,
+        "加载音频并分析静音段…",
+        f"正在加载音频并检测静音切分点 (目标步长 {int(target_len)}s)",
+        tag="asr",
+        label="VAD",
     )
     audio = AudioSegment.from_file(audio_file)
     duration = float(mediainfo(audio_file)["duration"])
     if duration <= target_len + win:
+        report_progress(
+            1.0,
+            f"单段音频 ({duration:.1f}s)",
+            f"音频时长 {duration:.1f}s，无需长片段切分",
+            tag="asr",
+            label="VAD",
+        )
         return [(0, duration)]
     segments, pos = [], 0.0
     safe_margin = 0.5  # 静默点前后安全边界，单位秒
 
     while pos < duration:
+        check_cancel()
         if duration - pos <= target_len:
             segments.append((pos, duration))
             break
 
         threshold = pos + target_len
         ws, we = int((threshold - win) * 1000), int((threshold + win) * 1000)
+        report_progress(
+            min(0.95, 0.15 + 0.80 * (pos / max(1.0, duration))),
+            f"扫描静音切分 {int(pos)}s/{int(duration)}s",
+            tag="asr",
+            label="VAD",
+        )
 
         # 获取完整的静默区域
         silence_regions = detect_silence(
@@ -304,15 +356,24 @@ def split_audio(
             start, end = valid_regions[0]
             split_at = start + safe_margin  # 在静默区域起始点后0.5秒处切分
         else:
-            rprint(
-                f"[yellow]⚠️ No valid silence regions found for {audio_file} at {threshold}s, using threshold[/yellow]"
+            log_event(
+                f"在 {threshold:.0f}s 附近未检出合适静音区，按固定阈值切分",
+                tag="warn",
+                label="VAD",
+                level="warn",
             )
             split_at = threshold
 
         segments.append((pos, split_at))
         pos = split_at
 
-    rprint(f"[green]🎙️ Audio split completed {len(segments)} segments[/green]")
+    report_progress(
+        1.0,
+        f"已切分为 {len(segments)} 段",
+        f"长音频静音切分完成，共 {len(segments)} 个片段",
+        tag="asr",
+        label="VAD",
+    )
     return segments
 
 
@@ -368,8 +429,11 @@ def process_transcription(result: Dict) -> pd.DataFrame:
         for word in words:
             # Check word length
             if len(word["word"]) > 80:
-                rprint(
-                    f"[yellow]⚠️ Warning: Detected word longer than 80 characters, skipping: {word['word']}[/yellow]"
+                log_event(
+                    f"跳过超长异常词项 (>80 字符): {word['word'][:40]}…",
+                    tag="warn",
+                    label="ASR",
+                    level="warn",
                 )
                 continue
 
@@ -451,13 +515,20 @@ def save_results(df: pd.DataFrame):
     df = pd.DataFrame(df[df["text"].str.len() > 0]).copy()
     removed_rows = initial_rows - len(df)
     if removed_rows > 0:
-        rprint(f"[blue]ℹ️ Removed {removed_rows} row(s) with empty text.[/blue]")
+        log_event(
+            f"已清理 {removed_rows} 条空白词级记录",
+            tag="asr",
+            label="ASR",
+        )
 
     # Check for and remove words longer than 80 characters
     long_words = df[df["text"].str.len() > 80]
     if not long_words.empty:
-        rprint(
-            f"[yellow]⚠️ Warning: Detected {len(long_words)} word(s) longer than 80 characters. These will be removed.[/yellow]"
+        log_event(
+            f"已移除 {len(long_words)} 条超过 80 字符的异常词级记录",
+            tag="warn",
+            label="ASR",
+            level="warn",
         )
         df = pd.DataFrame(df[df["text"].str.len() <= 80]).copy()
 
@@ -474,7 +545,11 @@ def save_results(df: pd.DataFrame):
     ]
     ws = get_active_workspace()
     ws.save_words(word_records)
-    rprint(f"[green]📊 Saved {len(word_records)} words to {ws.db_path}[/green]")
+    log_event(
+        f"已写入 {len(word_records)} 条词级时间戳至工作区数据库",
+        tag="asr",
+        label="ASR",
+    )
 
 
 def save_language(language: str):

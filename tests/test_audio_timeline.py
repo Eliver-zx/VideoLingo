@@ -10,7 +10,6 @@ from core.asr_backend import audio_preprocess
 
 
 def configure_extraction(monkeypatch, directory, encoder):
-    monkeypatch.setattr(audio_preprocess, "rprint", lambda *args: None)
     monkeypatch.setattr(audio_preprocess, "_AUDIO_DIR", str(directory))
     monkeypatch.setattr(audio_preprocess, "_RAW_AUDIO_FILE", str(directory / "raw.mp3"))
     monkeypatch.setattr(audio_preprocess, "resolve_task_path", lambda p: p)

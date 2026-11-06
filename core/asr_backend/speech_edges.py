@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage=false
 """Conservative speech boundaries; keep pauses and the original sample timeline."""
 
 from contextlib import contextmanager
@@ -30,7 +31,7 @@ def _unicode_safe_jit_load(torch_mod):
 
 def _speech_regions(audio, sample_rate):
     import torch
-    from core.utils import check_cancel
+    from core.utils import check_cancel, report_progress
 
     # Importing silero_vad changes PyTorch's process-wide thread count. Restore it
     # before ASR runs, including when loading or inference fails.
@@ -39,6 +40,13 @@ def _speech_regions(audio, sample_rate):
         torch.set_num_threads(1)
         from silero_vad import load_silero_vad, get_speech_timestamps
 
+        report_progress(
+            None,
+            "VAD 语音边界检测…",
+            "正在运行 Silero VAD 检测有效语音边界",
+            tag="asr",
+            label="VAD",
+        )
         with _unicode_safe_jit_load(torch):
             model = load_silero_vad()
         return get_speech_timestamps(

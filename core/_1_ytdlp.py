@@ -3,8 +3,9 @@ import json
 import os
 import re
 import sys
+import time
 from typing import Any
-from core.utils import load_key, rprint
+from core.utils import check_cancel, load_key, log_event, report_progress
 from core.utils.models import resolve_task_path
 from core.workspace import TaskWorkspace, probe_media_metadata  # noqa: F401
 
@@ -29,7 +30,7 @@ def update_ytdlp():
 
         return YoutubeDL
     except Exception as e:
-        rprint(f"[yellow]Warning: Failed to import yt-dlp: {e}[/yellow]")
+        log_event(f"导入 yt-dlp 失败: {e}", tag="warn", label="YTDLP", level="warn")
         raise
 
 
@@ -46,6 +47,36 @@ def download_video_ytdlp(url, save_path="output", resolution="1080"):
     if save_path == "output":
         save_path = resolve_task_path(save_path)
     os.makedirs(save_path, exist_ok=True)
+    last_hook_ts = 0.0
+
+    def _ytdlp_hook(d: dict[str, Any]) -> None:
+        nonlocal last_hook_ts
+        check_cancel()
+        status = d.get("status")
+        now = time.monotonic()
+        if status == "downloading" and (now - last_hook_ts) >= 0.3:
+            last_hook_ts = now
+            total = float(d.get("total_bytes") or d.get("total_bytes_estimate") or 0.0)
+            done = float(d.get("downloaded_bytes") or 0.0)
+            if total > 0:
+                frac = max(0.01, min(0.95, done / total))
+                pct = int(frac * 100)
+                report_progress(
+                    frac,
+                    f"下载视频 {pct}%",
+                    f"正在下载视频 ({pct}%)",
+                    tag="asr",
+                    label="YTDLP",
+                )
+        elif status == "finished":
+            report_progress(
+                0.98,
+                "封装媒体文件…",
+                "视频流下载完成，正在合并封装",
+                tag="asr",
+                label="YTDLP",
+            )
+
     ydl_opts: dict[str, Any] = {
         "format": "bestvideo+bestaudio/best"
         if resolution == "best"
@@ -55,6 +86,7 @@ def download_video_ytdlp(url, save_path="output", resolution="1080"):
         "writethumbnail": True,
         "merge_output_format": "mp4",
         "postprocessors": [{"key": "FFmpegThumbnailsConvertor", "format": "jpg"}],
+        "progress_hooks": [_ytdlp_hook],
     }
 
     # None/missing inherits yt-dlp's system/environment proxy discovery.
@@ -273,14 +305,3 @@ def is_audio_only_input(save_path="output"):
         return media_type in ("audio", "subtitle")
     except Exception:
         return False
-
-
-if __name__ == "__main__":
-    # Example usage
-    url = input("Please enter the URL of the video you want to download: ")
-    resolution = input(
-        "Please enter the desired resolution (360/480/720/1080, default 1080): "
-    )
-    resolution = str(int(resolution)) if resolution.isdigit() else "1080"
-    download_video_ytdlp(url, resolution=resolution)
-    print(f"🎥 Video has been downloaded to {find_video_files()}")

@@ -5,7 +5,7 @@ import pandas as pd
 from core._8_1_audio_task import time_diff_seconds
 from core.asr_backend.audio_preprocess import get_audio_duration
 from core.tts_backend.estimate_duration import init_estimator, estimate_duration
-from core.utils import load_key, rprint
+from core.utils import load_key, log_event, report_progress
 from core.utils.models import (
     _RAW_AUDIO_FILE,
     resolve_task_path,
@@ -74,7 +74,6 @@ def merge_rows(df, start_idx, merge_count):
 
 
 def analyze_subtitle_timing_and_speed(df):
-    rprint("[🔍 Analyzing] Calculating subtitle timing and speed...")
     global ESTIMATOR
     if ESTIMATOR is None:
         ESTIMATOR = init_estimator()
@@ -130,7 +129,6 @@ def analyze_subtitle_timing_and_speed(df):
 
 
 def process_cutoffs(df):
-    rprint("[✂️ Processing] Generating cutoff points...")
     df["cut_off"] = 0  # Initialize cut_off column
     df.loc[df["gap"] >= load_key("tolerance"), "cut_off"] = (
         1  # Set to 1 when gap is greater than TOLERANCE
@@ -140,8 +138,11 @@ def process_cutoffs(df):
         # Process marked split points
         if df.iloc[idx]["cut_off"] == 1:
             if df.iloc[idx]["if_too_fast"] == 2:
-                rprint(
-                    f"[⚠️ Warning] Line {idx} is too fast and cannot be fixed by speed adjustment"
+                log_event(
+                    f"第 {idx + 1} 条配音语速过快，超出最大倍速阈值",
+                    tag="warn",
+                    label="TTS",
+                    level="warn",
                 )
             idx += 1
             continue
@@ -168,20 +169,27 @@ def process_cutoffs(df):
 def gen_dub_chunks():
     ws = get_active_workspace()
     if ws.is_step_done("dub_tasks"):
-        rprint(
-            "[yellow]⚠️ Dubbing chunks already exist and are up-to-date, skip <gen_dub_chunks> step.[/yellow]"
+        report_progress(
+            1.0,
+            "复用已有配音分块",
+            "配音分块已是最新，跳过重复计算",
+            tag="asr",
+            label="CACHE",
         )
         return
-    rprint("[🎬 Starting] Generating dubbing chunks...")
+    report_progress(
+        0.60,
+        "分析配音语速与停顿…",
+        "正在分析配音语速与停顿切点",
+        tag="asr",
+        label="TTS",
+    )
     df = ws.load_dub_tasks_df()
 
-    rprint("[📊 Processing] Analyzing timing and speed...")
     df = analyze_subtitle_timing_and_speed(df)
 
-    rprint("[✂️ Processing] Processing cutoffs...")
     df = process_cutoffs(df)
 
-    rprint("[📝 Reading] Loading transcript cues...")
     utt_list = ws.load_utterances() if TRANS_SRT == "output/trans.srt" else []
     utterance_cues_by_id = {}
     utterance_by_id = {}
@@ -327,13 +335,22 @@ def gen_dub_chunks():
                     ]
                 last_idx = min(len(content_lines), last_idx + len(cues))
             else:
-                rprint(f"[❌ Error] Matching failed at line {pos_idx}:")
-                rprint(f"Target: '{target}'")
-                rprint(f"Current: '{current}'")
+                log_event(
+                    f"第 {pos_idx + 1} 条配音分块字幕匹配失败: target='{target[:40]}'",
+                    tag="warn",
+                    label="TTS",
+                    level="error",
+                )
                 raise ValueError("Matching failed")
 
     ws.save_dub_tasks(df)
-    rprint("[✅ Complete] Matching completed successfully!")
+    report_progress(
+        1.0,
+        f"已完成 {len(df)} 条配音分块规划",
+        f"配音语速与分块规划完成（共 {len(df)} 条）",
+        tag="asr",
+        label="TTS",
+    )
 
 
 if __name__ == "__main__":

@@ -116,7 +116,6 @@ def fish_audio_tts(text, save_as, number=None, task_df=None):
     Path(save_as).parent.mkdir(parents=True, exist_ok=True)
     with open(save_as, "wb") as f:
         f.write(_with_length(response.content))
-    print(f"Audio saved to {save_as}")
 
 
 if __name__ == "__main__":

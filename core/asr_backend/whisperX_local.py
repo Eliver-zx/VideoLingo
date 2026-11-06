@@ -3,9 +3,13 @@ from pathlib import Path
 import time
 import warnings
 
-from rich import print as rprint
-
-from core.utils import except_handler, load_key, set_runtime_state as update_key
+from core.utils import (
+    except_handler,
+    load_key,
+    log_event,
+    report_progress,
+    set_runtime_state as update_key,
+)
 
 warnings.filterwarnings("ignore")
 
@@ -61,8 +65,10 @@ def resolve_whisper_model(model_name, model_dir=None):
                     f"Local model directory is incomplete: {directory}. "
                     "Expected non-empty config.json, model.bin and tokenizer.json."
                 )
-            rprint(
-                f"[green]Using local Whisper model (no Hub lookup): {directory.resolve()}[/green]"
+            log_event(
+                f"使用本地 Whisper 模型: {directory.resolve()}",
+                tag="asr",
+                label="ASR",
             )
             return str(directory.resolve())
 
@@ -76,19 +82,20 @@ def resolve_whisper_model(model_name, model_dir=None):
         except LocalEntryNotFoundError:
             continue
         if _complete_model_directory(snapshot):
-            rprint(
-                f"[green]Using cached Whisper model (no Hub lookup): {snapshot}[/green]"
-            )
+            log_event(f"复用缓存 Whisper 模型: {snapshot}", tag="asr", label="ASR")
             return snapshot
 
-    rprint(
-        "[yellow]No complete Whisper model found locally. Fetching missing files "
-        "from the configured HuggingFace endpoint into the global cache.[/yellow]"
+    report_progress(
+        0.02,
+        "下载 Whisper 模型…",
+        f"本地未找到完整 Whisper 模型，正在从 HuggingFace 下载 {model_name}",
+        tag="asr",
+        label="ASR",
     )
     snapshot = download_model(model_name)
     if not _complete_model_directory(snapshot):
         raise RuntimeError("Downloaded Whisper model is incomplete")
-    rprint(f"[green]Whisper model files ready: {snapshot}[/green]")
+    log_event(f"Whisper 模型准备就绪: {snapshot}", tag="asr", label="ASR")
     return snapshot
 
 
@@ -97,24 +104,31 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     torch, whisperx, _whisperx_load_audio, _WHISPERX_SR = _ensure_whisperx()
     WHISPER_LANGUAGE = load_key("whisper.language")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    rprint(f"🚀 Starting WhisperX using device: {device} ...")
+    report_progress(
+        0.05,
+        f"初始化 WhisperX ({device})…",
+        f"启动 WhisperX 语音识别 (设备: {device}, 区间 {start:.1f}s–{end:.1f}s)",
+        tag="asr",
+        label="ASR",
+    )
 
     if device == "cuda":
         gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         batch_size = 16 if gpu_mem > 8 else 2
         compute_type = "float16" if torch.cuda.is_bf16_supported() else "int8"
-        rprint(
-            f"[cyan]🎮 GPU memory:[/cyan] {gpu_mem:.2f} GB, [cyan]📦 Batch size:[/cyan] {batch_size}, [cyan]⚙️ Compute type:[/cyan] {compute_type}"
+        log_event(
+            f"GPU 显存: {gpu_mem:.2f} GB, Batch size: {batch_size}, 精度: {compute_type}",
+            tag="asr",
+            label="ASR",
         )
     else:
         batch_size = 1
         compute_type = "int8"
-        rprint(
-            f"[cyan]📦 Batch size:[/cyan] {batch_size}, [cyan]⚙️ Compute type:[/cyan] {compute_type}"
+        log_event(
+            f"CPU 模式 Batch size: {batch_size}, 精度: {compute_type}",
+            tag="asr",
+            label="ASR",
         )
-    rprint(
-        f"[green]▶️ Starting WhisperX for segment {start:.2f}s to {end:.2f}s...[/green]"
-    )
 
     model_dir = load_key("model_dir")
     if WHISPER_LANGUAGE == "zh":
@@ -126,8 +140,11 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
         model_name = load_key("whisper.model")
         if "turbo" in str(model_name).lower():
             # turbo loops on repeated words in this pipeline, so it is rewritten.
-            rprint(
-                "[yellow]large-v3-turbo repeats itself in this pipeline; using large-v3 instead.[/yellow]"
+            log_event(
+                "large-v3-turbo 易产生重复循环，自动切换为 large-v3",
+                tag="warn",
+                label="ASR",
+                level="warn",
             )
             model_name = "large-v3"
     model_name = resolve_whisper_model(model_name, model_dir)
@@ -163,14 +180,24 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     # 1. transcribe raw audio
     # -------------------------
     transcribe_start_time = time.time()
-    rprint(
-        "[bold green]Note: You will see Progress if working correctly ↓[/bold green]"
+    report_progress(
+        0.20,
+        f"WhisperX 识别 ({start:.0f}s–{end:.0f}s)…",
+        f"正在运行 WhisperX 语音识别 ({start:.1f}s–{end:.1f}s)",
+        tag="asr",
+        label="ASR",
     )
     result = model.transcribe(
-        raw_audio_segment, batch_size=batch_size, print_progress=True
+        raw_audio_segment, batch_size=batch_size, print_progress=False
     )
     transcribe_time = time.time() - transcribe_start_time
-    rprint(f"[cyan]⏱️ time transcribe:[/cyan] {transcribe_time:.2f}s")
+    report_progress(
+        0.70,
+        "WhisperX 识别完成",
+        f"WhisperX 文本识别完成 (耗时 {transcribe_time:.2f}s)",
+        tag="asr",
+        label="ASR",
+    )
 
     # Free GPU resources
     del model
@@ -188,6 +215,13 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     # 2. align by vocal audio
     # -------------------------
     align_start_time = time.time()
+    report_progress(
+        0.75,
+        "词级时间戳对齐…",
+        f"正在加载 WhisperX 对齐模型并对齐词级时间戳 ({detected_language})",
+        tag="asr",
+        label="ASR",
+    )
     # Align timestamps using vocal audio
     model_a, metadata = whisperx.load_align_model(
         language_code=result["language"], device=device
@@ -202,7 +236,13 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     )
     result["language"] = detected_language
     align_time = time.time() - align_start_time
-    rprint(f"[cyan]⏱️ time align:[/cyan] {align_time:.2f}s")
+    report_progress(
+        0.99,
+        "WhisperX 对齐完成",
+        f"WhisperX 词级时间戳对齐完成 (耗时 {align_time:.2f}s)",
+        tag="asr",
+        label="ASR",
+    )
 
     # Free GPU resources again
     torch.cuda.empty_cache()

@@ -10,7 +10,7 @@ from core._1_ytdlp import (
     sanitize_filename,
     write_input_manifest,
 )
-from core.utils import load_key, rprint
+from core.utils import load_key, report_progress
 from core.utils.models import resolve_task_path
 from core.workspace import get_active_workspace
 
@@ -180,6 +180,10 @@ def import_subtitles():
             }
         )
     ws.save_utterances(utterances)
-    rprint(
-        f"[green]📄 {len(cues)} subtitles of `{subtitle_file}` are used instead of the recognition.[/green]"
+    report_progress(
+        1.0,
+        f"已导入 {len(cues)} 条字幕",
+        f"已从外挂字幕 {os.path.basename(subtitle_file)} 导入 {len(cues)} 条字幕，跳过语音识别",
+        tag="asr",
+        label="SUBS",
     )

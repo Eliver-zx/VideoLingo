@@ -10,7 +10,7 @@ from core.tts_backend.edge_tts import edge_tts
 from core.tts_backend.sf_cosyvoice2 import cosyvoice_tts_for_videolingo
 from core.tts_backend.custom_tts import custom_tts
 from core.prompts import get_correct_text_prompt
-from core.utils import ask_gpt, load_key, rprint
+from core.utils import ask_gpt, load_key, log_event
 
 
 def clean_text_for_tts(text):
@@ -30,21 +30,24 @@ def tts_main(text, save_as, number, task_df):
     if not cleaned_text:
         silence = AudioSegment.silent(duration=100)  # 100ms = 0.1s
         silence.export(save_as, format="wav")
-        rprint(f"Created silent audio for empty text: {save_as}")
         return
 
     # Skip if file exists
     if os.path.exists(save_as):
         return
 
-    print(f"Generating <{text}...>")
     TTS_METHOD = load_key("tts_method")
 
     max_retries = 3
     for attempt in range(max_retries):
         try:
             if attempt >= max_retries - 1:
-                print("Asking GPT to correct text...")
+                log_event(
+                    f"配音句 #{number} 合成重试触发 LLM 文本修正",
+                    tag="warn",
+                    label="TTS",
+                    level="warn",
+                )
 
                 def _valid_tts_text(resp):
                     if (
@@ -91,12 +94,22 @@ def tts_main(text, save_as, number, task_df):
                 if os.path.exists(save_as):
                     os.remove(save_as)
                 if attempt == max_retries - 1:
-                    print(f"Warning: Generated audio duration is 0 for text: {text}")
+                    log_event(
+                        f"配音句 #{number} 生成音频时长为 0，使用静音占位: {text[:40]}",
+                        tag="warn",
+                        label="TTS",
+                        level="warn",
+                    )
                     # Create silent audio file
                     silence = AudioSegment.silent(duration=100)  # 100ms silence
                     silence.export(save_as, format="wav")
                     return
-                print(f"Attempt {attempt + 1} failed, retrying...")
+                log_event(
+                    f"配音句 #{number} 合成返回空音频，正在重试 ({attempt + 1}/{max_retries})",
+                    tag="warn",
+                    label="TTS",
+                    level="warn",
+                )
         except NotImplementedError:
             raise
         except Exception as e:
@@ -104,4 +117,9 @@ def tts_main(text, save_as, number, task_df):
                 raise Exception(
                     f"Failed to generate audio after {max_retries} attempts: {str(e)}"
                 )
-            print(f"Attempt {attempt + 1} failed, retrying...")
+            log_event(
+                f"配音句 #{number} 合成失败 ({e})，正在重试 ({attempt + 1}/{max_retries})",
+                tag="warn",
+                label="TTS",
+                level="warn",
+            )

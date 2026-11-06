@@ -2,10 +2,14 @@ import time
 from typing import Any, Dict, Optional
 
 import requests
-from rich import print as rprint
 
 from core.asr_backend.audio_preprocess import audio_slice_wav
-from core.utils import check_cancel, load_key_or, set_runtime_state as update_key
+from core.utils import (
+    check_cancel,
+    load_key_or,
+    report_progress,
+    set_runtime_state as update_key,
+)
 
 UPLOAD_URL = "https://api.gladia.io/v2/upload/"
 TRANSCRIPTION_URL = "https://api.gladia.io/v2/transcription/"
@@ -78,7 +82,13 @@ def transcribe_audio_zero(
     files = [("audio", ("slice.wav", audio_bytes, "audio/wav"))]
 
     start_time = time.perf_counter()
-    rprint("[cyan]🎤 Uploading audio slice to Gladia Zero...[/cyan]")
+    report_progress(
+        0.15,
+        "上传至 Gladia Zero…",
+        "正在上传音频切片至 Gladia Zero",
+        tag="asr",
+        label="ASR",
+    )
     upload_resp = requests.post(UPLOAD_URL, headers=headers, files=files, timeout=120)
     if upload_resp.status_code >= 400:
         raise RuntimeError(
@@ -100,6 +110,13 @@ def transcribe_audio_zero(
     else:
         payload["detect_language"] = True
 
+    report_progress(
+        0.35,
+        "等待 Gladia 识别…",
+        "已提交 Gladia Zero 识别请求，正在轮询结果",
+        tag="asr",
+        label="ASR",
+    )
     transcribe_resp = requests.post(
         TRANSCRIPTION_URL, headers=headers, json=payload, timeout=60
     )
@@ -111,6 +128,7 @@ def transcribe_audio_zero(
     if not result_url:
         raise RuntimeError("Gladia transcription response did not include result_url")
 
+    poll_ticks = 0
     while True:
         check_cancel()
         poll_resp = requests.get(result_url, headers=headers, timeout=30)
@@ -130,12 +148,23 @@ def transcribe_audio_zero(
                 or "Gladia returned error status"
             )
             raise RuntimeError(f"Gladia transcription failed: {error_msg}")
+        poll_ticks += 1
+        report_progress(
+            min(0.92, 0.35 + poll_ticks * 0.05),
+            f"Gladia {status or 'processing'}…",
+            tag="asr",
+            label="ASR",
+        )
         time.sleep(2)
 
     parsed = zero2whisper(result, offset=offset, fallback_lang=language)
     if parsed.get("language"):
         update_key("whisper.detected_language", parsed["language"])
-    rprint(
-        f"[green]✓ Gladia Zero transcription completed in {time.perf_counter() - start_time:.2f}s[/green]"
+    report_progress(
+        0.98,
+        "Gladia 识别完成",
+        f"Gladia Zero 语音识别完成 (耗时 {time.perf_counter() - start_time:.2f}s)",
+        tag="asr",
+        label="ASR",
     )
     return parsed

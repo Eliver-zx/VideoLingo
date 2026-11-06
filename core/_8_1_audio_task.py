@@ -2,13 +2,9 @@ import datetime
 import os
 import re
 import pandas as pd
-from rich.console import Console
-from rich.panel import Panel
-from core.utils import check_file_exists, load_key, rprint
+from core.utils import check_file_exists, load_key, log_event, report_progress
 from core.utils.models import resolve_task_path
 from core.workspace import get_active_workspace, workspace_for_path
-
-console = Console()
 
 TRANS_SUBS_FOR_AUDIO_FILE = "output/audio/trans_subs_for_audio.srt"
 SRC_SUBS_FOR_AUDIO_FILE = "output/audio/src_subs_for_audio.srt"
@@ -117,12 +113,11 @@ def process_srt():
                 origin = src_subtitles.get(number, "")
 
             except ValueError as e:
-                rprint(
-                    Panel(
-                        f"Unable to parse subtitle block '{block}', error: {str(e)}, skipping this subtitle block.",
-                        title="Error",
-                        border_style="red",
-                    )
+                log_event(
+                    f"无法解析字幕块 '{block[:40]}': {e}，已跳过",
+                    tag="warn",
+                    label="TTS",
+                    level="warn",
                 )
                 continue
 
@@ -155,9 +150,6 @@ def process_srt():
                 )
                 < MIN_SUB_DUR
             ):
-                rprint(
-                    f"[bold yellow]Merging subtitles {i + 1} and {i + 2}[/bold yellow]"
-                )
                 df.loc[i, "text"] += " " + df.loc[i + 1, "text"]
                 df.loc[i, "origin"] += " " + df.loc[i + 1, "origin"]
                 df.loc[i, "end_time"] = df.loc[i + 1, "end_time"]
@@ -168,9 +160,6 @@ def process_srt():
                 df = df.drop(i + 1).reset_index(drop=True)
             else:
                 if i < len(df) - 1:  # Not the last audio
-                    rprint(
-                        f"[bold blue]Extending subtitle {i + 1} duration to {MIN_SUB_DUR} seconds[/bold blue]"
-                    )
                     extended_dt = datetime.datetime.combine(
                         today, df.loc[i, "start_time"]
                     ) + datetime.timedelta(seconds=MIN_SUB_DUR)
@@ -182,10 +171,6 @@ def process_srt():
                     df.loc[i, "end_time"] = clamped_end
                     df.loc[i, "duration"] = time_diff_seconds(
                         df.loc[i, "start_time"], df.loc[i, "end_time"], today
-                    )
-                else:
-                    rprint(
-                        f"[bold red]The last subtitle {i + 1} duration is less than {MIN_SUB_DUR} seconds, but not extending[/bold red]"
                     )
                 i += 1
         else:
@@ -206,15 +191,14 @@ def process_srt():
 @check_file_exists("dub_tasks")
 def gen_audio_task_main():
     df = process_srt()
-    console.print(df)
     ws = get_active_workspace()
     ws.save_dub_tasks(df)
-    rprint(
-        Panel(
-            f"Successfully saved {len(df)} audio tasks to {ws.db_path}",
-            title="Success",
-            border_style="green",
-        )
+    report_progress(
+        0.50,
+        f"已构建 {len(df)} 条配音任务",
+        f"配音时间轴任务构建完成（共 {len(df)} 条）",
+        tag="asr",
+        label="TTS",
     )
 
 

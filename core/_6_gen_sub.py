@@ -1,9 +1,7 @@
 import os
 import re
 import pandas as pd
-from rich.console import Console
-from rich.panel import Panel
-from core.utils import get_joiner, load_key, load_key_or, rprint  # noqa: F401
+from core.utils import get_joiner, load_key, load_key_or, log_event, report_progress  # noqa: F401
 from core.utils.models import (
     _AUDIO_DIR,
     _OUTPUT_DIR,
@@ -11,8 +9,6 @@ from core.utils.models import (
 )
 from core.utils.subtitle_style import build_ass_from_srt_pair, get_burn_mode
 from core.workspace import get_active_workspace
-
-console = Console()
 
 SUBTITLE_OUTPUT_CONFIGS = [
     ("src.srt", ["Source"]),
@@ -61,17 +57,12 @@ def show_difference(str1, str2):
     if len(str1) != len(str2):
         diff_positions.extend(range(min_len, max(len(str1), len(str2))))
 
-    print("Difference positions:")
-    print(f"Expected sentence: {str1}")
-    print(f"Actual match: {str2}")
-    print(
-        "Position markers: "
-        + "".join(
-            "^" if i in diff_positions else " "
-            for i in range(max(len(str1), len(str2)))
-        )
+    log_event(
+        f"时间戳匹配差异: expected='{str1}' vs actual='{str2}' (pos={diff_positions})",
+        tag="warn",
+        label="SUBS",
+        level="warn",
     )
-    print(f"Difference indices: {diff_positions}")
 
 
 def _levenshtein_fast(a: str, b: str) -> int:
@@ -312,12 +303,16 @@ def get_sentence_timestamps(df_words, df_sentences):
                     current_pos = next_match_pos
                 continue
 
-            print(f"\n⚠️ Warning: No exact match found for sentence: {sentence}")
+            log_event(
+                f"未找到句子精确时间戳匹配: {sentence}",
+                tag="warn",
+                label="SUBS",
+                level="error",
+            )
             show_difference(
                 clean_sentence,
                 full_words_str[current_pos : current_pos + len(clean_sentence)],
             )
-            print("\nOriginal sentence:", sentence)
             raise ValueError("❎ No match found for sentence.")
 
     # Punctuation-only or clamped short lines fill the gap between their neighbours
@@ -425,10 +420,18 @@ def gen_source_subtitles():
     align_timestamp(
         df_text, df_source, [("src.srt", ["Source"])], out_dir, for_display=False
     )
-    console.print(
-        Panel(
-            f"[bold green]🎉📝 Source subtitles are ready: `{out_dir}/src.srt`[/bold green]"
-        )
+    ws.notify_artifact_update(
+        "subtitles",
+        message=f"已生成原文 SRT 字幕 ({len(df_source)} 条)",
+        tag="llm",
+        label="SUBS",
+    )
+    report_progress(
+        1.0,
+        f"已生成 {len(df_source)} 条原文字幕",
+        f"原文 SRT 字幕生成完成 ({out_dir}/src.srt)",
+        tag="llm",
+        label="SUBS",
     )
 
 
@@ -490,10 +493,11 @@ def align_timestamp_main():
         display_width=disp_w,
         display_height=disp_h,
     )
-    console.print(
-        Panel(
-            f"[bold green]🎉📝 Subtitles generation completed! Please check in the `{out_dir}` folder 👀[/bold green]"
-        )
+    ws.notify_artifact_update(
+        "subtitles",
+        message=f"已生成双语 SRT/ASS 字幕文件 ({len(df_translate)} 条)",
+        tag="llm",
+        label="SUBS",
     )
 
     # for audio: keep full punctuation (for_display=False) so TTS preserves natural prosody pauses
@@ -515,10 +519,12 @@ def align_timestamp_main():
         audio_dir,
         for_display=False,
     )
-    console.print(
-        Panel(
-            f"[bold green]🎉📝 Audio subtitles generation completed! Please check in the `{audio_dir}` folder 👀[/bold green]"
-        )
+    report_progress(
+        1.0,
+        f"已生成 {len(df_translate)} 条双语字幕",
+        f"双语字幕与配音对齐字幕已写入 ({out_dir})",
+        tag="llm",
+        label="SUBS",
     )
 
 

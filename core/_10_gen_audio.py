@@ -8,12 +8,10 @@ from typing import Tuple
 
 import pandas as pd
 from pydub import AudioSegment
-from rich.console import Console
-from rich.progress import Progress
 from concurrent.futures import as_completed
 from core.concurrency import ContextThreadPoolExecutor
 
-from core.utils import check_cancel, load_key, report_progress, rprint
+from core.utils import check_cancel, load_key, log_event, report_progress
 from core.utils.models import (
     _10_DUB_TRUNCATED,
     _AUDIO_SEGS_DIR,
@@ -23,8 +21,6 @@ from core.utils.models import (
 from core.asr_backend.audio_preprocess import get_audio_duration
 from core.tts_backend.tts_main import tts_main
 from core.workspace import get_active_workspace
-
-console = Console()
 
 TEMP_FILE_TEMPLATE = f"{_AUDIO_TMP_DIR}/{{}}_temp.wav"
 OUTPUT_FILE_TEMPLATE = f"{_AUDIO_SEGS_DIR}/{{}}.wav"
@@ -78,26 +74,32 @@ def adjust_audio_speed(input_file: str, output_file: str, speed_factor: float) -
                     : (expected_duration * 1000)
                 ]  # pydub uses milliseconds
                 trimmed_audio.export(output_file, format="wav")
-                print(
-                    f"✂️ Trimmed to expected duration: {expected_duration:.2f} seconds"
-                )
                 return
             elif output_duration >= expected_duration * 1.02:
                 # Keep going with the expected length instead of failing the whole dubbing
                 truncate_audio(output_file, expected_duration)
-                rprint(
-                    f"[yellow]⚠️ Audio duration abnormal, trimmed {output_file} from {output_duration:.2f}s to {expected_duration:.2f}s (speed factor={speed_factor})[/yellow]"
+                log_event(
+                    f"音频时长异常，已将 {os.path.basename(output_file)} 从 {output_duration:.2f}s 裁剪至 {expected_duration:.2f}s (speed={speed_factor})",
+                    tag="warn",
+                    label="TTS",
+                    level="warn",
                 )
             return
         except subprocess.CalledProcessError as e:
             if attempt < max_retries - 1:
-                rprint(
-                    f"[yellow]⚠️ Audio speed adjustment failed, retrying in 1s ({attempt + 1}/{max_retries})[/yellow]"
+                log_event(
+                    f"音频倍速调整失败，1s 后重试 ({attempt + 1}/{max_retries})",
+                    tag="warn",
+                    label="TTS",
+                    level="warn",
                 )
                 time.sleep(1)
             else:
-                rprint(
-                    f"[red]❌ Audio speed adjustment failed, max retries reached ({max_retries})[/red]"
+                log_event(
+                    f"音频倍速调整连续失败 {max_retries} 次: {e}",
+                    tag="warn",
+                    label="TTS",
+                    level="error",
                 )
                 raise e
 
@@ -136,8 +138,11 @@ def trim_edge_silence(
         if end_ms - start_ms >= 50 and (start_ms > 0 or end_ms < len(audio)):
             audio[start_ms:end_ms].export(audio_file, format="wav")
     except (OSError, ValueError) as exc:
-        rprint(
-            f"[yellow]⚠️ Silence trim skipped for {os.path.basename(audio_file)}: {exc}[/yellow]"
+        log_event(
+            f"跳过首尾静音裁剪 {os.path.basename(audio_file)}: {exc}",
+            tag="warn",
+            label="TTS",
+            level="warn",
         )
 
 
@@ -160,70 +165,78 @@ def generate_tts_audio(tasks_df: pd.DataFrame) -> pd.DataFrame:
     """Generate TTS audio sequentially and calculate actual duration"""
     # pandas 3 rejects fractional durations assigned into an integer column.
     tasks_df["real_dur"] = 0.0
-    rprint("[bold green]🎯 Starting TTS audio generation...[/bold green]")
 
     total_rows = max(1, len(tasks_df))
     done_rows = 0
     report_progress(
         0.02,
         f"TTS 配音 0/{len(tasks_df)}",
-        f"🎯 开始生成 TTS 配音音频（共 {len(tasks_df)} 句）...",
+        f"开始生成 TTS 配音音频（共 {len(tasks_df)} 句）",
+        tag="asr",
+        label="TTS",
     )
-    with Progress() as progress:
-        task = progress.add_task(
-            "[cyan]🔄 Generating TTS audio...", total=len(tasks_df)
-        )
 
-        # warm up for first 5 rows
-        warmup_size = min(WARMUP_SIZE, len(tasks_df))
-        for _, row in tasks_df.head(warmup_size).iterrows():
+    # warm up for first 5 rows
+    warmup_size = min(WARMUP_SIZE, len(tasks_df))
+    for _, row in tasks_df.head(warmup_size).iterrows():
+        try:
+            check_cancel()
+            number, real_dur = process_row(row, tasks_df)
+            tasks_df.loc[tasks_df["number"] == number, "real_dur"] = real_dur
+            done_rows += 1
+            report_progress(
+                0.02 + 0.78 * (done_rows / total_rows),
+                f"TTS 配音 {done_rows}/{len(tasks_df)}",
+                tag="asr",
+                label="TTS",
+            )
+        except Exception as e:
+            log_event(
+                f"TTS 预热生成失败: {e}",
+                tag="warn",
+                label="TTS",
+                level="error",
+            )
+            raise e
+
+    max_workers = load_key("max_workers")
+    # parallel processing for remaining tasks
+    if len(tasks_df) > warmup_size:
+        remaining_tasks = tasks_df.iloc[warmup_size:].copy()
+        with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(process_row, row, tasks_df.copy())
+                for _, row in remaining_tasks.iterrows()
+            ]
+
             try:
-                check_cancel()
-                number, real_dur = process_row(row, tasks_df)
-                tasks_df.loc[tasks_df["number"] == number, "real_dur"] = real_dur
-                progress.advance(task)
-                done_rows += 1
-                report_progress(
-                    0.02 + 0.78 * (done_rows / total_rows),
-                    f"TTS 配音 {done_rows}/{len(tasks_df)}",
-                )
-            except Exception as e:
-                rprint(f"[red]❌ Error in warmup: {str(e)}[/red]")
-                raise e
+                for future in as_completed(futures):
+                    check_cancel()
+                    try:
+                        number, real_dur = future.result()
+                        tasks_df.loc[tasks_df["number"] == number, "real_dur"] = (
+                            real_dur
+                        )
+                        done_rows += 1
+                        report_progress(
+                            0.02 + 0.78 * (done_rows / total_rows),
+                            f"TTS 配音 {done_rows}/{len(tasks_df)}",
+                            tag="asr",
+                            label="TTS",
+                        )
+                    except Exception as e:
+                        log_event(
+                            f"TTS 并发生成失败: {e}",
+                            tag="warn",
+                            label="TTS",
+                            level="error",
+                        )
+                        raise e
+            except BaseException:
+                for f in futures:
+                    f.cancel()
+                raise
 
-        max_workers = load_key("max_workers")
-        # parallel processing for remaining tasks
-        if len(tasks_df) > warmup_size:
-            remaining_tasks = tasks_df.iloc[warmup_size:].copy()
-            with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [
-                    executor.submit(process_row, row, tasks_df.copy())
-                    for _, row in remaining_tasks.iterrows()
-                ]
-
-                try:
-                    for future in as_completed(futures):
-                        check_cancel()
-                        try:
-                            number, real_dur = future.result()
-                            tasks_df.loc[tasks_df["number"] == number, "real_dur"] = (
-                                real_dur
-                            )
-                            progress.advance(task)
-                            done_rows += 1
-                            report_progress(
-                                0.02 + 0.78 * (done_rows / total_rows),
-                                f"TTS 配音 {done_rows}/{len(tasks_df)}",
-                            )
-                        except Exception as e:
-                            rprint(f"[red]❌ Error: {str(e)}[/red]")
-                            raise e
-                except BaseException:
-                    for f in futures:
-                        f.cancel()
-                    raise
-
-    rprint("[bold green]✨ TTS audio generation completed![/bold green]")
     return tasks_df
 
 
@@ -269,7 +282,13 @@ def process_chunk(
 
 def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
     """Merge audio chunks and adjust timeline"""
-    rprint("[bold blue]🔄 Starting audio chunks processing...[/bold blue]")
+    report_progress(
+        0.82,
+        "校准配音语速与时间轴…",
+        "正在执行配音片段倍速对齐与时间轴重排",
+        tag="asr",
+        label="TTS",
+    )
     accept = load_key("speed_factor.accept")
     min_speed = load_key("speed_factor.min")
     max_speed = load_key("speed_factor.max")
@@ -329,15 +348,13 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
                     )
                     for line_index, line in enumerate(lines)
                 ]
-                # 🎯 Step4: Choose emoji based on speed_factor and accept comparison
-                emoji = "⚡" if speed_factor <= accept else "⚠️"
-                rprint(
-                    f"[cyan]{emoji} Processed chunk {chunk_start} to {pos_idx} with speed factor {speed_factor}[/cyan]"
-                )
             # 🔄 Step5: What still exceeds the chunk at the highest speed is truncated, from the end
             if cur_time > chunk_end_time:
-                rprint(
-                    f"[yellow]⚠️ Chunk {chunk_start} to {pos_idx} exceeds by {cur_time - chunk_end_time:.3f}s at speed factor {speed_factor}, truncating[/yellow]"
+                log_event(
+                    f"配音分块 [{chunk_start + 1}..{pos_idx + 1}] 在倍速 {speed_factor}x 下仍超出 {cur_time - chunk_end_time:.2f}s，执行尾部截断",
+                    tag="warn",
+                    label="TTS",
+                    level="warn",
                 )
                 for main_df_idx, line_index, audio_file, line in reversed(placed):
                     times = tasks_df.at[main_df_idx, "new_sub_times"]
@@ -362,7 +379,6 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
             chunk_start = pos_idx + 1
 
     save_truncated_log(truncated)
-    rprint("[bold green]✅ Audio chunks processing completed![/bold green]")
     return tasks_df
 
 
@@ -379,37 +395,34 @@ def save_truncated_log(truncated: list) -> None:
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, "w", encoding="utf-8") as f:
         json.dump(truncated, f, ensure_ascii=False, indent=4)
-    rprint(
-        f"[yellow]⚠️ {len(truncated)} dubbed line(s) did not fit their time slot and were truncated, see `{log_path}`:[/yellow]"
+    log_event(
+        f"共有 {len(truncated)} 条配音超出可用时长被截断，详情见 {log_path}",
+        tag="warn",
+        label="TTS",
+        level="warn",
     )
-    for item in truncated:
-        rprint(
-            f"[yellow]   #{item['number']} kept {item['kept_seconds']}s of {item['spoken_seconds']}s: {item['line']}[/yellow]"
-        )
 
 
 def gen_audio() -> None:
     """Main function: Generate audio and process timeline"""
-    rprint("[bold magenta]🚀 Starting audio generation process...[/bold magenta]")
-
-    # 🎯 Step1: Create necessary directories
     os.makedirs(resolve_task_path(_AUDIO_TMP_DIR), exist_ok=True)
     os.makedirs(resolve_task_path(_AUDIO_SEGS_DIR), exist_ok=True)
 
-    # 📝 Step2: Load task records
     ws = get_active_workspace()
     tasks_df = ws.load_dub_tasks_df()
-    rprint("[green]📊 Loaded task records successfully[/green]")
 
-    # 🔊 Step3: Generate TTS audio
     tasks_df = generate_tts_audio(tasks_df)
 
-    # 🔄 Step4: Merge audio chunks
     tasks_df = merge_chunks(tasks_df)
 
-    # 💾 Step5: Save results
     ws.save_dub_tasks(tasks_df)
-    rprint("[bold green]🎉 Audio generation completed successfully![/bold green]")
+    report_progress(
+        1.0,
+        f"已完成 {len(tasks_df)} 条配音合成",
+        f"TTS 配音合成与倍速对齐全部完成（共 {len(tasks_df)} 条）",
+        tag="asr",
+        label="TTS",
+    )
 
 
 if __name__ == "__main__":

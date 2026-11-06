@@ -2,10 +2,14 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from rich import print as rprint
 
 from core.asr_backend.audio_preprocess import audio_slice_wav
-from core.utils import check_cancel, load_key_or, set_runtime_state as update_key
+from core.utils import (
+    check_cancel,
+    load_key_or,
+    report_progress,
+    set_runtime_state as update_key,
+)
 
 UPLOAD_URL = "https://api.assemblyai.com/v2/upload"
 TRANSCRIPT_URL = "https://api.assemblyai.com/v2/transcript"
@@ -88,7 +92,13 @@ def transcribe_audio_assembly(
     headers: Dict[str, str] = {"Authorization": api_key}
     start_time = time.perf_counter()
 
-    rprint("[cyan]🎤 Uploading audio slice to AssemblyAI...[/cyan]")
+    report_progress(
+        0.15,
+        "上传至 AssemblyAI…",
+        "正在上传音频切片至 AssemblyAI",
+        tag="asr",
+        label="ASR",
+    )
     upload_resp = requests.post(
         UPLOAD_URL, headers=headers, data=audio_bytes, timeout=180
     )
@@ -122,10 +132,15 @@ def transcribe_audio_assembly(
     if not transcript_id:
         raise RuntimeError("AssemblyAI transcript response did not include id")
 
-    rprint(
-        f"[cyan]📝 AssemblyAI job submitted (id={transcript_id}), waiting for completion...[/cyan]"
+    report_progress(
+        0.35,
+        "等待 AssemblyAI 识别…",
+        f"AssemblyAI 任务已提交 (id={transcript_id})，正在等待识别结果",
+        tag="asr",
+        label="ASR",
     )
     poll_url = f"{TRANSCRIPT_URL}/{transcript_id}"
+    poll_ticks = 0
     while True:
         check_cancel()
         poll_resp = requests.get(poll_url, headers=headers, timeout=30)
@@ -142,6 +157,13 @@ def transcribe_audio_assembly(
                 raw_response.get("error") or "Unknown AssemblyAI transcription error"
             )
             raise RuntimeError(f"AssemblyAI transcription error: {error_msg}")
+        poll_ticks += 1
+        report_progress(
+            min(0.92, 0.35 + poll_ticks * 0.05),
+            f"AssemblyAI {status or 'processing'}…",
+            tag="asr",
+            label="ASR",
+        )
         time.sleep(3)
 
     parsed = convert_assemblyai_response(
@@ -149,7 +171,11 @@ def transcribe_audio_assembly(
     )
     if parsed.get("language"):
         update_key("whisper.detected_language", parsed["language"])
-    rprint(
-        f"[green]✓ AssemblyAI transcription completed in {time.perf_counter() - start_time:.2f}s[/green]"
+    report_progress(
+        0.98,
+        "AssemblyAI 识别完成",
+        f"AssemblyAI 语音识别完成 (耗时 {time.perf_counter() - start_time:.2f}s)",
+        tag="asr",
+        label="ASR",
     )
     return parsed

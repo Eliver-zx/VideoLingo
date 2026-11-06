@@ -2,10 +2,13 @@ import io
 import time
 from typing import Any, Dict, Optional
 
-from rich import print as rprint
-
 from core.asr_backend.audio_preprocess import audio_slice_wav
-from core.utils import check_cancel, load_key_or, set_runtime_state as update_key
+from core.utils import (
+    check_cancel,
+    load_key_or,
+    report_progress,
+    set_runtime_state as update_key,
+)
 
 REPLICATE_PARAKEET_MODEL = "huanshere/parakeet-tdt-0.6b-v2:6f0fb1d0715174c31e76601f8b98f5e2d7a616cd7a0bf00584c2c820ffb039a4"
 REPLICATE_WHISPERX_MODEL = "victor-upmeet/whisperx:84d2ad2d6194fe98a17d2b60bef1c7f910c46b2f6fd38996ca457afd9c8abfcb"
@@ -119,15 +122,25 @@ def transcribe_audio_replicate_parakeet(
         "return_word_timestamps": True,
         "speaker_diarization": False,
     }
-    rprint("[cyan]🎤 Transcribing audio with Replicate Parakeet-TDT-0.6b-v2...[/cyan]")
+    report_progress(
+        0.30,
+        "请求 Replicate Parakeet…",
+        "正在调用 Replicate Parakeet-TDT-0.6b-v2 语音识别",
+        tag="asr",
+        label="ASR",
+    )
     t0 = time.perf_counter()
     check_cancel()
     output = client.run(REPLICATE_PARAKEET_MODEL, input=input_params)
     parsed = normalize_replicate_output(output, offset=offset, fallback_lang=language)
     if parsed.get("language"):
         update_key("whisper.detected_language", parsed["language"])
-    rprint(
-        f"[green]✓ Replicate Parakeet transcription completed in {time.perf_counter() - t0:.2f}s[/green]"
+    report_progress(
+        0.98,
+        "Replicate 识别完成",
+        f"Replicate Parakeet 语音识别完成 (耗时 {time.perf_counter() - t0:.2f}s)",
+        tag="asr",
+        label="ASR",
     )
     return parsed
 
@@ -160,14 +173,24 @@ def transcribe_audio_replicate_whisper(
     if language and language.lower() != "auto":
         input_params["language"] = language
 
-    rprint("[cyan]🎤 Transcribing audio with Replicate WhisperX...[/cyan]")
+    report_progress(
+        0.30,
+        "请求 Replicate WhisperX…",
+        "正在调用 Replicate WhisperX 语音识别",
+        tag="asr",
+        label="ASR",
+    )
     t0 = time.perf_counter()
     check_cancel()
     output = client.run(REPLICATE_WHISPERX_MODEL, input=input_params)
     parsed = normalize_replicate_output(output, offset=offset, fallback_lang=language)
     if parsed.get("language"):
         update_key("whisper.detected_language", parsed["language"])
-    rprint(
-        f"[green]✓ Replicate WhisperX transcription completed in {time.perf_counter() - t0:.2f}s[/green]"
+    report_progress(
+        0.98,
+        "Replicate 识别完成",
+        f"Replicate WhisperX 语音识别完成 (耗时 {time.perf_counter() - t0:.2f}s)",
+        tag="asr",
+        label="ASR",
     )
     return parsed

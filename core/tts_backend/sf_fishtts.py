@@ -1,16 +1,18 @@
 import os
-import time
 import uuid
 import base64
 import hashlib
 import requests
 from pathlib import Path
 from pydub import AudioSegment
-from rich.panel import Panel
-from rich.text import Text
 from core._1_ytdlp import find_media_file
 from core.asr_backend.audio_preprocess import get_audio_duration
-from core.utils import except_handler, load_key, rprint, set_runtime_state as update_key
+from core.utils import (
+    except_handler,
+    load_key,
+    log_event,
+    set_runtime_state as update_key,
+)
 from core.utils.models import _AUDIO_REFERS_DIR, resolve_task_path
 
 API_URL_SPEECH = "https://api.siliconflow.cn/v1/audio/speech"
@@ -77,10 +79,7 @@ def siliconflow_fish_tts(
             f.write(response.content)
 
         if check_duration:
-            duration = get_audio_duration(str(wav_file_path))
-            rprint(f"[blue]Audio Duration: {duration:.2f} seconds")
-
-        rprint(f"[green]Successfully generated audio file: {wav_file_path}")
+            get_audio_duration(str(wav_file_path))
         return True
 
     response.raise_for_status()
@@ -93,7 +92,6 @@ def create_custom_voice(audio_path, text, custom_name=None):
         raise FileNotFoundError(f"Audio file not found at {audio_path}")
 
     audio_base64 = f"data:audio/wav;base64,{base64.b64encode(Path(audio_path).read_bytes()).decode('utf-8')}"
-    rprint("[yellow]✅ Successfully encoded audio file")
 
     payload = {
         "audio": audio_base64,
@@ -102,7 +100,6 @@ def create_custom_voice(audio_path, text, custom_name=None):
         "text": text,
     }
 
-    rprint("[yellow]🚀 Sending request to create voice...")
     response = requests.post(
         API_URL_VOICE,
         json=payload,
@@ -117,20 +114,19 @@ def create_custom_voice(audio_path, text, custom_name=None):
         voice_id = response_json.get("uri")
         if not isinstance(voice_id, str) or not voice_id.strip():
             raise ValueError("Custom voice response is missing a voice URI")
-        status_text = Text()
-        status_text.append("✨ Successfully created custom voice!\n", style="green")
-        status_text.append(f"🎙️ Voice ID: {voice_id}\n", style="green")
-        status_text.append(
-            f"⌛ Creation Time: {time.strftime('%Y-%m-%d %H:%M:%S')}", style="green"
+        log_event(
+            f"已创建 SiliconFlow 定制音色: {voice_id}",
+            tag="asr",
+            label="TTS",
         )
-        rprint(Panel(status_text, title="Voice Creation Status"))
         return voice_id
 
-    error_text = Text()
-    error_text.append("❌ Failed to create custom voice\n", style="red")
-    error_text.append(f"⚠️ HTTP Status: {response.status_code}\n", style="red")
-    error_text.append(f"💬 Error Details: {response_json}", style="red")
-    rprint(Panel(error_text, title="Error", border_style="red"))
+    log_event(
+        f"创建 SiliconFlow 定制音色失败: HTTP {response.status_code} {response_json}",
+        tag="warn",
+        label="TTS",
+        level="error",
+    )
     raise ValueError(
         f"Failed to create custom voice 🚫 HTTP {response.status_code}, Error details: {response_json}"
     )
@@ -156,17 +152,14 @@ def merge_audio(files, output):
     )
 
     if os.path.getsize(output) == 0:
-        rprint("[red]Output file size is 0")
+        log_event("合并参考音频输出文件大小为 0", tag="warn", label="TTS", level="warn")
         return False
 
-    rprint("[green]Successfully merged audio files")
     return True
 
 
 def get_ref_audio(task_df):
     """Get reference audio and text, ensuring the combined text length does not exceed 100 characters"""
-    rprint("[blue]🎯 Starting reference audio selection process...")
-
     duration = 0
     selected = []
     combined_text = ""
@@ -182,11 +175,6 @@ def get_ref_audio(task_df):
                 combined_text = current_text
                 duration += row["duration"]
                 found_first = True
-                rprint(f"[yellow]📝 Found first valid row: {current_text[:50]}...")
-            else:
-                rprint(
-                    f"[yellow]⏭️ Skipping long row: {current_text[:50]}... ({len(current_text)} chars)"
-                )
             continue
 
         # Check subsequent rows
@@ -197,36 +185,28 @@ def get_ref_audio(task_df):
         selected.append(row)
         combined_text = new_text
         duration += row["duration"]
-        rprint(f"[yellow]📝 Added row: {current_text[:50]}...")
 
         if duration > 10:
             break
 
     if not selected:
-        rprint(
-            f"[red]❌ No valid segments found (all texts exceed {REFER_MAX_LENGTH} characters)"
+        log_event(
+            f"未找到可用参考音频片段（所有句子均超过 {REFER_MAX_LENGTH} 字符）",
+            tag="warn",
+            label="TTS",
+            level="warn",
         )
         return None, None
 
-    rprint(
-        f"[blue]📊 Selected {len(selected)} segments, total duration: {duration:.2f}s"
-    )
-
     refers_dir = resolve_task_path(_AUDIO_REFERS_DIR)
     audio_files = [f"{refers_dir}/{row['number']}.wav" for row in selected]
-    rprint(f"[yellow]🎵 Audio files to merge: {audio_files}")
 
     combined_audio = f"{refers_dir}/combined_reference.wav"
     success = merge_audio(audio_files, combined_audio)
 
     if not success:
-        rprint("[red]❌ Error: Failed to merge audio files")
+        log_event("合并参考音频文件失败", tag="warn", label="TTS", level="warn")
         return None, None
-
-    rprint(f"[green]✅ Successfully created combined audio: {combined_audio}")
-    rprint(
-        f"[green]📝 Final combined text: {combined_text} | Length: {len(combined_text)}"
-    )
 
     return combined_audio, combined_text
 
@@ -240,15 +220,17 @@ def siliconflow_fish_tts_for_videolingo(text, save_as, number, task_df):
     elif MODE == "custom":
         video_file = find_media_file()[0]
         custom_name = hashlib.md5(video_file.encode()).hexdigest()[:8]
-        rprint(f"[yellow]Using custom name: {custom_name}")
         log_name = load_key("sf_fish_tts.custom_name")
 
         if log_name != custom_name:
             # Get the merged reference audio and text
             ref_audio, ref_text = get_ref_audio(task_df)
             if ref_audio is None or ref_text is None:
-                rprint(
-                    "[red]Failed to get reference audio and text, falling back to preset mode"
+                log_event(
+                    "无法获取有效参考音频，回退至 preset 音色模式",
+                    tag="warn",
+                    label="TTS",
+                    level="warn",
                 )
                 return siliconflow_fish_tts(text, save_as, mode="preset")
 
@@ -264,8 +246,11 @@ def siliconflow_fish_tts_for_videolingo(text, save_as, number, task_df):
         refers_dir = resolve_task_path(_AUDIO_REFERS_DIR)
         ref_audio_path = f"{refers_dir}/{number}.wav"
         if not Path(ref_audio_path).exists():
-            rprint(
-                f"[red]Reference audio not found: {ref_audio_path}, falling back to preset mode"
+            log_event(
+                f"未找到参考音频 {ref_audio_path}，回退至 preset 音色模式",
+                tag="warn",
+                label="TTS",
+                level="warn",
             )
             return siliconflow_fish_tts(text, save_as, mode="preset")
 

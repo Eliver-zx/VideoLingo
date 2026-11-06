@@ -9,12 +9,10 @@ from core.utils import (  # noqa: F401
     get_source_language as _default_get_source_language,
     join_words,
     load_key,
+    log_event,
+    report_progress,
 )
-from rich.console import Console
-from rich.table import Table
 from core.utils.config_utils import get_text_joiner
-
-console = Console()
 
 get_source_language = _default_get_source_language
 
@@ -59,15 +57,21 @@ def find_split_positions(original, modified, language=None):
                 best_split = j
 
         if max_similarity < 0.9:
-            console.print(
-                f"[yellow]Warning: low similarity found at the best split point: {max_similarity}[/yellow]"
+            log_event(
+                f"切分点匹配相似度偏低 ({max_similarity:.2f})",
+                tag="warn",
+                label="NLP",
+                level="warn",
             )
         if best_split is not None:
             split_positions.append(best_split)
             start = best_split
         else:
-            console.print(
-                f"[yellow]Warning: Unable to find a suitable split point for the {i + 1}th part.[/yellow]"
+            log_event(
+                f"未能为第 {i + 1} 段找到合适切分点",
+                tag="warn",
+                label="NLP",
+                level="warn",
             )
 
     return split_positions
@@ -134,16 +138,17 @@ def split_sentence(
     except StopTask:
         raise
     except Exception as e:
-        # One sentence the model cannot split should not stop the whole video
-        console.print(
-            f"[yellow]⚠️ LLM split failed ({e}), splitting mechanically: {sentence}[/yellow]"
+        log_event(
+            f"LLM 长句切分失败 ({e})，回退为标点机械切分",
+            tag="warn",
+            label="NLP",
+            level="warn",
         )
         return mechanical_split(sentence, num_parts, language=language)
     best_split = pick_split(response_data)
     if best_split is None:
         return mechanical_split(sentence, num_parts, language=language)
     split_points = find_split_positions(sentence, best_split, language=language)
-    # split the sentence based on the split points
     for i, split_point in enumerate(split_points):
         if i == 0:
             best_split = sentence[:split_point] + "\n" + sentence[split_point:]
@@ -157,14 +162,7 @@ def split_sentence(
             )
             best_split = "\n".join(parts)
     if index != -1:
-        console.print(f"[green]✅ Sentence {index} has been successfully split[/green]")
-    table = Table(title="")
-    table.add_column("Type", style="cyan")
-    table.add_column("Sentence")
-    table.add_row("Original", sentence, style="yellow")
-    table.add_row("Split", best_split.replace("\n", " ||"), style="yellow")
-    console.print(table)
-
+        log_event(f"已完成第 {index} 句语义切分", tag="nlp", label="NLP")
     return best_split
 
 
@@ -179,7 +177,13 @@ def split_sentences_by_meaning():
         raise FileNotFoundError(
             f"Missing utterances in workspace database: {ws.db_path}"
         )
-    console.print("[green]✅ Sentences prepared for translation![/green]")
+    report_progress(
+        1.0,
+        "句子准备就绪",
+        "源文句子整理完成，准备进入术语提取与翻译",
+        tag="nlp",
+        label="NLP",
+    )
 
 
 if __name__ == "__main__":

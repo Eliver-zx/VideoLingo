@@ -593,7 +593,3 @@ def join_words(words: list[Any], joiner: str) -> str:
                 text += " "
         text += word
     return text
-
-
-if __name__ == "__main__":
-    print(load_key("language_split_with_space"))

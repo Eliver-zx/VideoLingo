@@ -2,6 +2,7 @@ import concurrent.futures
 import hashlib
 import json
 import re
+import time
 import pandas as pd
 from core.concurrency import ContextThreadPoolExecutor
 from core.translate_lines import translate_lines
@@ -18,13 +19,10 @@ from core.utils import (
     check_file_exists,
     load_key,
     load_key_or,
+    log_event,
     report_progress,
 )
 from core.workspace import get_active_workspace
-from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
-
-console = Console()
 
 
 def _cand_regex_str(cand: str) -> str:
@@ -124,7 +122,7 @@ def split_chunks_by_chars(chunk_size: int | None = None, max_i: int = 20):
                     u.setdefault("src_raw", orig_sentences[idx])
                     u.setdefault("src_punct", base_sentences[idx])
                     u["src"] = sentences[idx]
-                ws.save_utterances(utts)
+                ws.save_utterances(utts, mark_translated=False)
 
     chunks = []
     chunk = ""
@@ -244,10 +242,46 @@ def _load_cached_raw_translation(
     return None
 
 
+def _flush_chunk_translation_live(
+    ws,
+    utterances: list[dict],
+    non_empty_indices: list[int],
+    chunk_offsets: list[tuple[int, list[str]]],
+    res_item: ChunkTranslateResult,
+    last_flush_ts: float,
+) -> float:
+    chunk_idx, _, chunk_trans = res_item
+    if chunk_idx < 0 or chunk_idx >= len(chunk_offsets):
+        return last_flush_ts
+    offset, chunk_lines = chunk_offsets[chunk_idx]
+    trans_lines = chunk_trans.split("\n")
+    if len(trans_lines) != len(chunk_lines):
+        return last_flush_ts
+    direct_chunk = getattr(res_item, "direct_lines", None)
+    for j, tgt_raw in enumerate(trans_lines):
+        utt_pos = offset + j
+        if utt_pos >= len(non_empty_indices):
+            break
+        utt = utterances[non_empty_indices[utt_pos]]
+        tgt_str = str(tgt_raw).strip()
+        dir_str = (
+            str(direct_chunk[j]).strip()
+            if direct_chunk and j < len(direct_chunk)
+            else tgt_str
+        )
+        utt["direct"] = dir_str
+        utt["tgt"] = tgt_str
+        utt["tts_text"] = tgt_str
+    now = time.monotonic()
+    if now - last_flush_ts >= 1.5:
+        ws.save_utterances(utterances, mark_translated=False)
+        return now
+    return last_flush_ts
+
+
 # 🚀 Main function to translate all chunks
 @check_file_exists("translate")
 def translate_all():
-    console.print("[bold green]Start Translating All...[/bold green]")
     chunks = split_chunks_by_chars(max_i=20)
     expected_sources = [
         line for chunk in chunks for line in chunk.split("\n") if line.strip()
@@ -260,8 +294,10 @@ def translate_all():
     )
     direct_lines_all: list[str] = []
     if df_translate is not None:
-        console.print(
-            f"[cyan]♻️ Reusing cached raw translations from `{ws.db_path}`[/cyan]"
+        log_event(
+            f"命中字幕翻译缓存 ({len(expected_sources)} 句)",
+            tag="llm",
+            label="CACHE",
         )
     else:
         term_data = ws.load_terms() if ws.has_terms() else {}
@@ -269,45 +305,61 @@ def translate_all():
             term_data.get("theme") or term_data.get("topic") or term_data.get("summary")
         )
 
-        # 🔄 Use concurrent execution for translation
+        live_utts = ws.load_utterances()
+        non_empty_indices = [
+            idx for idx, u in enumerate(live_utts) if str(u.get("src") or "").strip()
+        ]
+        chunk_offsets: list[tuple[int, list[str]]] = []
+        running_offset = 0
+        for ch in chunks:
+            ch_lines = ch.split("\n")
+            chunk_offsets.append((running_offset, ch_lines))
+            running_offset += len(ch_lines)
+        can_live_flush = bool(live_utts) and len(non_empty_indices) == running_offset
+        last_flush_ts = 0.0
+
         total_chunks = max(1, len(chunks))
         report_progress(
-            0.28,
+            0.05,
             f"字幕翻译 0/{len(chunks)} 批",
-            f"🌐 开始并发翻译字幕（共 {len(chunks)} 批）...",
+            f"开始并发翻译字幕（共 {len(chunks)} 批）",
+            tag="llm",
+            label="TRANS",
         )
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            transient=True,
-        ) as progress:
-            task = progress.add_task("[cyan]Translating chunks...", total=len(chunks))
-            with ContextThreadPoolExecutor(
-                max_workers=load_key("max_workers")
-            ) as executor:
-                futures = []
-                for i, chunk in enumerate(chunks):
-                    future = executor.submit(
-                        translate_chunk, chunk, chunks, theme_prompt, i
-                    )
-                    futures.append(future)
-                results = []
-                try:
-                    for future in concurrent.futures.as_completed(futures):
-                        check_cancel()
-                        res_item = future.result()
-                        results.append(res_item)
-                        progress.update(task, advance=1)
-                        done_cnt = len(results)
-                        report_progress(
-                            0.28 + 0.70 * (done_cnt / total_chunks),
-                            f"字幕翻译 {done_cnt}/{len(chunks)} 批",
-                            f"🌐 完成翻译批次 #{res_item[0] + 1:02d} ({done_cnt}/{len(chunks)})",
+        with ContextThreadPoolExecutor(max_workers=load_key("max_workers")) as executor:
+            futures = []
+            for i, chunk in enumerate(chunks):
+                future = executor.submit(
+                    translate_chunk, chunk, chunks, theme_prompt, i
+                )
+                futures.append(future)
+            results = []
+            try:
+                for future in concurrent.futures.as_completed(futures):
+                    check_cancel()
+                    res_item = future.result()
+                    results.append(res_item)
+                    if can_live_flush:
+                        last_flush_ts = _flush_chunk_translation_live(
+                            ws,
+                            live_utts,
+                            non_empty_indices,
+                            chunk_offsets,
+                            res_item,
+                            last_flush_ts,
                         )
-                except BaseException:
-                    for f in futures:
-                        f.cancel()
-                    raise
+                    done_cnt = len(results)
+                    report_progress(
+                        0.05 + 0.90 * (done_cnt / total_chunks),
+                        f"字幕翻译 {done_cnt}/{len(chunks)} 批",
+                        f"完成翻译批次 #{res_item[0] + 1:02d} ({done_cnt}/{len(chunks)})",
+                        tag="llm",
+                        label="TRANS",
+                    )
+            except BaseException:
+                for f in futures:
+                    f.cancel()
+                raise
 
         results.sort(key=lambda x: x[0])  # Sort results based on original chunk index
 
@@ -391,8 +443,12 @@ def translate_all():
             )
         ws.save_utterances(built_utts)
 
-    console.print(
-        f"[bold green]✅ Translation completed and saved to `{ws.db_path}`.[/bold green]"
+    report_progress(
+        1.0,
+        f"已翻译 {len(tr_list)} 句字幕",
+        f"字幕翻译完成并保存（共 {len(tr_list)} 句）",
+        tag="llm",
+        label="TRANS",
     )
 
 

@@ -1,13 +1,10 @@
 import os
-import json
 import time
 from typing import Any
 import requests
 import tempfile
 from core.asr_backend.audio_preprocess import audio_slice_wav
-from rich import print as rprint
-from core.utils import load_key, set_runtime_state as update_key
-from core.utils.models import resolve_task_path
+from core.utils import load_key, report_progress, set_runtime_state as update_key
 
 # ----------------------------------------
 # ISO 639-2 to 1
@@ -76,8 +73,12 @@ def elev2whisper(elev_json, word_level_timestamp: bool = False) -> dict[str, Any
 
 
 def transcribe_audio_elevenlabs(raw_audio_path, vocal_audio_path, start=None, end=None):
-    rprint(
-        f"[cyan]🎤 Processing audio transcription, file path: {vocal_audio_path}[/cyan]"
+    report_progress(
+        0.10,
+        "准备音频切片…",
+        f"正在切分音频并准备上传至 ElevenLabs ({os.path.basename(str(vocal_audio_path))})",
+        tag="asr",
+        label="ASR",
     )
 
     # Use the same FFmpeg decoder as the other cloud ASR backend.
@@ -102,14 +103,18 @@ def transcribe_audio_elevenlabs(raw_audio_path, vocal_audio_path, start=None, en
         if whisper_lang and whisper_lang != "auto":
             data["language_code"] = whisper_lang
 
+        report_progress(
+            0.35,
+            "请求 ElevenLabs…",
+            "正在请求 ElevenLabs Scribe 语音识别接口",
+            tag="asr",
+            label="ASR",
+        )
         with open(temp_filepath, "rb") as audio_file:
             files = {"file": (os.path.basename(temp_filepath), audio_file, "audio/wav")}
             start_time = time.time()
             response = requests.post(base_url, headers=headers, data=data, files=files)
 
-        rprint(
-            f"[yellow]API request sent, status code: {response.status_code}[/yellow]"
-        )
         response.raise_for_status()
         result = response.json()
 
@@ -128,8 +133,12 @@ def transcribe_audio_elevenlabs(raw_audio_path, vocal_audio_path, start=None, en
                 if "end" in word:
                     word["end"] += start
 
-        rprint(
-            f"[green]✓ Transcription completed in {time.time() - start_time:.2f} seconds[/green]"
+        report_progress(
+            0.98,
+            "ElevenLabs 识别完成",
+            f"ElevenLabs 语音识别完成 (耗时 {time.time() - start_time:.2f}s)",
+            tag="asr",
+            label="ASR",
         )
         # Keep word-level timestamps so downstream process_transcription has `words`.
         parsed_result = elev2whisper(result, word_level_timestamp=True)
@@ -139,16 +148,3 @@ def transcribe_audio_elevenlabs(raw_audio_path, vocal_audio_path, start=None, en
         # Clean up the temporary file
         if os.path.exists(temp_filepath):
             os.remove(temp_filepath)
-
-
-if __name__ == "__main__":
-    file_path = input("Enter local audio file path (mp3 format): ")
-    # Language is not a parameter: the request body reads whisper.language from config.
-    result = transcribe_audio_elevenlabs(file_path, file_path)
-    print(result)
-
-    # Save result to file
-    out_transcript = resolve_task_path("output/transcript.json")
-    os.makedirs(os.path.dirname(out_transcript) or ".", exist_ok=True)
-    with open(out_transcript, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=4)

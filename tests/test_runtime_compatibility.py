@@ -63,7 +63,6 @@ def test_old_workbook_readers(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("mode", ["global", "project", "missing", "partial", "direct"])
 def test_cache_resolution_offline_first(tmp_path, monkeypatch, mode):
-    monkeypatch.setattr(whisperX_local, "rprint", lambda *a: None)
     complete = tmp_path / ("project/large-v3" if mode == "direct" else "snapshot")
     complete.mkdir(parents=True)
     for name in ("model.bin", "config.json", "tokenizer.json"):

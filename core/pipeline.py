@@ -119,7 +119,12 @@ def review_terminology():
         error = terminology_error()
         if error is None:
             return
-        print(f"⚠️ terminology: {error}")
+        TaskRunner.log_event(
+            f"术语校验未通过: {error}",
+            tag="warn",
+            label="TERMS",
+            level="warn",
+        )
         message = INVALID_TERMINOLOGY
 
 
@@ -172,7 +177,12 @@ def review_translation():
         error = translation_error(source, translation)
         if error is None:
             return
-        print(f"⚠️ translation: {error}")
+        TaskRunner.log_event(
+            f"译文校验未通过: {error}",
+            tag="warn",
+            label="TRANS",
+            level="warn",
+        )
         message = INVALID_TRANSLATION
 
 

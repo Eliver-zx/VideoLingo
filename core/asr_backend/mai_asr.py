@@ -4,10 +4,16 @@ import time
 from urllib.parse import urlsplit
 
 import requests
-from rich import print as rprint
 
 from core.asr_backend.audio_preprocess import audio_slice_wav
-from core.utils import check_cancel, load_key, load_key_or, update_key
+from core.utils import (
+    check_cancel,
+    load_key,
+    load_key_or,
+    log_event,
+    report_progress,
+    update_key,
+)
 
 API_VERSION = "2025-10-15"
 MODEL = "MAI-Transcribe-2"
@@ -195,8 +201,14 @@ def openrouter2whisper(result, offset=0.0):
 
 
 def transcribe_audio_mai(raw_audio_path, vocal_audio_path, start=None, end=None):
-    rprint(f"[cyan]🎤 Transcribing with {MODEL}: {vocal_audio_path}[/cyan]")
     provider = selected_provider()
+    report_progress(
+        0.10,
+        f"准备 MAI ({provider}) 音频…",
+        f"正在准备 MAI-Transcribe-2 ({provider}) 音频切片",
+        tag="asr",
+        label="ASR",
+    )
     api_key, region = configured_credentials()
     language = load_key("whisper.language")
     started = time.time()
@@ -248,6 +260,13 @@ def transcribe_audio_mai(raw_audio_path, vocal_audio_path, start=None, end=None)
             },
             "timeout": 600,
         }
+    report_progress(
+        0.35,
+        f"请求 MAI ({provider})…",
+        f"正在请求 MAI-Transcribe-2 ({provider}) 语音识别",
+        tag="asr",
+        label="ASR",
+    )
     response = None
     for attempt in range(1, ATTEMPTS + 1):
         check_cancel()
@@ -256,8 +275,11 @@ def transcribe_audio_mai(raw_audio_path, vocal_audio_path, start=None, end=None)
         except (requests.ConnectionError, requests.Timeout) as error:
             if attempt == ATTEMPTS:
                 raise
-            rprint(
-                f"[yellow]MAI-Transcribe connection failed ({error}); retrying {attempt}/{ATTEMPTS - 1}[/yellow]"
+            log_event(
+                f"MAI-Transcribe 连接失败 ({error})，正在重试 {attempt}/{ATTEMPTS - 1}",
+                tag="warn",
+                label="RETRY",
+                level="warn",
             )
         else:
             retryable = (
@@ -266,8 +288,11 @@ def transcribe_audio_mai(raw_audio_path, vocal_audio_path, start=None, end=None)
             )
             if response.ok or not retryable or attempt == ATTEMPTS:
                 break
-            rprint(
-                f"[yellow]MAI-Transcribe HTTP {response.status_code}; retrying {attempt}/{ATTEMPTS - 1}[/yellow]"
+            log_event(
+                f"MAI-Transcribe HTTP {response.status_code}，正在重试 {attempt}/{ATTEMPTS - 1}",
+                tag="warn",
+                label="RETRY",
+                level="warn",
             )
         time.sleep(5 * attempt)
     assert response is not None
@@ -280,7 +305,11 @@ def transcribe_audio_mai(raw_audio_path, vocal_audio_path, start=None, end=None)
     parsed = (openrouter2whisper if provider == "openrouter" else mai2whisper)(
         response.json(), start or 0.0
     )
-    rprint(
-        f"[green]✓ Transcription completed in {time.time() - started:.2f} seconds[/green]"
+    report_progress(
+        0.98,
+        "MAI 识别完成",
+        f"MAI-Transcribe-2 语音识别完成 (耗时 {time.time() - started:.2f}s)",
+        tag="asr",
+        label="ASR",
     )
     return parsed

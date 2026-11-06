@@ -536,7 +536,6 @@ def test_valid_translate_result_rejects_empty_strings_and_populates_missing_orig
         tl, "load_key", lambda k: True if k == "reflect_translate" else "简体中文"
     )
     monkeypatch.setattr(tl, "check_cancel", lambda: None)
-    monkeypatch.setattr(tl.console, "print", lambda *a, **kw: None)
 
     trans, orig = tl.translate_lines(
         "Line one.\nLine two.", ["Prev line."], ["Next line."], "notes", "summary", 0

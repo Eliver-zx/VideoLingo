@@ -5,7 +5,7 @@ import time
 import cv2
 
 from core._1_ytdlp import find_media_file, find_video_files as _default_find_video_files
-from core.utils import load_key, rprint
+from core.utils import load_key, log_event, report_progress
 from core.utils.models import _6_BI_ASS, resolve_task_path
 from core.utils.subtitle_style import (
     build_ass_from_srt_pair,
@@ -15,7 +15,7 @@ from core.utils.subtitle_style import (
     get_subtitle_filters as _default_get_subtitle_filters,
     wrap_gpu_subtitle_filter,
 )
-from core.workspace import probe_media_metadata
+from core.workspace import get_active_workspace, probe_media_metadata
 
 find_video_files = _default_find_video_files
 get_subtitle_filters = _default_get_subtitle_filters
@@ -49,16 +49,22 @@ def merge_subtitles_to_video():
     from core._1_ytdlp import is_audio_only_input
 
     if is_audio_only_input():
-        rprint(
-            "[bold green]🎵 Audio-only input: skipping video merge. "
-            "Subtitle files are ready in the `output` directory.[/bold green]"
+        report_progress(
+            1.0,
+            "纯音频输入，跳过视频压制",
+            "纯音频输入跳过视频压制，字幕已就绪",
+            tag="asr",
+            label="VIDEO",
         )
         return
 
     if not load_key("burn_subtitles"):
-        rprint(
-            "[bold yellow]Subtitles burn-in is disabled (burn_subtitles=False); "
-            "skipping subtitle video generation.[/bold yellow]"
+        report_progress(
+            1.0,
+            "未启用字幕烧录，跳过合成",
+            "字幕硬烧录已关闭 (burn_subtitles=False)，跳过合成",
+            tag="asr",
+            label="VIDEO",
         )
         return
 
@@ -67,9 +73,12 @@ def merge_subtitles_to_video():
     else:
         media_file, media_type = find_media_file()
         if media_type != "video":
-            rprint(
-                "[bold green]🎵 Non-video input: skipping video merge. "
-                "Subtitle files are ready in the `output` directory.[/bold green]"
+            report_progress(
+                1.0,
+                "非视频输入，跳过视频压制",
+                "非视频输入跳过视频压制，字幕已就绪",
+                tag="asr",
+                label="VIDEO",
             )
             return
         video_file = media_file
@@ -80,7 +89,12 @@ def merge_subtitles_to_video():
     os.makedirs(os.path.dirname(out_video) or ".", exist_ok=True)
 
     if not os.path.exists(src_srt) or not os.path.exists(trans_srt):
-        rprint("Subtitle files not found in the 'output' directory.")
+        log_event(
+            "未找到待压制的原文字幕或译文字幕文件",
+            tag="warn",
+            label="VIDEO",
+            level="error",
+        )
         raise FileNotFoundError("Source or translation SRT file not found.")
 
     meta = probe_media_metadata(video_file)
@@ -94,7 +108,6 @@ def merge_subtitles_to_video():
     if TARGET_WIDTH <= 0 or TARGET_HEIGHT <= 0:
         TARGET_WIDTH, TARGET_HEIGHT = 1920, 1080
 
-    rprint(f"[bold green]Video resolution: {TARGET_WIDTH}x{TARGET_HEIGHT}[/bold green]")
     if get_subtitle_filters is not _default_get_subtitle_filters:
         vf_filter = get_subtitle_filters("subtitle", src_srt, trans_srt)
     else:
@@ -109,8 +122,6 @@ def merge_subtitles_to_video():
         )
         vf_filter = f"ass='{escape_ffmpeg_filter_path(ass_path)}'"
     ffmpeg_gpu = bool(load_key("ffmpeg_gpu"))
-    if ffmpeg_gpu:
-        rprint("[bold green]will use GPU acceleration.[/bold green]")
     hw_input_args, vf_filter = wrap_gpu_subtitle_filter(
         vf_filter, ffmpeg_gpu, video_meta=meta
     )
@@ -126,18 +137,40 @@ def merge_subtitles_to_video():
     ffmpeg_cmd.extend(get_optimal_video_encoder_args(ffmpeg_gpu))
     ffmpeg_cmd.extend(["-c:a", "copy", "-movflags", "+faststart", "-y", out_video])
 
-    rprint("🎬 Start merging subtitles to video...")
+    gpu_label = "GPU" if ffmpeg_gpu else "CPU"
+    report_progress(
+        0.10,
+        f"字幕压制中 ({TARGET_WIDTH}x{TARGET_HEIGHT})…",
+        f"开始压制带字幕视频 ({TARGET_WIDTH}x{TARGET_HEIGHT}, {gpu_label})",
+        tag="asr",
+        label="VIDEO",
+    )
     start_time = time.time()
     process = subprocess.Popen(ffmpeg_cmd)
 
     try:
         process.wait()
         if process.returncode == 0:
-            rprint(f"\n✅ Done! Time taken: {time.time() - start_time:.2f} seconds")
+            elapsed = time.time() - start_time
+            get_active_workspace().notify_artifact_update(
+                "video", tag="asr", label="VIDEO"
+            )
+            report_progress(
+                1.0,
+                f"视频压制完成 ({elapsed:.1f}s)",
+                f"字幕视频压制完成，耗时 {elapsed:.1f}s",
+                tag="asr",
+                label="VIDEO",
+            )
         else:
             raise subprocess.CalledProcessError(process.returncode, ffmpeg_cmd)
     except Exception as e:
-        rprint(f"\n❌ Error occurred: {e}")
+        log_event(
+            f"字幕视频压制失败: {e}",
+            tag="warn",
+            label="VIDEO",
+            level="error",
+        )
         if process.poll() is None:
             process.kill()
         raise

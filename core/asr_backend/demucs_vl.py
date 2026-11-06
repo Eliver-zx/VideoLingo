@@ -13,11 +13,10 @@ from typing import Any, Optional
 import numpy as np
 import soundfile as sf
 import torch
-from rich import print as rprint
-from rich.console import Console
 from torch.cuda import is_available as is_cuda_available
 
 from core.asr_backend.audio_preprocess import _ffmpeg_has_encoder
+from core.utils import check_cancel, report_progress
 from core.utils.config_utils import load_key_or
 from core.utils.models import (
     _AUDIO_DIR,
@@ -416,13 +415,18 @@ def separate_in_chunks(
     frame_bytes = 4 * pcm_channels
     total = os.path.getsize(pcm_file) // frame_bytes
     chunk, context = CHUNK_SECONDS * samplerate, CONTEXT_SECONDS * samplerate
-    for start in range(0, total, chunk):
+    total_chunks = max(1, (total + chunk - 1) // chunk)
+    for chunk_idx, start in enumerate(range(0, total, chunk), 1):
+        check_cancel()
         end = min(start + chunk, total)
         left, right = max(start - context, 0), min(end + context, total)
-        if total > chunk:
-            rprint(
-                f"🎵 Separating {start // samplerate}s - {end // samplerate}s of {total // samplerate}s..."
-            )
+        report_progress(
+            0.15 + 0.80 * ((chunk_idx - 1) / total_chunks),
+            f"人声分离 {chunk_idx}/{total_chunks}",
+            f"正在分离人声与伴奏 [{chunk_idx}/{total_chunks}] ({start // samplerate}s - {end // samplerate}s / {total // samplerate}s)",
+            tag="asr",
+            label="DEMUCS",
+        )
         frames = np.fromfile(
             pcm_file,
             dtype="<f4",
@@ -454,21 +458,30 @@ def demucs_audio(model_key: Optional[str] = None):
     raw_audio_path = resolve_task_path(_RAW_AUDIO_FILE)
 
     if os.path.exists(vocal_audio_path) and os.path.exists(bg_audio_path):
-        rprint(
-            f"[yellow]⚠️ {vocal_audio_path} and {bg_audio_path} already exist, skip vocal separation.[/yellow]"
+        report_progress(
+            1.0,
+            "复用已分离音轨",
+            "检测到已分离的人声与背景伴奏音轨，跳过人声分离",
+            tag="asr",
+            label="DEMUCS",
         )
         return
 
     resolved = resolve_separation_model(model_key)
     spec = VOCAL_SEPARATION_MODELS[resolved]
-    console = Console()
     os.makedirs(audio_dir_path, exist_ok=True)
     cache_dir = _clean_model_dir()
 
     model = None
     separator = None
     try:
-        console.print(f"🤖 Loading <{spec['model']}> vocal separation model...")
+        report_progress(
+            0.05,
+            f"加载 {resolved} 模型…",
+            f"正在加载人声分离模型 <{spec['model']}>",
+            tag="asr",
+            label="DEMUCS",
+        )
         if spec["backend"] == "demucs":
             if get_model is None:
                 raise RuntimeError(
@@ -494,7 +507,13 @@ def demucs_audio(model_key: Optional[str] = None):
             )
             samplerate, audio_channels = separator.samplerate, separator.audio_channels
 
-        console.print("🎵 Separating audio...")
+        report_progress(
+            0.12,
+            "解码 PCM 音频流…",
+            "模型加载完成，开始执行人声与伴奏分离",
+            tag="asr",
+            label="DEMUCS",
+        )
         # The stems are written next to their final place and moved there when they are
         # complete, so an interrupted run does not leave half a track behind.
         with tempfile.TemporaryDirectory(dir=audio_dir_path) as tmp:
@@ -536,7 +555,13 @@ def demucs_audio(model_key: Optional[str] = None):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    console.print("[green]✨ Audio separation completed![/green]")
+    report_progress(
+        1.0,
+        "人声分离完成",
+        "人声与背景伴奏分离完成",
+        tag="asr",
+        label="DEMUCS",
+    )
 
 
 if __name__ == "__main__":

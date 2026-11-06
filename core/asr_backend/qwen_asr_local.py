@@ -25,12 +25,12 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
-from rich import print as rprint
 from core.utils import (
     load_key,
     load_key_or,
     except_handler,
     check_cancel,
+    log_event,
     report_progress,
 )
 from core.asr_backend.speech_edges import trim_speech_windows
@@ -215,7 +215,11 @@ def _model_source(repo_id):
     short_name = repo_id.split("/")[-1]
     local = Path(raw_dir) / short_name
     if _has_complete_weights(local):
-        rprint(f"[green]Using local Qwen model: {local.resolve()}[/green]")
+        log_event(
+            f"使用本地缓存模型: {local.name}",
+            tag="asr",
+            label="ASR",
+        )
         return str(local.resolve())
     try:
         from huggingface_hub import snapshot_download
@@ -223,8 +227,9 @@ def _model_source(repo_id):
         return repo_id
     local.mkdir(parents=True, exist_ok=True)
     msg = f"⬇️ Downloading {repo_id} into {local.resolve()} ..."
-    rprint(f"[cyan]{msg}[/cyan]")
-    report_progress(sub_label=f"下载模型 {short_name}…", message=msg)
+    report_progress(
+        sub_label=f"下载模型 {short_name}…", message=msg, tag="asr", label="ASR"
+    )
     snapshot_download(repo_id=repo_id, local_dir=str(local.resolve()))
     return str(local.resolve())
 
@@ -437,9 +442,11 @@ def plan_languages(run, raw, windows, progress_cb=None):
     if overall is None and rejected:
         # Speech was heard but every probe looped or had no supported language: listening
         # without a language would repeat the failure, so try more, shorter clips first.
-        rprint(
-            f"[yellow]⚠️ All {rejected} language probe(s) were unusable; probing again with "
-            f"{REPROBE_SECONDS} s clips...[/yellow]"
+        log_event(
+            f"首次语言探测 ({rejected} 段) 未收敛，正在改用 {REPROBE_SECONDS}s 短切片重新探测",
+            tag="warn",
+            label="ASR",
+            level="warn",
         )
         per_window = [
             probe_window(run, raw, a, b, REPROBE_SECONDS, REPROBES_PER_WINDOW)[0]
@@ -462,9 +469,10 @@ def plan_languages(run, raw, windows, progress_cb=None):
             or "none"
         )
         msg = f"🌐 {a / SAMPLE_RATE:.1f}-{b / SAMPLE_RATE:.1f}s language: {language or 'auto'} (probes: {votes})"
-        rprint(f"[cyan]{msg}[/cyan]")
         if progress_cb is not None:
             progress_cb(0.15, f"语言确定: {language or 'auto'}", msg)
+        else:
+            log_event(msg, tag="asr", label="ASR")
         plan.append((language, probes))
     return plan
 
@@ -629,9 +637,11 @@ def transcribe_window(run, raw, a, b, language, probes=None, offset=0.0, forced=
             raise language_mismatch_error(
                 span, language, f"{reason}; the probe clips sound like {heard_instead}"
             )
-    rprint(
-        f"[yellow]⚠️ Qwen3-ASR output for {span} looks degenerate ({reason}); "
-        f"retrying in {RETRY_WINDOW_SECONDS} s windows...[/yellow]"
+    log_event(
+        f"Qwen3-ASR 窗口 {span} 输出退化 ({reason})，拆分为 {RETRY_WINDOW_SECONDS}s 子窗口重试",
+        tag="warn",
+        label="ASR",
+        level="warn",
     )
     pieces = []
     parts = split_windows(
@@ -847,8 +857,10 @@ def asr_session(engine, repo_id):
             }
             if attn:
                 load_kwargs["attn_implementation"] = attn
-            rprint(
-                f"[cyan]🎮 Qwen3-ASR device:[/cyan] {device}, [cyan]dtype:[/cyan] {dtype}, [cyan]attn:[/cyan] {attn or 'default'}"
+            log_event(
+                f"Qwen3-ASR 推理设备: {device}, 精度: {dtype}, 注意力: {attn or 'default'}",
+                tag="asr",
+                label="ASR",
             )
             model = Qwen3ASRModel.from_pretrained(source, **load_kwargs)
 
@@ -922,8 +934,10 @@ def _align(engine, repo_id, jobs):
             t_align = time.time()
             result = align(clip, text, lang)
             items = [(item.text, item.start_time, item.end_time) for item in result]
-            rprint(
-                f"[cyan]🔗 Aligned window [{j_idx}/{total_jobs}] ({len(items)} tokens in {time.time() - t_align:.1f}s)[/cyan]"
+            log_event(
+                f"完成时间戳对齐窗口 [{j_idx}/{total_jobs}] ({len(items)} 词, {time.time() - t_align:.1f}s)",
+                tag="asr",
+                label="ASR",
             )
             results.append(items)
     finally:
@@ -945,8 +959,12 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     models = MODELS[engine]
     configured = load_key("whisper.language")
     forced = qwen_language(configured)
-    rprint(
-        f"[green]▶️ Qwen3-ASR {size} + ForcedAligner ({engine}) for segment {start:.2f}s to {end:.2f}s...[/green]"
+    report_progress(
+        0.01,
+        f"准备片段 {start:.0f}s–{end:.0f}s",
+        f"准备 Qwen3-ASR {size} ({engine}) 识别区间 {start:.1f}s–{end:.1f}s",
+        tag="asr",
+        label="ASR",
     )
 
     raw = load_audio_segment(raw_audio_file, start, end)
@@ -973,6 +991,8 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
         0.04,
         f"加载 Qwen3-ASR {size}",
         f"🚀 正在加载 Qwen3-ASR {size} ({engine})，共 {len(windows)} 个识别窗口...",
+        tag="asr",
+        label="ASR",
     )
     with asr_session(engine, models[size]) as run:
         plan = (
@@ -985,11 +1005,12 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
                 f"{start + a / SAMPLE_RATE:.1f}s–{start + b / SAMPLE_RATE:.1f}s"
             )
             start_msg = f"🎙️ [{w_idx}/{total_w}] 正在识别窗口 {span_label} ({language or 'auto'})..."
-            rprint(f"[cyan]{start_msg}[/cyan]")
             report_progress(
                 0.15 + 0.58 * ((w_idx - 1) / total_w),
                 f"语音识别 {w_idx}/{total_w} ({span_label})",
                 start_msg,
+                tag="asr",
+                label="ASR",
             )
             t_win = time.time()
             window = transcribe_window(
@@ -1003,11 +1024,12 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
                 f"✅ [{w_idx}/{total_w}] 完成窗口 {span_label} "
                 f"({time.time() - t_win:.1f}s, {len(win_text)} 字符): {preview}"
             )
-            rprint(f"[green]{done_msg}[/green]")
             report_progress(
                 0.15 + 0.58 * (w_idx / total_w),
                 f"已完成窗口 {w_idx}/{total_w}",
                 done_msg,
+                tag="asr",
+                label="ASR",
             )
             if forced:
                 # Text only, no inference: a clearly wrong language fails on its first window.
@@ -1023,7 +1045,11 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
                         mismatch,
                     )
             pieces.extend(window)
-    rprint(f"[cyan]⏱️ time transcribe:[/cyan] {time.time() - t0:.2f}s")
+    log_event(
+        f"Qwen3-ASR 文本识别耗时 {time.time() - t0:.2f}s",
+        tag="asr",
+        label="ASR",
+    )
 
     if forced:
         # A wrong forced language often transcribes fine in the audio's own language (Korean
@@ -1055,9 +1081,17 @@ def transcribe_audio(raw_audio_file, vocal_audio_file, start, end):
     ]
     jobs = [(vocal[a:b], text, lang) for a, b, text, lang in todo]
     aligned = _align(engine, models["aligner"], jobs) if jobs else []
-    rprint(f"[cyan]⏱️ time align:[/cyan] {time.time() - t0:.2f}s")
+    log_event(
+        f"ForcedAligner 词级对齐耗时 {time.time() - t0:.2f}s",
+        tag="asr",
+        label="ASR",
+    )
     report_progress(
-        0.99, "语音识别完成", f"✨ Qwen3-ASR 识别与对齐全部完成 ({len(todo)} 段)"
+        0.99,
+        "语音识别完成",
+        f"✨ Qwen3-ASR 识别与对齐全部完成 ({len(todo)} 段)",
+        tag="asr",
+        label="ASR",
     )
 
     segments = []

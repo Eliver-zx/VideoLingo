@@ -3,14 +3,8 @@ from core.prompts import (
     get_prompt_faithfulness,
     get_prompt_expressiveness,
 )
-from rich.panel import Panel
-from rich.console import Console
-from rich.table import Table
-from rich import box
 from core.task_runner import StopTask
-from core.utils import ask_gpt, check_cancel, load_key
-
-console = Console()
+from core.utils import ask_gpt, check_cancel, load_key, log_event
 
 
 class TranslateResultTuple(tuple):
@@ -106,11 +100,14 @@ def translate_lines(
             if len(lines.split("\n")) == len(result):
                 return result
             if retry != 2:
-                console.print(
-                    f"[yellow]⚠️ {step_name.capitalize()} translation of block {index} failed, Retry...[/yellow]"
+                log_event(
+                    f"翻译批次 #{index + 1:02d} ({step_name}) 行数校验未通过，正在重试 ({retry + 1}/2)",
+                    tag="warn",
+                    label="TRANS",
+                    level="warn",
                 )
         raise ValueError(
-            f"[red]❌ {step_name.capitalize()} translation of block {index} failed after 3 retries. Please check `output/gpt_log/error.json` for more details.[/red]"
+            f"{step_name.capitalize()} translation of block {index} failed after 3 retries. Please check `output/gpt_log/error.json` for more details."
         )
 
     ## Step 1: Faithful to the Original Text
@@ -129,16 +126,6 @@ def translate_lines(
     reflect_translate = load_key("reflect_translate")
     if not reflect_translate:
         translate_result = "\n".join(direct_lines)
-
-        table = Table(title="Translation Results", show_header=False, box=box.ROUNDED)
-        table.add_column("Translations", style="bold")
-        for i, key in enumerate(faith_result):
-            table.add_row(f"[cyan]Origin:  {faith_result[key]['origin']}[/cyan]")
-            table.add_row(f"[magenta]Direct:  {faith_result[key]['direct']}[/magenta]")
-            if i < len(faith_result) - 1:
-                table.add_row("[yellow]" + "-" * 50 + "[/yellow]")
-
-        console.print(table)
         return TranslateResultTuple(translate_result, lines, direct_lines)
 
     ## Step 2: Express Smoothly
@@ -151,8 +138,11 @@ def translate_lines(
         raise
     except Exception as e:
         # The polish step is optional: keep the faithful translation instead of stopping the video
-        console.print(
-            f"[yellow]⚠️ Expressiveness translation of block {index} failed ({e}), using the direct translation[/yellow]"
+        log_event(
+            f"翻译批次 #{index + 1:02d} 意译润色失败 ({e})，回退至直译结果",
+            tag="warn",
+            label="TRANS",
+            level="warn",
         )
         express_result = {
             key: {"free": faith_result[key]["direct"]} for key in faith_result
@@ -165,24 +155,14 @@ def translate_lines(
         else:
             express_result[key]["free"] = free_val
 
-    table = Table(title="Translation Results", show_header=False, box=box.ROUNDED)
-    table.add_column("Translations", style="bold")
-    for i, key in enumerate(express_result):
-        table.add_row(f"[cyan]Origin:  {faith_result[key]['origin']}[/cyan]")
-        table.add_row(f"[magenta]Direct:  {faith_result[key]['direct']}[/magenta]")
-        table.add_row(f"[green]Free:    {express_result[key]['free']}[/green]")
-        if i < len(express_result) - 1:
-            table.add_row("[yellow]" + "-" * 50 + "[/yellow]")
-
-    console.print(table)
-
     translate_result = "\n".join([express_result[i]["free"] for i in express_result])
 
     if len(lines.split("\n")) != len(translate_result.split("\n")):
-        console.print(
-            Panel(
-                f"[red]❌ Translation of block {index} failed, Length Mismatch, Please check `output/gpt_log/translate_expressiveness.json`[/red]"
-            )
+        log_event(
+            f"翻译批次 #{index + 1:02d} 行数不匹配，请检查 translate_expressiveness.json",
+            tag="warn",
+            label="TRANS",
+            level="error",
         )
         raise ValueError(f"Origin ···{lines}···,\nbut got ···{translate_result}···")
 

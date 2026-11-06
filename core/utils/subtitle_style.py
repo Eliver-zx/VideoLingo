@@ -9,8 +9,7 @@ import platform
 import re
 import subprocess
 
-from rich import print as rprint
-
+from core.task_runner import TaskRunner
 from .config_utils import load_key_or, update_key
 
 # An empty font name stands for the default font of the system
@@ -100,8 +99,11 @@ def get_subtitle_style(kind):
     for key, default in DEFAULT_STYLE[kind].items():
         value = clean_value(key, configured.get(key, default))
         if value is None:
-            rprint(
-                f"[yellow]⚠️ subtitle.style.{kind}.{key} = {configured[key]!r} can not be used, using {default!r}[/yellow]"
+            TaskRunner.log_event(
+                f"subtitle.style.{kind}.{key} = {configured[key]!r} 不可用，已回退为 {default!r}",
+                tag="warn",
+                label="SUBS",
+                level="warn",
             )
             value = default
         style[key] = value
@@ -157,8 +159,11 @@ def get_burn_mode(video):
     key, default = BURN_MODE_KEYS[video]
     mode = load_key_or(key, default)
     if mode not in BURN_MODES:
-        rprint(
-            f"[yellow]⚠️ {key} = {mode!r} can not be used, using {default!r}[/yellow]"
+        TaskRunner.log_event(
+            f"{key} = {mode!r} 不可用，已回退为 {default!r}",
+            tag="warn",
+            label="SUBS",
+            level="warn",
         )
         mode = default
     return mode
@@ -169,8 +174,11 @@ def get_subtitle_filters(video, source_srt, translation_srt):
     mode = get_burn_mode(video)
     if mode != "translation" and not os.path.exists(source_srt):
         # A dub from before the source subtitles of the dub were written
-        rprint(
-            f"[yellow]⚠️ {source_srt} not found, burning the translated subtitles only[/yellow]"
+        TaskRunner.log_event(
+            f"未找到 {source_srt}，仅压制译文字幕",
+            tag="warn",
+            label="SUBS",
+            level="warn",
         )
         mode = "translation"
     subtitles = {"source": source_srt, "translation": translation_srt}

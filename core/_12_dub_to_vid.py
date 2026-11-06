@@ -5,10 +5,9 @@ import json
 import math
 
 import cv2
-from rich.console import Console
 
 from core._1_ytdlp import find_media_file, find_video_files as _ytdlp_find_video_files
-from core.utils import check_cancel, load_key, rprint
+from core.utils import check_cancel, load_key, log_event, report_progress
 from core.utils.models import _BACKGROUND_AUDIO_FILE, _DUB_WAV_FILE, resolve_task_path
 from core.utils.subtitle_style import (
     build_ass_from_srt_pair,
@@ -18,9 +17,7 @@ from core.utils.subtitle_style import (
     get_subtitle_filters as _default_get_subtitle_filters,
     wrap_gpu_subtitle_filter,
 )
-from core.workspace import probe_media_metadata
-
-console = Console()
+from core.workspace import get_active_workspace, probe_media_metadata
 
 find_video_files = _ytdlp_find_video_files
 get_subtitle_filters = _default_get_subtitle_filters
@@ -91,8 +88,12 @@ def merge_video_audio():
     from core._1_ytdlp import is_audio_only_input
 
     if is_audio_only_input():
-        rprint(
-            "[bold green]🎵 Audio-only input: skipping dubbing video merge. Dubbed audio is in the `output` directory.[/bold green]"
+        report_progress(
+            1.0,
+            "纯音频输入，跳过配音视频合成",
+            "纯音频输入跳过配音视频封装，配音音频已就绪",
+            tag="asr",
+            label="VIDEO",
         )
         return
 
@@ -117,6 +118,13 @@ def merge_video_audio():
     normalized_dub_audio = resolve_task_path("output/normalized_dub.wav")
     os.makedirs(os.path.dirname(normalized_dub_audio) or ".", exist_ok=True)
     os.makedirs(os.path.dirname(dub_video) or ".", exist_ok=True)
+    report_progress(
+        0.15,
+        "校准配音音频响度…",
+        "正在执行配音音轨响度均衡 (EBU R128 loudnorm)",
+        tag="asr",
+        label="AUDIO",
+    )
     normalize_dub_audio(dub_source, normalized_dub_audio)
 
     has_background = os.path.isfile(background_file)
@@ -152,9 +160,6 @@ def merge_video_audio():
             video.release()
         if TARGET_WIDTH <= 0 or TARGET_HEIGHT <= 0:
             TARGET_WIDTH, TARGET_HEIGHT = 1920, 1080
-        rprint(
-            f"[bold green]Video resolution: {TARGET_WIDTH}x{TARGET_HEIGHT}[/bold green]"
-        )
 
         if (
             get_subtitle_filters is not _default_get_subtitle_filters
@@ -179,12 +184,10 @@ def merge_video_audio():
         )
         filters.append(f"[0:v]{subtitle_filter}[v]")
     elif can_reuse_sub_video:
-        rprint(
-            f"[bold green]Reusing pre-burned subtitle video stream from {sub_video}...[/bold green]"
-        )
-    else:
-        rprint(
-            "[bold yellow]Subtitles are not burned in: the dubbed audio is merged into the original video.[/bold yellow]"
+        log_event(
+            "复用已压制字幕视频流，直接封装配音音轨",
+            tag="asr",
+            label="VIDEO",
         )
     cmd = ["ffmpeg", "-nostdin", "-y", *hw_input_args, "-i", input_video]
     if has_background:
@@ -195,8 +198,11 @@ def merge_video_audio():
             "[1:a][2:a]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0[a]"
         )
     else:
-        rprint(
-            "[yellow]Original background audio is unavailable; exporting the dubbed voice alone.[/yellow]"
+        log_event(
+            "未检测到独立背景音轨，仅导出配音人声音轨",
+            tag="warn",
+            label="AUDIO",
+            level="warn",
         )
     if filters:
         cmd.extend(["-filter_complex", ";".join(filters)])
@@ -211,9 +217,14 @@ def merge_video_audio():
     )
     audio_output = ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", dub_video]
 
+    report_progress(
+        0.45,
+        "合成配音视频中…",
+        "开始合成最终配音成片视频",
+        tag="asr",
+        label="VIDEO",
+    )
     if need_burn_filter:
-        if use_gpu:
-            rprint("[bold green]Using GPU acceleration...[/bold green]")
         encoder = get_optimal_video_encoder_args(use_gpu)
         subprocess.run(cmd + encoder + audio_output, check=True)
     else:
@@ -221,15 +232,21 @@ def merge_video_audio():
             # The picture is not touched, so it is copied as it is
             subprocess.run(cmd + ["-c:v", "copy"] + audio_output, check=True)
         except subprocess.CalledProcessError:
-            rprint(
-                "[yellow]The video stream cannot be copied into MP4, encoding it again...[/yellow]"
+            log_event(
+                "原视频流无法直接拷贝至 MP4，回退至重编码封装",
+                tag="warn",
+                label="VIDEO",
+                level="warn",
             )
-            if use_gpu:
-                rprint("[bold green]Using GPU acceleration...[/bold green]")
             encoder = get_optimal_video_encoder_args(use_gpu)
             subprocess.run(cmd + encoder + audio_output, check=True)
-    rprint(
-        f"[bold green]Video and audio successfully merged into {dub_video}[/bold green]"
+    get_active_workspace().notify_artifact_update("video", tag="asr", label="VIDEO")
+    report_progress(
+        1.0,
+        "配音成片合成完成",
+        f"配音成片视频已生成 ({dub_video})",
+        tag="asr",
+        label="VIDEO",
     )
 
 
