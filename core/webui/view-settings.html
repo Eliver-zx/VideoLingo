@@ -163,6 +163,7 @@
               <span class="field-label"><span>识别服务</span><span class="field-key">whisper.runtime</span></span>
               <select id="cfg-asr-runtime" data-cfg="whisper.runtime">
                 <option value="local" selected>本地推理 (Qwen3-ASR / WhisperX)</option>
+                <option value="mimo">小米 MiMo ASR</option>
                 <option value="mai">微软 MAI-Transcribe-2</option>
                 <option value="deepgram">Deepgram Nova-3</option>
                 <option value="elevenlabs">ElevenLabs Scribe</option>
@@ -220,6 +221,25 @@
                 <span class="field-label"><span>WhisperX 模型</span><span class="field-key">whisper.model</span></span>
                 <select data-cfg="whisper.model">
                   <option value="large-v3" selected>large-v3</option>
+                </select>
+              </label>
+            </div>
+
+            <div data-asr-panel="mimo" class="grid-3 hidden">
+              <label class="field">
+                <span class="field-label"><span>MiMo API Key</span><span class="field-key">whisper.mimo_api_key</span></span>
+                <input type="password" placeholder="输入小米 MiMo API Key" data-cfg="whisper.mimo_api_key">
+              </label>
+              <label class="field">
+                <span class="field-label"><span>MiMo 模型名称</span><span class="field-key">whisper.mimo_model</span></span>
+                <input type="text" value="mimo-v2.5-asr" placeholder="如 mimo-v2.5-asr" data-cfg="whisper.mimo_model">
+              </label>
+              <label class="field">
+                <span class="field-label"><span>对齐加速后端</span><span class="field-key">whisper.qwen_engine</span></span>
+                <select data-cfg="whisper.qwen_engine">
+                  <option value="auto" selected>自动 (Apple Silicon 优先 MLX)</option>
+                  <option value="mlx">MLX</option>
+                  <option value="transformers">Transformers</option>
                 </select>
               </label>
             </div>

@@ -23,58 +23,103 @@ def cache_key(media_file, whisper, demucs):
         for block in iter(lambda: source.read(1024 * 1024), b""):
             check_cancel()
             digest.update(block)
-    sep_model = str(whisper.get("vocal_separation_model", "htdemucs") or "htdemucs").strip().lower()
+    sep_model = (
+        str(whisper.get("vocal_separation_model", "htdemucs") or "htdemucs")
+        .strip()
+        .lower()
+    )
     sep_extra = {}
     if bool(demucs) and sep_model != "htdemucs":
         try:
             audio_sep_ver = version("audio-separator")
         except PackageNotFoundError:
             audio_sep_ver = None
-        sep_extra = {"vocal_separation_model": sep_model, "audio_separator_version": audio_sep_ver}
+        sep_extra = {
+            "vocal_separation_model": sep_model,
+            "audio_separator_version": audio_sep_ver,
+        }
     runtime = str(whisper.get("runtime", "local")).strip()
     runtime_lower = runtime.lower()
     if runtime_lower == "mai":
         from core.asr_backend.mai_asr import CACHE_IDENTITY, OPENROUTER_CACHE_IDENTITY
+
         # Credentials, Azure region, and local model packages do not change
         # MAI's output. Provider API/response contracts have separate identities.
         provider = str(whisper.get("mai_provider", "azure") or "azure").lower()
         if provider not in ("azure", "openrouter"):
             raise ValueError("whisper.mai_provider must be 'azure' or 'openrouter'")
         identity = {
-            "schema": SCHEMA, "media_md5": digest.hexdigest(),
-            "runtime": "mai", "mai": (CACHE_IDENTITY if provider == "azure"
-                                        else OPENROUTER_CACHE_IDENTITY),
-            "language": whisper["language"], "demucs": bool(demucs),
+            "schema": SCHEMA,
+            "media_md5": digest.hexdigest(),
+            "runtime": "mai",
+            "mai": (
+                CACHE_IDENTITY if provider == "azure" else OPENROUTER_CACHE_IDENTITY
+            ),
+            "language": whisper["language"],
+            "demucs": bool(demucs),
             **sep_extra,
         }
         return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
-    if runtime_lower in ("elevenlabs", "deepgram", "assembly", "zero", "replicate_parakeet", "replicate_whisper"):
+    if runtime_lower in (
+        "mimo",
+        "elevenlabs",
+        "deepgram",
+        "assembly",
+        "zero",
+        "replicate_parakeet",
+        "replicate_whisper",
+    ):
         cloud_model = None
-        if runtime_lower == "deepgram":
+        if runtime_lower == "mimo":
+            cloud_model = str(whisper.get("mimo_model") or "mimo-v2.5-asr").strip()
+        elif runtime_lower == "deepgram":
             cloud_model = whisper.get("deepgram_model", "nova-3")
         elif runtime_lower == "assembly":
             cloud_model = f"{whisper.get('assemblyai_model', 'universal')}:{whisper.get('assemblyai_lang', whisper.get('language'))}"
         elif runtime_lower == "elevenlabs":
             cloud_model = whisper.get("model", "scribe_v1")
         extra_pkg = {}
-        if runtime_lower == "elevenlabs" and "model" in whisper:
+        if runtime_lower == "mimo" or (
+            runtime_lower == "elevenlabs" and "model" in whisper
+        ):
             packages = {}
-            for name in ("whisperx", "faster-whisper", "qwen-asr", "mlx-audio", "transformers", "demucs", "silero-vad"):
+            for name in (
+                "whisperx",
+                "faster-whisper",
+                "qwen-asr",
+                "mlx-audio",
+                "transformers",
+                "demucs",
+                "silero-vad",
+            ):
                 try:
                     packages[name] = version(name)
                 except PackageNotFoundError:
                     packages[name] = None
             extra_pkg = {"packages": packages}
+            if runtime_lower == "mimo" and whisper.get("qwen_engine"):
+                extra_pkg["qwen_engine"] = whisper.get("qwen_engine")
         identity = {
-            "schema": SCHEMA, "media_md5": digest.hexdigest(),
-            "runtime": runtime_lower, "cloud_model": cloud_model,
-            "language": whisper["language"], "demucs": bool(demucs),
+            "schema": SCHEMA,
+            "media_md5": digest.hexdigest(),
+            "runtime": runtime_lower,
+            "cloud_model": cloud_model,
+            "language": whisper["language"],
+            "demucs": bool(demucs),
             **extra_pkg,
             **sep_extra,
         }
         return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     packages = {}
-    for name in ("whisperx", "faster-whisper", "qwen-asr", "mlx-audio", "transformers", "demucs", "silero-vad"):
+    for name in (
+        "whisperx",
+        "faster-whisper",
+        "qwen-asr",
+        "mlx-audio",
+        "transformers",
+        "demucs",
+        "silero-vad",
+    ):
         try:
             packages[name] = version(name)
         except PackageNotFoundError:
@@ -84,15 +129,23 @@ def cache_key(media_file, whisper, demucs):
     # Qwen ignores whisper.model and must not collapse on the same string.
     model = whisper["model"]
     backend = whisper.get("backend")
-    if (whisper["runtime"] == "local" and str(backend).lower() == "whisperx"
-            and "turbo" in str(model).lower()):
+    if (
+        whisper["runtime"] == "local"
+        and str(backend).lower() == "whisperx"
+        and "turbo" in str(model).lower()
+    ):
         model = "large-v3"
     identity = {
-        "schema": SCHEMA, "media_md5": digest.hexdigest(), "packages": packages,
-        "runtime": whisper["runtime"], "model": model,
-        "language": whisper["language"], "demucs": bool(demucs),
+        "schema": SCHEMA,
+        "media_md5": digest.hexdigest(),
+        "packages": packages,
+        "runtime": whisper["runtime"],
+        "model": model,
+        "language": whisper["language"],
+        "demucs": bool(demucs),
         # Local backend + Qwen size/engine so WhisperX and Qwen results never collide.
-        "backend": backend, "qwen_model": whisper.get("qwen_model"),
+        "backend": backend,
+        "qwen_model": whisper.get("qwen_model"),
         "qwen_engine": whisper.get("qwen_engine"),
         **sep_extra,
     }
@@ -110,26 +163,44 @@ def valid_result(result):
             return False
         if not words and not isinstance(segment.get("text"), str):
             return False
-        if any(not isinstance(word, dict) or not isinstance(word.get("word"), str) for word in words):
+        if any(
+            not isinstance(word, dict) or not isinstance(word.get("word"), str)
+            for word in words
+        ):
             return False
         for item in [segment, *words]:
             if not isinstance(item, dict):
                 return False
             for field in ("start", "end"):
                 value = item.get(field)
-                if value is not None and (not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0):
+                if value is not None and (
+                    not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    or value < 0
+                ):
                     return False
-            if item.get("start") is not None and item.get("end") is not None and item["end"] < item["start"]:
+            if (
+                item.get("start") is not None
+                and item.get("end") is not None
+                and item["end"] < item["start"]
+            ):
                 return False
     return True
 
 
 def read_result(key, part):
     try:
-        entry = json.loads((CACHE_DIR / key / f"{part}.json").read_text(encoding="utf-8"))
-        if (entry.get("schema") == SCHEMA and entry.get("key") == key
-                and isinstance(entry.get("language"), str) and entry["language"] != "auto"
-                and entry["language"] and valid_result(entry.get("result"))):
+        entry = json.loads(
+            (CACHE_DIR / key / f"{part}.json").read_text(encoding="utf-8")
+        )
+        if (
+            entry.get("schema") == SCHEMA
+            and entry.get("key") == key
+            and isinstance(entry.get("language"), str)
+            and entry["language"] != "auto"
+            and entry["language"]
+            and valid_result(entry.get("result"))
+        ):
             return entry
     except (OSError, ValueError, TypeError, AttributeError):
         pass
@@ -137,15 +208,26 @@ def read_result(key, part):
 
 
 def write_result(key, part, result, language):
-    if not valid_result(result) or not isinstance(language, str) or not language or language == "auto":
+    if (
+        not valid_result(result)
+        or not isinstance(language, str)
+        or not language
+        or language == "auto"
+    ):
         return
     directory = CACHE_DIR / key
     temporary = None
     try:
         directory.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory, delete=False) as file:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=directory, delete=False
+        ) as file:
             temporary = Path(file.name)
-            json.dump({"schema": SCHEMA, "key": key, "language": language, "result": result}, file, allow_nan=False)
+            json.dump(
+                {"schema": SCHEMA, "key": key, "language": language, "result": result},
+                file,
+                allow_nan=False,
+            )
         os.replace(temporary, directory / f"{part}.json")
     except (OSError, TypeError, ValueError):
         # A read-only/full cache must not discard a successful transcription.

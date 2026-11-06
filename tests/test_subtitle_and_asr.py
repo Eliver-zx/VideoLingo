@@ -15,6 +15,7 @@ from core._3_2_split_meaning import find_split_positions, mechanical_split
 from core.asr_backend import (
     assembly_asr,
     deepgram_asr,
+    mimo_asr,
     replicate_asr,
     transcription_cache,
     zero_asr,
@@ -303,12 +304,102 @@ def test_cloud_asr_cache_keys_and_credential_checks(tmp_path, monkeypatch):
     k_zero = transcription_cache.cache_key(
         str(media), {"runtime": "zero", "language": "en"}, False
     )
+    k_mimo1 = transcription_cache.cache_key(
+        str(media),
+        {"runtime": "mimo", "mimo_model": "mimo-v2.5-asr", "language": "en"},
+        False,
+    )
+    k_mimo2 = transcription_cache.cache_key(
+        str(media),
+        {"runtime": "mimo", "mimo_model": "mimo-v3-asr", "language": "en"},
+        False,
+    )
     assert k_dg1 != k_dg2
     assert k_dg1 != k_zero
+    assert k_mimo1 != k_mimo2
+    assert k_mimo1 != k_dg1
 
     monkeypatch.setattr(deepgram_asr, "load_key_or", lambda k, d=None: "")
     with pytest.raises(ValueError, match="whisper.deepgram_api_key"):
         deepgram_asr.configured_credentials()
+
+    monkeypatch.setattr(mimo_asr, "load_key_or", lambda k, d=None: "")
+    with pytest.raises(ValueError, match="whisper.mimo_api_key"):
+        mimo_asr.configured_credentials()
+
+
+def test_mimo_asr_window_transcription_and_forced_alignment(monkeypatch):
+    import numpy as np
+
+    assert mimo_asr.mimo_language_option("zh") == "zh"
+    assert mimo_asr.mimo_language_option("yue") == "zh"
+    assert mimo_asr.mimo_language_option("en") == "en"
+    assert mimo_asr.mimo_language_option("ja") == "auto"
+    assert mimo_asr.mimo_language_option("auto") == "auto"
+
+    resp_payload = {
+        "id": "chatcmpl-mimo-1",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "你好，世界。",
+                },
+            }
+        ],
+    }
+    assert mimo_asr.extract_mimo_text(resp_payload) == "你好，世界。"
+    assert mimo_asr.infer_qwen_language_from_text("你好，世界。", "auto") == "Chinese"
+    assert mimo_asr.infer_qwen_language_from_text("Hello world.", "auto") == "English"
+
+    audio = np.zeros(int(2.0 * mimo_asr.SAMPLE_RATE), dtype=np.float32)
+    monkeypatch.setattr(
+        mimo_asr,
+        "configured_credentials",
+        lambda: ("mimo-secret-key", "mimo-v2.5-asr"),
+    )
+    monkeypatch.setattr(
+        mimo_asr,
+        "load_key_or",
+        lambda k, d=None: "auto" if k == "whisper.language" else d,
+    )
+    monkeypatch.setattr(mimo_asr, "update_key", lambda *a, **kw: None)
+    monkeypatch.setattr(mimo_asr.qwen, "resolve_engine", lambda *a, **kw: "mlx")
+    monkeypatch.setattr(mimo_asr.qwen, "load_audio_segment", lambda path, s, e: audio)
+    monkeypatch.setattr(
+        mimo_asr, "trim_speech_windows", lambda raw, wins: [(0, len(raw))]
+    )
+
+    called_models = []
+
+    def fake_request(clip, api_key, model, language):
+        called_models.append((api_key, model, language, len(clip)))
+        return "你好，世界。"
+
+    monkeypatch.setattr(mimo_asr, "request_mimo_transcription", fake_request)
+    monkeypatch.setattr(
+        mimo_asr.qwen,
+        "_align",
+        lambda engine, repo_id, jobs: [
+            [("你", 0.1, 0.3), ("好", 0.3, 0.5), ("世", 0.6, 0.8), ("界", 0.8, 1.0)]
+        ],
+    )
+
+    res = mimo_asr.transcribe_audio_mimo("raw.mp3", "raw.mp3", start=10.0, end=12.0)
+    assert called_models == [("mimo-secret-key", "mimo-v2.5-asr", "auto", len(audio))]
+    assert res["language"] == "zh"
+    assert len(res["segments"]) == 1
+    assert res["segments"][0]["start"] == 10.1
+    assert res["segments"][0]["end"] == 11.0
+    assert [w["word"] for w in res["segments"][0]["words"]] == [
+        "你",
+        "好，",
+        "世",
+        "界。",
+    ]
+    assert transcription_cache.valid_result(res)
 
 
 # ------------------------------------------------------------------

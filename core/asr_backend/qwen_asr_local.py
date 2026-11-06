@@ -812,6 +812,14 @@ def _torch_attn_implementation(device: str) -> str | None:
     return "sdpa"
 
 
+def _torch_quantization_config(device: str):
+    if not str(device).startswith("cuda") or not _installed("bitsandbytes"):
+        return None
+    from transformers.utils.quantization_config import BitsAndBytesConfig  # type: ignore[import-not-found]
+
+    return BitsAndBytesConfig(load_in_8bit=True)
+
+
 @contextmanager
 def asr_session(engine, repo_id):
     """Load Qwen3-ASR once and yield run(clip, qwen_language or None, max_tokens=None) -> (language, text)."""
@@ -849,7 +857,8 @@ def asr_session(engine, repo_id):
             hf_logging.set_verbosity_error()
             device, dtype = _torch_device()
             attn = _torch_attn_implementation(device)
-            load_kwargs = {
+            quant_cfg = _torch_quantization_config(device)
+            load_kwargs: dict[str, Any] = {
                 "dtype": dtype,
                 "device_map": device,
                 "max_inference_batch_size": 1,
@@ -857,8 +866,11 @@ def asr_session(engine, repo_id):
             }
             if attn:
                 load_kwargs["attn_implementation"] = attn
+            if quant_cfg is not None:
+                load_kwargs["quantization_config"] = quant_cfg
+            precision_label = f"{dtype} (8bit)" if quant_cfg is not None else str(dtype)
             log_event(
-                f"Qwen3-ASR 推理设备: {device}, 精度: {dtype}, 注意力: {attn or 'default'}",
+                f"Qwen3-ASR 推理设备: {device}, 精度: {precision_label}, 注意力: {attn or 'default'}",
                 tag="asr",
                 label="ASR",
             )
@@ -912,9 +924,12 @@ def _align(engine, repo_id, jobs):
             hf_logging.set_verbosity_error()
             device, dtype = _torch_device()
             attn = _torch_attn_implementation(device)
+            quant_cfg = _torch_quantization_config(device)
             load_kwargs = {"dtype": dtype, "device_map": device}
             if attn:
                 load_kwargs["attn_implementation"] = attn
+            if quant_cfg is not None:
+                load_kwargs["quantization_config"] = quant_cfg
             aligner = Qwen3ForcedAligner.from_pretrained(source, **load_kwargs)
 
             def _align_tf(clip, text, lang):

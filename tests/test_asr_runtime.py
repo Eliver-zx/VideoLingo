@@ -36,7 +36,7 @@ class RetiredRuntimeTests(unittest.TestCase):
             find.assert_not_called()
 
     def test_supported_runtimes_reach_media_discovery(self):
-        for runtime in ("local", "elevenlabs", "mai"):
+        for runtime in ("local", "mimo", "elevenlabs", "mai"):
 
             def load_key(key, _runtime=runtime):
                 if key == "whisper":
@@ -50,6 +50,10 @@ class RetiredRuntimeTests(unittest.TestCase):
                     asr,
                     "find_media_file",
                     side_effect=FileNotFoundError("synthetic missing input"),
+                ),
+                patch(
+                    "core.asr_backend.mimo_asr.configured_credentials",
+                    return_value=("key", "mimo-v2.5-asr"),
                 ),
                 patch(
                     "core.asr_backend.mai_asr.configured_credentials",
@@ -159,6 +163,24 @@ class RetiredRuntimeTests(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError, expected_key):
                             getattr(asr.transcribe, "__wrapped__")()
                     find.assert_not_called()
+
+    def test_missing_mimo_key_fails_before_media_preparation(self):
+        from core.utils import config_utils
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config.yaml"
+            config.write_text(
+                "whisper:\n  runtime: mimo\n  language: en\n  mimo_api_key: ''\n  mimo_model: mimo-v2.5-asr\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.object(config_utils, "CONFIG_PATH", str(config)),
+                patch.object(asr, "load_key", return_value="mimo"),
+                patch.object(asr, "find_media_file") as find,
+            ):
+                with self.assertRaisesRegex(ValueError, "whisper.mimo_api_key"):
+                    getattr(asr.transcribe, "__wrapped__")()
+            find.assert_not_called()
 
 
 class LocalBackendTests(unittest.TestCase):
@@ -284,6 +306,26 @@ class LocalBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "No speech was recognized"):
             self.run_local({}, qwen_result={"language": None, "segments": []})
         self.assertFalse(get_active_workspace().has_words())
+
+    def test_transformers_cuda_enables_8bit_quantization_when_bitsandbytes_installed(
+        self,
+    ):
+        fake_bnb_cfg = object()
+        bnb_cls = Mock(return_value=fake_bnb_cfg)
+        fake_qcfg = types.ModuleType("transformers.utils.quantization_config")
+        setattr(fake_qcfg, "BitsAndBytesConfig", bnb_cls)
+        with (
+            patch.object(qwen_asr_local, "_installed", return_value=True),
+            patch.dict(
+                sys.modules,
+                {"transformers.utils.quantization_config": fake_qcfg},
+            ),
+        ):
+            self.assertIs(
+                qwen_asr_local._torch_quantization_config("cuda:0"), fake_bnb_cfg
+            )
+            bnb_cls.assert_called_once_with(load_in_8bit=True)
+            self.assertIsNone(qwen_asr_local._torch_quantization_config("cpu"))
 
 
 if __name__ == "__main__":

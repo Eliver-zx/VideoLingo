@@ -85,6 +85,7 @@ def prepare_audio(media_file, media_type, demucs):
 
 SUPPORTED_RUNTIMES = (
     "local",
+    "mimo",
     "elevenlabs",
     "mai",
     "deepgram",
@@ -101,7 +102,7 @@ def transcribe():
     runtime = "zero" if raw_runtime == "Zero" else raw_runtime
     if runtime not in SUPPORTED_RUNTIMES:
         raise ValueError(
-            "Select local, elevenlabs, mai, deepgram, assembly, zero, replicate_parakeet or replicate_whisper "
+            "Select local, mimo, elevenlabs, mai, deepgram, assembly, zero, replicate_parakeet or replicate_whisper "
             "for whisper.runtime. The 302.ai WhisperX cloud service has been retired."
         )
     if runtime == "local" and local_backend(load_key("whisper")) == "whisperx":
@@ -109,7 +110,11 @@ def transcribe():
 
         if find_spec("whisperx") is None:
             raise RuntimeError(WHISPERX_NOT_INSTALLED)
-    if runtime == "mai":
+    if runtime == "mimo":
+        from core.asr_backend.mimo_asr import configured_credentials
+
+        configured_credentials()
+    elif runtime == "mai":
         from core.asr_backend.mai_asr import configured_credentials
 
         configured_credentials()
@@ -149,6 +154,16 @@ def transcribe():
             whisper["qwen_engine"] = qwen_asr_local.resolve_engine(
                 whisper.get("qwen_engine")
             )
+    elif runtime == "mimo":
+        from core.asr_backend import qwen_asr_local
+        from core.asr_backend.mimo_asr import DEFAULT_MIMO_MODEL
+
+        whisper["mimo_model"] = str(
+            whisper.get("mimo_model") or DEFAULT_MIMO_MODEL
+        ).strip()
+        whisper["qwen_engine"] = qwen_asr_local.resolve_engine(
+            whisper.get("qwen_engine")
+        )
     report_progress(
         0.01,
         "校验媒体指纹…",
@@ -206,6 +221,14 @@ def transcribe():
         from core.asr_backend.whisperX_local import transcribe_audio as ts
 
         log_event("启动本地 WhisperX 语音识别", tag="asr", label="ASR")
+    elif runtime == "mimo":
+        from core.asr_backend.mimo_asr import transcribe_audio_mimo as ts
+
+        log_event(
+            f"启动小米 MiMo ({whisper['mimo_model']}) + ForcedAligner 语音识别",
+            tag="asr",
+            label="ASR",
+        )
     elif runtime == "elevenlabs":
         from core.asr_backend.elevenlabs_asr import transcribe_audio_elevenlabs as ts
 
