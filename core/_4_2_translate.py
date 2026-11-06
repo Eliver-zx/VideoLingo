@@ -404,11 +404,10 @@ def translate_all():
             if word_records
             else pd.DataFrame(columns=["text", "start", "end"])
         )
-        subtitle_output_configs = [("trans_subs_for_audio.srt", ["Translation"])]
         df_time = align_timestamp(
             df_text,
             df_translate,
-            subtitle_output_configs,
+            [],
             output_dir=None,
             for_display=False,
         )

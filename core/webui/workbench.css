@@ -1051,7 +1051,7 @@
     }
 
     .data-grid tbody tr:has(.cell-input) td {
-      padding-block: 6px;
+      padding-block: 4px;
     }
 
     .data-grid td:has(> .cell-input) {
@@ -1059,14 +1059,91 @@
     }
 
     .data-grid td {
-      padding: 10px 12px;
+      padding: 9px 14px;
       vertical-align: middle;
       font-size: var(--fs-sm);
-      line-height: 1.55;
+      line-height: 1.6;
     }
 
     #subtitle-detail-pane .data-grid td {
       vertical-align: top;
+      padding: 10px 16px;
+    }
+
+    .sub-bilingual-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-inline-size: 0;
+    }
+
+    .sub-line-tgt {
+      color: var(--text-primary);
+      font-weight: 500;
+      font-size: var(--fs-base);
+      line-height: 1.5;
+    }
+
+    .sub-line-src {
+      color: var(--text-muted);
+      font-size: var(--fs-xs);
+      line-height: 1.45;
+    }
+
+    .sub-split-badge {
+      display: inline-block;
+      margin-block-start: 4px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: var(--bg-subtle);
+      color: var(--text-secondary);
+      font-family: var(--font-sans);
+      font-size: 10.5px;
+      font-weight: 500;
+    }
+
+    .sub-cue-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .sub-cue-item {
+      display: grid;
+      grid-template-columns: 20px 1fr;
+      gap: 8px;
+      align-items: baseline;
+      padding-block-end: 7px;
+      border-block-end: 1px dashed var(--border);
+    }
+
+    .sub-cue-item:last-child {
+      padding-block-end: 0;
+      border-block-end: 0;
+    }
+
+    .sub-cue-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      inline-size: 18px;
+      block-size: 18px;
+      border-radius: 5px;
+      background: var(--brand-soft);
+      color: var(--brand-bright);
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      font-weight: 600;
+    }
+
+    @media (max-width: 1440px) {
+      :root {
+        --w-rail: 196px;
+      }
+
+      .timeline-split {
+        grid-template-columns: 184px 1fr;
+      }
     }
 
     .sub-idx {

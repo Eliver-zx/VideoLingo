@@ -353,14 +353,6 @@ class TaskWorkspace:
         return self.root / "trans.srt"
 
     @property
-    def bi_srt_path(self) -> Path:
-        return self.root / "bi.srt"
-
-    @property
-    def bi_ass_path(self) -> Path:
-        return self.root / "bi.ass"
-
-    @property
     def dub_srt_path(self) -> Path:
         return self.root / "dub.srt"
 
@@ -1421,7 +1413,7 @@ class TaskWorkspace:
                 return False
             dub_mtime = self.get_kv_mtime("dub_tasks_saved")
             for srt_p in (
-                self.audio_dir / "trans_subs_for_audio.srt",
+                self.src_srt_path,
                 self.trans_srt_path,
             ):
                 if (
@@ -1521,8 +1513,8 @@ class TaskWorkspace:
                 [
                     self.src_srt_path,
                     self.trans_srt_path,
-                    self.bi_srt_path,
-                    self.bi_ass_path,
+                    self.root / "src_trans.srt",
+                    self.root / "trans_src.srt",
                     self.root / ".subtitle_done",
                 ]
             )

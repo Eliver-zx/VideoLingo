@@ -161,35 +161,32 @@
           <aside class="batch-sidebar">
             <div class="subpane-bar">
               <span class="subpane-title">执行步骤</span>
-              <span class="field-key" id="batch-count-badge">01–04</span>
+              <span class="field-key" id="batch-count-badge">01–05</span>
             </div>
             <div class="batch-tree" id="batch-tree-list"></div>
           </aside>
 
-          <!-- 右侧详情槽 A: 高密度双语字幕与拆行检查器 -->
+          <!-- 右侧详情槽 A: 双语字幕只读结果表 -->
           <div class="subtitle-stage" id="subtitle-detail-pane">
             <div class="subpane-bar">
               <div class="row" style="gap:8px;">
-                <span class="subpane-title" id="active-batch-heading">全部字幕 (0 句)</span>
+                <span class="subpane-title" id="active-batch-heading">成品字幕 (0 轴)</span>
                 <span class="field-key" id="active-batch-tag"></span>
               </div>
 
               <div class="row" style="gap:8px;">
                 <input id="subtitle-stream-search" type="text" placeholder="搜索字幕或术语…" style="inline-size:210px;">
-                <span class="field-hint mono" id="stream-row-counter">共 0 句</span>
-                <button type="button" class="xs" id="btn-save-utterances" title="将当前修改的原文、译文与配音台词写入任务数据库并同步更新 SRT/ASS">保存字幕</button>
-                <button type="button" class="primary xs" id="btn-save-utterances-and-continue" title="保存字幕并在待校暂停时继续切行与压制">保存并继续 →</button>
+                <span class="field-hint mono" id="stream-row-counter">共 0 轴</span>
+                <button type="button" class="primary xs hidden" id="btn-save-utterances-and-continue" title="确认字幕并继续后续流程">继续任务 →</button>
               </div>
             </div>
 
             <div class="table-scroll">
               <table class="data-grid" aria-label="双语字幕列表">
-                <thead>
+                <thead id="structured-stream-thead">
                   <tr>
-                    <th style="width:52px;">#</th>
-                    <th style="width:152px;">时间轴</th>
-                    <th>原文</th>
-                    <th>译文 / 配音台词</th>
+                    <th style="width:56px;">#</th>
+                    <th>双语字幕（上译文 / 下原文）</th>
                   </tr>
                 </thead>
                 <tbody id="structured-stream-tbody"></tbody>
@@ -220,14 +217,7 @@
                 <span class="field-label">
                   <span>内容摘要</span>
                 </span>
-                <input id="terms-theme-input" type="text" value="" placeholder="提取术语后自动生成内容摘要，也可手动补充背景说明…">
-              </label>
-              <label class="field">
-                <span class="field-label"><span>领域词表</span></span>
-                <select id="detail-domain-select">
-                  <option value="">不挂载</option>
-                  <option value="destiny2" selected>destiny2</option>
-                </select>
+                <textarea id="terms-theme-input" rows="2" placeholder="提取术语后自动生成内容摘要，也可手动补充背景说明…"></textarea>
               </label>
             </div>
 
@@ -235,11 +225,11 @@
               <table class="data-grid" aria-label="任务专业术语审校表">
                 <thead>
                   <tr>
-                    <th style="width:17%;">原文</th>
-                    <th style="width:14%;">译名</th>
-                    <th style="width:35%;">术语别名</th>
-                    <th style="width:19%;">备注</th>
-                    <th style="width:15%;">操作</th>
+                    <th style="width:18%;">原文</th>
+                    <th style="width:16%;">译名</th>
+                    <th style="width:34%;">术语别名</th>
+                    <th style="width:22%;">备注</th>
+                    <th style="width:108px; text-align:right;">操作</th>
                   </tr>
                 </thead>
                 <tbody id="task-terms-tbody"></tbody>

@@ -10,8 +10,6 @@ from core._1_ytdlp import find_media_file, find_video_files as _ytdlp_find_video
 from core.utils import check_cancel, load_key, log_event, report_progress
 from core.utils.models import _BACKGROUND_AUDIO_FILE, _DUB_WAV_FILE, resolve_task_path
 from core.utils.subtitle_style import (
-    build_ass_from_srt_pair,
-    escape_ffmpeg_filter_path,
     get_burn_mode,
     get_optimal_video_encoder_args,
     get_subtitle_filters as _default_get_subtitle_filters,
@@ -161,24 +159,7 @@ def merge_video_audio():
         if TARGET_WIDTH <= 0 or TARGET_HEIGHT <= 0:
             TARGET_WIDTH, TARGET_HEIGHT = 1920, 1080
 
-        if (
-            get_subtitle_filters is not _default_get_subtitle_filters
-            or not os.path.isfile(dub_sub_file)
-        ):
-            subtitle_filter = get_subtitle_filters(
-                "dubbed", dub_src_sub_file, dub_sub_file
-            )
-        else:
-            dub_ass_path = resolve_task_path("output/dub_bi.ass")
-            build_ass_from_srt_pair(
-                dub_src_sub_file,
-                dub_sub_file,
-                dub_ass_path,
-                mode=get_burn_mode("dubbed"),
-                display_width=TARGET_WIDTH,
-                display_height=TARGET_HEIGHT,
-            )
-            subtitle_filter = f"ass='{escape_ffmpeg_filter_path(dub_ass_path)}'"
+        subtitle_filter = get_subtitle_filters("dubbed", dub_src_sub_file, dub_sub_file)
         hw_input_args, subtitle_filter = wrap_gpu_subtitle_filter(
             subtitle_filter, use_gpu, video_meta=meta
         )

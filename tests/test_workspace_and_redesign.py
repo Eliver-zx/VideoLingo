@@ -23,7 +23,6 @@ from core import (
 )
 from core.tts_backend import tts_main as tts_main_mod
 from core.utils import config_utils
-from core.utils.subtitle_style import build_ass_from_srt_pair
 from core.workspace import (
     TaskWorkspace,
     json_content_fingerprint,
@@ -264,12 +263,12 @@ def test_proportional_subtitle_split_reruns_on_max_length_increase(
         assert len(saved_utts_wide[0]["sub_cues"]) == 1
 
 
-def test_single_pass_bi_ass_scales_portrait_9_16_coordinates(tmp_path: Path):
-    """build_ass_from_srt_pair scales font size by min(W, H) / 288.0 so 9:16 portrait videos do not blow up fonts."""
+def test_subtitle_style_filters_use_src_and_trans_srt_only(tmp_path: Path):
+    """get_subtitle_filters references src.srt and trans.srt directly without intermediate bi.ass files."""
+    from core.utils.subtitle_style import get_subtitle_filters
+
     src_srt = tmp_path / "src.srt"
     trans_srt = tmp_path / "trans.srt"
-    ass_out = tmp_path / "bi.ass"
-
     src_srt.write_text(
         "1\n00:00:00,000 --> 00:00:02,000\nHello vertical world\n\n", encoding="utf-8"
     )
@@ -277,20 +276,13 @@ def test_single_pass_bi_ass_scales_portrait_9_16_coordinates(tmp_path: Path):
         "1\n00:00:00,000 --> 00:00:02,000\n你好竖屏世界\n\n", encoding="utf-8"
     )
 
-    build_ass_from_srt_pair(
-        source_srt=src_srt,
-        translation_srt=trans_srt,
-        ass_path=ass_out,
-        display_width=1080,
-        display_height=1920,
-    )
-    ass_text = ass_out.read_text(encoding="utf-8")
-    assert "PlayResX: 1080" in ass_text
-    assert "PlayResY: 1920" in ass_text
-    assert "Style: Translation," in ass_text
-    assert "Style: Source," in ass_text
-    assert "Dialogue: 1,0:00:00.00,0:00:02.00,Translation" in ass_text
-    assert "Dialogue: 0,0:00:00.00,0:00:02.00,Source" in ass_text
+    with config_utils.task_config_context(
+        {"subtitle": {"sub_video_subtitles": "bilingual"}}
+    ):
+        filters = get_subtitle_filters("subtitle", str(src_srt), str(trans_srt))
+    assert "src.srt" in filters
+    assert "trans.srt" in filters
+    assert "bi.ass" not in filters
 
 
 def test_single_char_tts_and_edge_silence_trimming(tmp_path: Path, monkeypatch):
@@ -476,7 +468,6 @@ def test_fastapi_webui_tasks_terms_and_utterances_endpoints(
         'id="btn-save-terms-only"',
         'id="btn-save-terms-and-continue"',
         'id="terms-theme-input"',
-        'id="detail-domain-select"',
         'id="task-terms-tbody"',
         # Bottom Dockable Terminal Console
         'id="console-dock"',
@@ -794,15 +785,16 @@ def test_multi_task_isolation_fix_source_and_inline_tts_text_flow(
         assert pipeline.review_translation() is None
         _5_split_sub.split_for_sub_main()
         _6_gen_sub.align_timestamp_main()
-        # Display trans.srt has tgt ("我们使用PyTorch 2.0"), while trans_subs_for_audio.srt has tts_text!
+        # Only src.srt and trans.srt are generated; bi.srt, bi.ass, and *_subs_for_audio.srt are not generated
         assert "我们使用PyTorch 2.0" in (ws_a.root / "trans.srt").read_text(
             encoding="utf-8"
         )
-        assert "我们使用派托奇二点零，非常快。" in (
-            ws_a.audio_dir / "trans_subs_for_audio.srt"
-        ).read_text(encoding="utf-8")
+        assert not (ws_a.root / "bi.srt").exists()
+        assert not (ws_a.root / "bi.ass").exists()
+        assert not (ws_a.audio_dir / "trans_subs_for_audio.srt").exists()
+        assert not (ws_a.audio_dir / "src_subs_for_audio.srt").exists()
 
-        # Step 8.1 and 8.2 in task_a must read task_a's files and preserve spoken tts_text without touching task_b
+        # Step 8.1 and 8.2 in task_a read directly from task_a's src.srt and trans.srt without touching task_b
         sr = 16000
         with wave.open(str(ws_a.audio_dir / "raw.mp3"), "wb") as wf:
             wf.setnchannels(1)
@@ -812,7 +804,7 @@ def test_multi_task_isolation_fix_source_and_inline_tts_text_flow(
         _8_1_audio_task.gen_audio_task_main()
         _8_2_dub_chunks.gen_dub_chunks()
         df_tasks_a = ws_a.load_dub_tasks_df()
-        assert "我们使用派托奇二点零，非常快。" in str(df_tasks_a.loc[0, "lines"])
+        assert "我们使用PyTorch 2.0" in str(df_tasks_a.loc[0, "lines"])
         assert not ws_b.has_dub_tasks()
 
     # Global glossary GET/PUT, nested audio/dub.wav file download, and DELETE task_b
@@ -1919,7 +1911,7 @@ def test_stage_04_utterance_editor_sqlite_persistence_and_webui_controls(
     client = TestClient(api.app)
     html_res = client.get("/")
     assert html_res.status_code == 200
-    assert 'id="btn-save-utterances"' in html_res.text
+    assert 'id="btn-save-utterances"' not in html_res.text
     assert 'id="btn-save-utterances-and-continue"' in html_res.text
 
     put_res = client.put(
@@ -1960,9 +1952,7 @@ def test_stage_04_utterance_editor_sqlite_persistence_and_webui_controls(
     assert loaded[0]["tts_text"] == "大家注意，这是配音专享词。"
     assert loaded[0]["sub_cues"][0]["tgt"] == "你好，修订后的世界。"
     assert "修订后的世界" in ws.trans_srt_path.read_text(encoding="utf-8")
-    assert "这是配音专享词" in (ws.audio_dir / "trans_subs_for_audio.srt").read_text(
-        encoding="utf-8"
-    )
+    assert not (ws.audio_dir / "trans_subs_for_audio.srt").exists()
     assert ws.db_path.is_file()
 
 
@@ -2089,62 +2079,31 @@ def test_concurrent_workspace_isolation_runtime_state_and_sqlite_llm_cache(
         mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
     assert str(mode).lower() == "wal"
 
-    # Verify structured Step 8.1 and 8.2 run directly from project.sqlite without disk SRT files,
-    # including multi-cue utterances with custom tts_text != tgt and empty/parenthetical utterances
-    ws_a.save_utterances(
-        [
-            {
-                "id": 0,
-                "word_span": [0, 1],
-                "start": 0.0,
-                "end": 2.0,
-                "gap_after": 0.0,
-                "src_raw": "こんにちは",
-                "src": "こんにちは。",
-                "direct": "你好。",
-                "tgt": "第一行字幕 / 第二行字幕",
-                "tts_text": "你好，配音专享。",
-                "sub_cues": [
-                    {
-                        "start": 0.0,
-                        "end": 1.0,
-                        "src": "こんにちは",
-                        "tgt": "第一行字幕",
-                    },
-                    {
-                        "start": 1.0,
-                        "end": 2.0,
-                        "src": "世界",
-                        "tgt": "第二行字幕",
-                    },
-                ],
-            },
-            {
-                "id": 1,
-                "word_span": [1, 2],
-                "start": 2.0,
-                "end": 3.0,
-                "gap_after": 0.0,
-                "src_raw": "(笑)",
-                "src": "(笑)",
-                "direct": "（笑声）",
-                "tgt": "（笑声）",
-                "tts_text": "（笑声）",
-                "sub_cues": [],
-            },
-        ]
+    # Verify Step 8.1 and 8.2 read directly from src.srt and trans.srt as single source of truth
+    ws_a.src_srt_path.write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\nこんにちは\n\n"
+        "2\n00:00:01,000 --> 00:00:02,000\n世界\n\n"
+        "3\n00:00:02,000 --> 00:00:03,000\n(笑)\n\n",
+        encoding="utf-8",
+    )
+    ws_a.trans_srt_path.write_text(
+        "1\n00:00:00,000 --> 00:00:01,000\n第一行字幕\n\n"
+        "2\n00:00:01,000 --> 00:00:02,000\n第二行字幕\n\n"
+        "3\n00:00:02,000 --> 00:00:03,000\n（笑声）\n\n",
+        encoding="utf-8",
     )
     assert not (ws_a.audio_dir / "trans_subs_for_audio.srt").exists()
     with workspace_context(ws_a):
         df_tasks = _8_1_audio_task.process_srt()
         assert len(df_tasks) == 1
-        assert df_tasks.iloc[0]["text"] == "你好，配音专享。"
+        assert df_tasks.iloc[0]["text"] == "第一行字幕 第二行字幕"
+        assert df_tasks.iloc[0]["origin"] == "こんにちは 世界"
         ws_a.save_dub_tasks(df_tasks.to_dict(orient="records"))
         _8_2_dub_chunks.gen_dub_chunks()
     dub_tasks = ws_a.load_dub_tasks()
     assert len(dub_tasks) == 1
-    assert dub_tasks[0]["lines"] == ["你好，配音专享。"]
-    assert dub_tasks[0]["src_lines"] == ["こんにちは。"]
+    assert dub_tasks[0]["lines"] == ["第一行字幕", "第二行字幕"]
+    assert dub_tasks[0]["src_lines"] == ["こんにちは", "世界"]
 
     # Verify invalidate_from_stage("asr") and clear_runtime_cache evict cached runtime state
     import shutil

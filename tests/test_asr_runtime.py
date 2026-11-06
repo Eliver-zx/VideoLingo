@@ -327,6 +327,14 @@ class LocalBackendTests(unittest.TestCase):
             bnb_cls.assert_called_once_with(load_in_8bit=True)
             self.assertIsNone(qwen_asr_local._torch_quantization_config("cpu"))
 
+    def test_split_audio_defaults_to_50_minutes(self):
+        import inspect
+        from core.asr_backend.audio_preprocess import split_audio
+
+        sig = inspect.signature(split_audio)
+        self.assertEqual(sig.parameters["target_len"].default, 50 * 60)
+        self.assertEqual(sig.parameters["win"].default, 60)
+
 
 if __name__ == "__main__":
     unittest.main()

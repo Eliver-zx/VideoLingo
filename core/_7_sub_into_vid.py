@@ -6,11 +6,8 @@ import cv2
 
 from core._1_ytdlp import find_media_file, find_video_files as _default_find_video_files
 from core.utils import load_key, log_event, report_progress
-from core.utils.models import _6_BI_ASS, resolve_task_path
+from core.utils.models import resolve_task_path
 from core.utils.subtitle_style import (
-    build_ass_from_srt_pair,
-    escape_ffmpeg_filter_path,
-    get_burn_mode,
     get_optimal_video_encoder_args,
     get_subtitle_filters as _default_get_subtitle_filters,
     wrap_gpu_subtitle_filter,
@@ -108,19 +105,7 @@ def merge_subtitles_to_video():
     if TARGET_WIDTH <= 0 or TARGET_HEIGHT <= 0:
         TARGET_WIDTH, TARGET_HEIGHT = 1920, 1080
 
-    if get_subtitle_filters is not _default_get_subtitle_filters:
-        vf_filter = get_subtitle_filters("subtitle", src_srt, trans_srt)
-    else:
-        ass_path = resolve_task_path(_6_BI_ASS)
-        build_ass_from_srt_pair(
-            src_srt,
-            trans_srt,
-            ass_path,
-            mode=get_burn_mode("subtitle"),
-            display_width=TARGET_WIDTH,
-            display_height=TARGET_HEIGHT,
-        )
-        vf_filter = f"ass='{escape_ffmpeg_filter_path(ass_path)}'"
+    vf_filter = get_subtitle_filters("subtitle", src_srt, trans_srt)
     ffmpeg_gpu = bool(load_key("ffmpeg_gpu"))
     hw_input_args, vf_filter = wrap_gpu_subtitle_filter(
         vf_filter, ffmpeg_gpu, video_meta=meta

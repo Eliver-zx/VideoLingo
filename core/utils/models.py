@@ -18,9 +18,6 @@ _RAW_AUDIO_FILE = "output/audio/raw.mp3"
 _VOCAL_AUDIO_FILE = "output/audio/vocal.mp3"
 _BACKGROUND_AUDIO_FILE = "output/audio/background.mp3"
 _DUB_WAV_FILE = "output/audio/dub.wav"
-_BI_SRT = "output/bi.srt"
-_BI_ASS = "output/bi.ass"
-_6_BI_ASS = _BI_ASS
 _AUDIO_REFERS_DIR = "output/audio/refers"
 _AUDIO_SEGS_DIR = "output/audio/segs"
 _AUDIO_TMP_DIR = "output/audio/tmp"
@@ -167,9 +164,6 @@ __all__ = [
     "_VOCAL_AUDIO_FILE",
     "_BACKGROUND_AUDIO_FILE",
     "_DUB_WAV_FILE",
-    "_BI_SRT",
-    "_BI_ASS",
-    "_6_BI_ASS",
     "_AUDIO_REFERS_DIR",
     "_AUDIO_SEGS_DIR",
     "_AUDIO_TMP_DIR",

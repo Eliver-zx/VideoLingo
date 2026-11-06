@@ -3,11 +3,9 @@ import re
 import pandas as pd
 from core.utils import get_joiner, load_key, load_key_or, log_event, report_progress  # noqa: F401
 from core.utils.models import (
-    _AUDIO_DIR,
     _OUTPUT_DIR,
     resolve_task_path,
 )
-from core.utils.subtitle_style import build_ass_from_srt_pair, get_burn_mode
 from core.workspace import get_active_workspace
 
 SUBTITLE_OUTPUT_CONFIGS = [
@@ -15,12 +13,6 @@ SUBTITLE_OUTPUT_CONFIGS = [
     ("trans.srt", ["Translation"]),
     ("src_trans.srt", ["Source", "Translation"]),
     ("trans_src.srt", ["Translation", "Source"]),
-    ("bi.srt", ["Translation", "Source"]),
-]
-
-AUDIO_SUBTITLE_OUTPUT_CONFIGS = [
-    ("src_subs_for_audio.srt", ["Source"]),
-    ("trans_subs_for_audio.srt", ["Translation"]),
 ]
 
 
@@ -447,7 +439,6 @@ def clean_translation(x):
 
 def align_timestamp_main():
     out_dir = resolve_task_path(_OUTPUT_DIR)
-    audio_dir = resolve_task_path(_AUDIO_DIR)
     ws = get_active_workspace()
 
     words = ws.load_words()
@@ -483,49 +474,16 @@ def align_timestamp_main():
         df_text, df_translate, SUBTITLE_OUTPUT_CONFIGS, out_dir, for_display=True
     )
 
-    manifest_media = (
-        (ws.load_manifest().get("media") or {}) if ws.manifest_path.is_file() else {}
-    )
-    disp_w = int(manifest_media.get("display_width") or 1920)
-    disp_h = int(manifest_media.get("display_height") or 1080)
-    build_ass_from_srt_pair(
-        os.path.join(out_dir, "src.srt"),
-        os.path.join(out_dir, "trans.srt"),
-        os.path.join(out_dir, "bi.ass"),
-        mode=get_burn_mode("subtitle"),
-        display_width=disp_w,
-        display_height=disp_h,
-    )
     ws.notify_artifact_update(
         "subtitles",
-        message=f"已生成双语 SRT/ASS 字幕文件 ({len(df_translate)} 条)",
+        message=f"已生成双语 SRT 字幕文件 ({len(df_translate)} 条)",
         tag="llm",
         label="SUBS",
-    )
-
-    # for audio: keep full punctuation (for_display=False) so TTS preserves natural prosody pauses
-    df_translate_for_audio = pd.DataFrame(
-        [
-            {
-                "Source": str(u.get("src") or "").strip(),
-                "Translation": str(u.get("tts_text") or u.get("tgt") or "").strip(),
-            }
-            for u in utts
-        ],
-        columns=["Source", "Translation"],
-    )
-
-    align_timestamp(
-        df_text,
-        df_translate_for_audio,
-        AUDIO_SUBTITLE_OUTPUT_CONFIGS,
-        audio_dir,
-        for_display=False,
     )
     report_progress(
         1.0,
         f"已生成 {len(df_translate)} 条双语字幕",
-        f"双语字幕与配音对齐字幕已写入 ({out_dir})",
+        f"双语字幕已写入 ({out_dir})",
         tag="llm",
         label="SUBS",
     )

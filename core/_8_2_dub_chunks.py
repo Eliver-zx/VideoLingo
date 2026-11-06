@@ -1,7 +1,5 @@
 import datetime
-import os
 import re
-import pandas as pd
 from core._8_1_audio_task import time_diff_seconds
 from core.asr_backend.audio_preprocess import get_audio_duration
 from core.tts_backend.estimate_duration import init_estimator, estimate_duration
@@ -190,48 +188,28 @@ def gen_dub_chunks():
 
     df = process_cutoffs(df)
 
-    utt_list = ws.load_utterances() if TRANS_SRT == "output/trans.srt" else []
-    utterance_cues_by_id = {}
-    utterance_by_id = {}
-    if isinstance(utt_list, list) and utt_list:
-        for pos, u in enumerate(utt_list, 1):
-            if not isinstance(u, dict):
-                continue
-            utterance_by_id[pos] = u
-            cues = u.get("sub_cues")
-            if isinstance(cues, list) and cues:
-                utterance_cues_by_id[pos] = cues
-            else:
-                utterance_cues_by_id[pos] = [
-                    {
-                        "src": str(u.get("src") or ""),
-                        "tgt": str(u.get("tts_text") or u.get("tgt") or ""),
-                    }
-                ]
-
     content_lines = []
     ori_content_lines = []
     trans_srt_path = resolve_task_path(TRANS_SRT)
     src_srt_path = resolve_task_path(SRC_SRT)
-    if os.path.isfile(trans_srt_path) and os.path.isfile(src_srt_path):
-        with open(trans_srt_path, "r", encoding="utf-8") as f_trans:
-            content = f_trans.read()
-        with open(src_srt_path, "r", encoding="utf-8") as f_src:
-            ori_content = f_src.read()
+    with open(trans_srt_path, "r", encoding="utf-8") as f_trans:
+        content = f_trans.read()
+    with open(src_srt_path, "r", encoding="utf-8") as f_src:
+        ori_content = f_src.read()
 
-        for block in content.strip().split("\n\n"):
-            lines = [line.strip() for line in block.split("\n") if line.strip()]
-            if len(lines) >= 3:
-                text = " ".join(lines[2:])
-                text = clean_line(text)
-                content_lines.append(text)
+    for block in content.strip().split("\n\n"):
+        lines = [line.strip() for line in block.split("\n") if line.strip()]
+        if len(lines) >= 3:
+            text = " ".join(lines[2:])
+            text = clean_line(text)
+            content_lines.append(text)
 
-        for block in ori_content.strip().split("\n\n"):
-            lines = [line.strip() for line in block.split("\n") if line.strip()]
-            if len(lines) >= 3:
-                text = " ".join(lines[2:])
-                text = clean_line(text)
-                ori_content_lines.append(text)
+    for block in ori_content.strip().split("\n\n"):
+        lines = [line.strip() for line in block.split("\n") if line.strip()]
+        if len(lines) >= 3:
+            text = " ".join(lines[2:])
+            text = clean_line(text)
+            ori_content_lines.append(text)
 
     # Match processing
     df["lines"] = None
@@ -256,6 +234,8 @@ def gen_dub_chunks():
         for i in range(last_idx, len(content_lines)):
             line = content_lines[i]
             cleaned_line = clean_text(line)
+            if not cleaned_line:
+                continue
             current += cleaned_line
             matches.append(line)  # 存储原始文本
             match_indices.append(i)
@@ -269,79 +249,13 @@ def gen_dub_chunks():
                 last_idx = i + 1
                 break
         else:
-            # Fallback to direct Utterance ID mapping from utterances when available
-            raw_num = row.get("number")
-            row_num = (
-                int(raw_num)
-                if raw_num is not None and not pd.isna(raw_num)
-                else (pos_idx + 1)
+            log_event(
+                f"第 {pos_idx + 1} 条配音分块字幕匹配失败: target='{target[:40]}'",
+                tag="warn",
+                label="TTS",
+                level="error",
             )
-            next_raw = (
-                df.iloc[pos_idx + 1].get("number") if pos_idx + 1 < len(df) else None
-            )
-            next_num = (
-                int(next_raw)
-                if next_raw is not None and not pd.isna(next_raw)
-                else (row_num + 1)
-            )
-            cues = []
-            span_uids = [
-                uid
-                for uid in range(row_num, max(row_num + 1, next_num))
-                if uid in utterance_cues_by_id
-            ]
-            for uid in span_uids:
-                cues.extend(utterance_cues_by_id[uid])
-            if cues:
-                spoken_single = clean_line(str(row.get("text", "")))
-                has_custom_tts = any(
-                    str(utterance_by_id[uid].get("tts_text") or "").strip()
-                    and str(utterance_by_id[uid].get("tts_text") or "").strip()
-                    != str(utterance_by_id[uid].get("tgt") or "").strip()
-                    for uid in span_uids
-                    if uid in utterance_by_id
-                )
-                if len(cues) == 1 and spoken_single:
-                    df.at[pos_idx, "lines"] = [spoken_single]
-                elif has_custom_tts:
-                    custom_lines = [
-                        clean_line(
-                            str(
-                                utterance_by_id[uid].get("tts_text")
-                                or utterance_by_id[uid].get("tgt")
-                                or ""
-                            )
-                        )
-                        for uid in span_uids
-                        if uid in utterance_by_id
-                    ]
-                    df.at[pos_idx, "lines"] = [ln for ln in custom_lines if ln] or [
-                        spoken_single
-                    ]
-                else:
-                    df.at[pos_idx, "lines"] = [
-                        clean_line(str(c.get("tgt", c.get("trans", c.get("text", "")))))
-                        for c in cues
-                    ]
-                if len(df.at[pos_idx, "lines"]) != len(cues) and span_uids:
-                    df.at[pos_idx, "src_lines"] = [
-                        clean_line(str(utterance_by_id[uid].get("src", "")))
-                        for uid in span_uids
-                        if uid in utterance_by_id
-                    ]
-                else:
-                    df.at[pos_idx, "src_lines"] = [
-                        clean_line(str(c.get("src", ""))) for c in cues
-                    ]
-                last_idx = min(len(content_lines), last_idx + len(cues))
-            else:
-                log_event(
-                    f"第 {pos_idx + 1} 条配音分块字幕匹配失败: target='{target[:40]}'",
-                    tag="warn",
-                    label="TTS",
-                    level="error",
-                )
-                raise ValueError("Matching failed")
+            raise ValueError("Matching failed")
 
     ws.save_dub_tasks(df)
     report_progress(

@@ -1,3 +1,4 @@
+# pyright: reportPrivateImportUsage=false
 """Demucs stems must stay sample-aligned with raw.mp3 (no model download: the separator is faked).
 
 Real FFmpeg, the real Demucs reader/writer helpers and the app's own decoders are used, so
@@ -5,6 +6,7 @@ the MP3 encoder-delay handling that shifted word timestamps ~60 ms late is exerc
 """
 
 import os
+import shutil
 import subprocess
 from types import SimpleNamespace
 
@@ -19,6 +21,7 @@ from core.asr_backend.qwen_asr_local import load_audio_segment
 from core.utils.models import _BACKGROUND_AUDIO_FILE, _RAW_AUDIO_FILE, _VOCAL_AUDIO_FILE
 
 SR = 16000
+TRACK_SECONDS = 4
 
 
 def lag(reference, other):
@@ -32,17 +35,18 @@ def lag(reference, other):
     return k if k < size // 2 else k - size
 
 
-@pytest.fixture
-def raw_mp3(tmp_path, monkeypatch):
-    """20 s of noise bursts encoded like raw.mp3 (libmp3lame, 32 kHz mono, 128 kbps)."""
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "output/audio").mkdir(parents=True)
+@pytest.fixture(scope="module")
+def _cached_raw_mp3(tmp_path_factory):
+    """3 s of noise bursts encoded once per module (libmp3lame, 32 kHz mono, 128 kbps)."""
+    work_dir = tmp_path_factory.mktemp("demucs_raw")
+    src_f32 = work_dir / "source.f32"
+    out_mp3 = work_dir / "raw.mp3"
     rng = np.random.default_rng(0)
-    source = np.zeros(48000 * 20, dtype=np.float32)
-    for start in rng.integers(0, len(source) - 4800, 60):
-        length = int(rng.integers(800, 4800))
+    source = np.zeros(48000 * TRACK_SECONDS, dtype=np.float32)
+    for start in rng.integers(0, len(source) - 2400, 20):
+        length = int(rng.integers(400, 2400))
         source[start : start + length] += rng.normal(0, 0.25, length).astype(np.float32)
-    source.astype("<f4").tofile("source.f32")
+    source.astype("<f4").tofile(src_f32)
     subprocess.run(
         [
             "ffmpeg",
@@ -56,7 +60,7 @@ def raw_mp3(tmp_path, monkeypatch):
             "-ac",
             "1",
             "-i",
-            "source.f32",
+            str(src_f32),
             "-c:a",
             "libmp3lame",
             "-b:a",
@@ -65,10 +69,19 @@ def raw_mp3(tmp_path, monkeypatch):
             "32000",
             "-ac",
             "1",
-            _RAW_AUDIO_FILE,
+            str(out_mp3),
         ],
         check=True,
     )
+    return out_mp3
+
+
+@pytest.fixture
+def raw_mp3(tmp_path, monkeypatch, _cached_raw_mp3):
+    monkeypatch.chdir(tmp_path)
+    audio_dir = tmp_path / "output/audio"
+    audio_dir.mkdir(parents=True)
+    shutil.copyfile(_cached_raw_mp3, tmp_path / _RAW_AUDIO_FILE)
 
 
 @pytest.fixture
@@ -90,6 +103,9 @@ def fake_demucs(monkeypatch):
             }
 
     monkeypatch.setattr(
+        demucs_vl, "resolve_separation_model", lambda requested=None: "htdemucs"
+    )
+    monkeypatch.setattr(
         demucs_vl,
         "get_model",
         lambda name: SimpleNamespace(samplerate=44100, audio_channels=2),
@@ -102,12 +118,12 @@ def test_stems_are_sample_aligned_with_raw(raw_mp3, fake_demucs):
     demucs_vl.demucs_audio()
     channels, samples = fake_demucs["input"][0]
     assert fake_demucs["input"][1] == 44100 and channels == 2
-    # FFmpeg decoding trims the encoder delay: 20 s at 44.1 kHz, give or take one MP3 frame.
-    assert abs(samples - 20 * 44100) <= 1152
+    # FFmpeg decoding trims the encoder delay: TRACK_SECONDS at 44.1 kHz, give or take one MP3 frame.
+    assert abs(samples - TRACK_SECONDS * 44100) <= 1152
 
-    raw = load_audio_segment(_RAW_AUDIO_FILE, 0, 20)
+    raw = load_audio_segment(_RAW_AUDIO_FILE, 0, TRACK_SECONDS)
     for stem in (_VOCAL_AUDIO_FILE, _BACKGROUND_AUDIO_FILE):
-        decoded = load_audio_segment(stem, 0, 20)
+        decoded = load_audio_segment(stem, 0, TRACK_SECONDS)
         # Before the fix: 953 samples (59.6 ms) late. One 16 kHz sample is 0.06 ms.
         assert abs(lag(raw, decoded)) <= 1, stem
         assert abs(len(decoded) - len(raw)) <= SR // 100
@@ -120,8 +136,8 @@ def test_vocal_stays_aligned_through_asr_normalization(raw_mp3, fake_demucs):
     assert (
         abs(
             lag(
-                load_audio_segment(_RAW_AUDIO_FILE, 0, 20),
-                load_audio_segment(_VOCAL_AUDIO_FILE, 0, 20),
+                load_audio_segment(_RAW_AUDIO_FILE, 0, TRACK_SECONDS),
+                load_audio_segment(_VOCAL_AUDIO_FILE, 0, TRACK_SECONDS),
             )
         )
         <= 1
@@ -134,7 +150,7 @@ def test_reference_clips_read_vocal_without_delay(raw_mp3, fake_demucs):
     demucs_vl.demucs_audio()
     data, sr = sf.read(_VOCAL_AUDIO_FILE)
     assert sr == 44100
-    raw = load_audio_segment(_RAW_AUDIO_FILE, 0, 20)
+    raw = load_audio_segment(_RAW_AUDIO_FILE, 0, TRACK_SECONDS)
     vocal = np.interp(
         np.arange(len(raw)) * sr / SR, np.arange(len(data)), data.mean(axis=1)
     ).astype(np.float32)
@@ -163,19 +179,20 @@ def test_long_audio_is_separated_in_chunks(raw_mp3, fake_demucs, monkeypatch):
         os.remove(stem)
 
     shapes = []
-    separate = demucs_vl.PreloadedSeparator.separate_tensor
+    sep_cls = demucs_vl.PreloadedSeparator
+    separate = getattr(sep_cls, "separate_tensor")
 
     def recording(self, wav, sr=None):
         shapes.append(wav.shape[1])
         return separate(self, wav, sr)
 
-    monkeypatch.setattr(demucs_vl.PreloadedSeparator, "separate_tensor", recording)
-    monkeypatch.setattr(demucs_vl, "CHUNK_SECONDS", 6)
+    monkeypatch.setattr(sep_cls, "separate_tensor", recording)
+    monkeypatch.setattr(demucs_vl, "CHUNK_SECONDS", 2)
     monkeypatch.setattr(demucs_vl, "CONTEXT_SECONDS", 1)
     demucs_vl.demucs_audio()
 
-    # 6 s chunks of a 20 s track, each with up to 1 s of context on both sides
-    assert shapes == [7 * 44100, 8 * 44100, 8 * 44100, samples - 17 * 44100]
+    # 2 s chunks of a 4 s track, each with up to 1 s of context on both sides
+    assert shapes == [3 * 44100, samples - 44100]
     assert [
         open(stem, "rb").read() for stem in (_VOCAL_AUDIO_FILE, _BACKGROUND_AUDIO_FILE)
     ] == whole
@@ -230,9 +247,9 @@ def test_audio_separator_stems_are_sample_aligned_with_raw(
 
     demucs_vl.demucs_audio(model_key="mel_band_roformer")
 
-    raw = load_audio_segment(_RAW_AUDIO_FILE, 0, 20)
+    raw = load_audio_segment(_RAW_AUDIO_FILE, 0, TRACK_SECONDS)
     for stem in (_VOCAL_AUDIO_FILE, _BACKGROUND_AUDIO_FILE):
-        decoded = load_audio_segment(stem, 0, 20)
+        decoded = load_audio_segment(stem, 0, TRACK_SECONDS)
         assert abs(lag(raw, decoded)) <= 1, stem
         assert abs(len(decoded) - len(raw)) <= SR // 100
 

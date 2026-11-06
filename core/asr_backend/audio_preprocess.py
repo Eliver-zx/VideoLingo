@@ -297,7 +297,7 @@ def get_audio_duration(audio_file: str) -> float:
 
 
 def split_audio(
-    audio_file: str, target_len: float = 30 * 60, win: float = 60
+    audio_file: str, target_len: float = 50 * 60, win: float = 60
 ) -> List[Tuple[float, float]]:
     ## 在 [target_len-win, target_len+win] 区间内用 pydub 检测静默，切分音频
     report_progress(
