@@ -78,7 +78,7 @@ def cache_key(media_file, whisper, demucs):
             cloud_model = f"{whisper.get('assemblyai_model', 'universal')}:{whisper.get('assemblyai_lang', whisper.get('language'))}"
         elif runtime_lower == "elevenlabs":
             cloud_model = whisper.get("model", "scribe_v1")
-        extra_pkg = {}
+        extra_pkg: dict[str, object] = {}
         if runtime_lower == "mimo" or (
             runtime_lower == "elevenlabs" and "model" in whisper
         ):
@@ -97,8 +97,12 @@ def cache_key(media_file, whisper, demucs):
                 except PackageNotFoundError:
                     packages[name] = None
             extra_pkg = {"packages": packages}
-            if runtime_lower == "mimo" and whisper.get("qwen_engine"):
-                extra_pkg["qwen_engine"] = whisper.get("qwen_engine")
+            if runtime_lower == "mimo":
+                from core.asr_backend import qwen_asr_local
+
+                extra_pkg["qwen_engine"] = qwen_asr_local.resolve_engine(
+                    whisper.get("qwen_engine")
+                )
         identity = {
             "schema": SCHEMA,
             "media_md5": digest.hexdigest(),

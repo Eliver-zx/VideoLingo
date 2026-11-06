@@ -1699,7 +1699,6 @@ def _extract_chunk_summary(
 def _merge_terminology_results(
     chunk_results: list[tuple[int, dict]],
     custom_terms_list: list[dict[str, Any]],
-    scanned_kb_terms: list[dict[str, Any]] | None = None,
 ) -> dict:
     """Deterministically unify newly extracted terminology across chunks against authoritative custom terms."""
     chunk_results_sorted = sorted(chunk_results, key=lambda x: x[0])
@@ -1854,37 +1853,6 @@ def _merge_terminology_results(
                 for a in aliases:
                     by_alias_lower[a.lower()] = s_low
             by_src_lower[s_low] = entry
-
-    if scanned_kb_terms:
-        for term in scanned_kb_terms:
-            s = str(term.get("src") or "").strip()
-            tg = str(term.get("tgt") or "").strip()
-            if not s or not tg:
-                continue
-            s_low = s.lower()
-            if s_low not in by_src_lower:
-                by_src_lower[s_low] = {
-                    "src": s,
-                    "tgt": tg,
-                    "note": str(term.get("note") or "").strip(),
-                    "aliases": _normalize_aliases(term.get("aliases"), s),
-                    "fix_source": bool(term.get("fix_source", False)),
-                    "source": "task",
-                }
-            else:
-                existing = by_src_lower[s_low]
-                if term.get("fix_source"):
-                    existing["fix_source"] = True
-                if not existing.get("note") and term.get("note"):
-                    existing["note"] = str(term["note"]).strip()
-                kb_aliases = _normalize_aliases(term.get("aliases"), s)
-                if kb_aliases:
-                    merged_al = _normalize_aliases(
-                        [*(existing.get("aliases") or []), *kb_aliases],
-                        str(existing["src"]),
-                    )
-                    if merged_al:
-                        existing["aliases"] = merged_al
 
     return {
         "theme": combined_theme,

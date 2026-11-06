@@ -1,4 +1,4 @@
-"""Style, ASS generation, and fast hardware encoding helpers for burned-in subtitles."""
+"""Style and hardware encoding helpers for burned-in subtitles."""
 
 from __future__ import annotations
 
@@ -46,15 +46,6 @@ def default_font():
     return {
         "Linux": "NotoSansCJK-Regular",
         "Darwin": "抖音美好体",
-        "Windows": "抖音美好体",
-    }.get(platform.system(), "抖音美好体")
-
-
-def cjk_default_font() -> str:
-    """System-native CJK font family name recognized by libass / Fontconfig / DirectWrite / CoreText."""
-    return {
-        "Darwin": "抖音美好体",
-        "Linux": "Noto Sans CJK SC",
         "Windows": "抖音美好体",
     }.get(platform.system(), "抖音美好体")
 
@@ -184,7 +175,7 @@ def get_subtitle_filters(video, source_srt, translation_srt):
     subtitles = {"source": source_srt, "translation": translation_srt}
     kinds = ["source", "translation"] if mode == "bilingual" else [mode]
     return ",".join(
-        f"subtitles={subtitles[kind]}:force_style='{get_force_style(kind)}'"
+        f"subtitles={escape_ffmpeg_filter_path(subtitles[kind])}:force_style='{get_force_style(kind)}'"
         for kind in kinds
     )
 

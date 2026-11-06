@@ -1,148 +1,135 @@
-  <!-- =========================================================
-       VIEW 3: 全局设置 (Left Category Rail + Flush Config Sections)
+<!-- =========================================================
+       VIEW 3: 全局设置
        ========================================================= -->
   <section id="view-settings" class="settings-shell hidden">
 
-    <!-- 左侧配置分类快速定位栏 -->
     <aside class="settings-nav" aria-label="设置分类导航">
       <div class="rail-header">
         <span class="rail-title">设置</span>
       </div>
-      <a href="#cfg-sec-llm" class="settings-nav-item active">
-        <span>翻译模型</span>
-      </a>
-      <a href="#cfg-sec-asr" class="settings-nav-item">
-        <span>语音识别</span>
-      </a>
-      <a href="#cfg-sec-ass" class="settings-nav-item">
-        <span>字幕样式</span>
-      </a>
-      <a href="#cfg-sec-tts" class="settings-nav-item">
-        <span>配音合成</span>
-      </a>
-      <a href="#cfg-sec-ytb" class="settings-nav-item">
-        <span>下载与存储</span>
-      </a>
-      <div style="padding:12px 4px 8px; margin-block-start:auto;">
-        <button type="button" class="danger xs" id="btn-reset-default-config" style="inline-size:100%;">恢复默认设置</button>
-      </div>
+      <button type="button" class="settings-nav-item active" data-settings-page="cfg-sec-llm">翻译模型</button>
+      <button type="button" class="settings-nav-item" data-settings-page="cfg-sec-asr">语音识别</button>
+      <button type="button" class="settings-nav-item" data-settings-page="cfg-sec-ass">字幕样式</button>
+      <button type="button" class="settings-nav-item" data-settings-page="cfg-sec-tts">配音合成</button>
+      <button type="button" class="settings-nav-item" data-settings-page="cfg-sec-ytb">下载与存储</button>
     </aside>
 
-    <!-- 右侧全量平铺配置画布 -->
     <div class="settings-canvas">
 
-      <!-- SECTION 1: LLM 与翻译批处理参数 -->
-      <section class="cfg-section" id="cfg-sec-llm">
-        <div class="cfg-bar">
-          <div class="cfg-title">
-            <span>翻译模型</span>
-          </div>
-          <div class="row">
-            <button type="button" class="xs" id="btn-fetch-models">获取模型列表</button>
-            <button type="button" class="primary xs" id="btn-check-llm">测试连接</button>
+      <section class="settings-page" id="cfg-sec-llm">
+        <header class="page-head">
+          <h2 class="page-title">翻译模型</h2>
+          <div class="page-actions">
             <span class="status-label" id="llm-check-status">未测试</span>
+            <button type="button" class="xs" id="btn-fetch-models">获取模型列表</button>
+            <button type="button" class="xs" id="btn-check-llm">测试连接</button>
           </div>
-        </div>
+        </header>
 
-        <div class="cfg-body">
-          <div class="grid-4">
-            <label class="field">
-              <span class="field-label"><span>API Key</span><span class="field-key">api.key</span></span>
-              <input type="password" class="mono" value="" placeholder="输入 API Key" data-cfg="api.key">
-            </label>
-            <label class="field">
-              <span class="field-label"><span>接口地址</span><span class="field-key">api.base_url</span></span>
-              <input type="text" class="mono" value="https://api.openlux.ai/v1" data-cfg="api.base_url">
-            </label>
-            <label class="field">
-              <span class="field-label"><span>模型</span><span class="field-key">api.model</span></span>
-              <input type="text" class="mono" list="llm-models-list" value="gpt-6-luna" data-cfg="api.model">
+        <div class="set-group">
+          <div class="set-group-title">接口</div>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">API Key</span></span>
+            <span class="set-ctl"><input type="password" class="mono w-lg" value="" placeholder="输入 API Key" data-cfg="api.key"></span>
+            <span class="field-key">api.key</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">接口地址</span></span>
+            <span class="set-ctl"><input type="text" class="mono w-lg" value="https://api.openlux.ai/v1" data-cfg="api.base_url"></span>
+            <span class="field-key">api.base_url</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">模型</span></span>
+            <span class="set-ctl">
+              <input type="text" class="mono w-md" list="llm-models-list" value="gpt-6-luna" data-cfg="api.model">
               <datalist id="llm-models-list">
                 <option value="gpt-6-luna"></option>
                 <option value="claude-sonnet-4-5"></option>
                 <option value="gemini-2.5-pro"></option>
                 <option value="deepseek-v3"></option>
               </datalist>
-            </label>
-            <label class="field">
-              <span class="field-label"><span>并发数</span><span class="field-key">max_workers</span></span>
-              <input type="number" class="mono" min="1" max="32" value="4" data-cfg="max_workers">
-            </label>
-          </div>
-
-          <div class="grid-4">
-            <label class="field">
-              <span class="field-label"><span>目标语言</span><span class="field-key">target_language</span></span>
-              <input type="text" value="简体中文" data-cfg="target_language">
-            </label>
-            <label class="field">
-              <span class="field-label"><span>翻译风格</span><span class="field-key">translation_style</span></span>
-              <input type="text" value="" placeholder="选填，如口语化、简短自然" data-cfg="translation_style">
-            </label>
-            <label class="field">
-              <span class="field-label"><span>默认词表</span><span class="field-key">glossary_domain</span></span>
-              <select data-cfg="glossary_domain">
-                <option value="">不挂载</option>
-                <option value="destiny2" selected>destiny2</option>
-              </select>
-            </label>
-            <label class="field">
-              <span class="field-label"><span>思考强度</span><span class="field-key">api.reasoning_effort</span></span>
-              <select data-cfg="api.reasoning_effort">
+            </span>
+            <span class="field-key">api.model</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">思考强度</span></span>
+            <span class="set-ctl">
+              <select class="w-md" data-cfg="api.reasoning_effort">
                 <option value="none" selected>关 (不思考)</option>
                 <option value="low">低 (Low)</option>
                 <option value="medium">中 (Medium)</option>
                 <option value="high">高 (High)</option>
               </select>
-            </label>
-          </div>
+            </span>
+            <span class="field-key">api.reasoning_effort</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">并发数</span></span>
+            <span class="set-ctl"><input type="number" class="mono w-num" min="1" max="32" value="4" data-cfg="max_workers"></span>
+            <span class="field-key">max_workers</span>
+          </label>
+        </div>
 
-          <div class="grid-4">
-            <label class="toggle-tile">
-              <span>
-                <strong>二次润色</strong>
-                <div class="field-hint">初译后再润色一遍，提升流畅度</div>
-              </span>
-              <input type="checkbox" class="switch" role="switch" data-cfg="reflect_translate">
-            </label>
-            <label class="toggle-tile">
-              <span>
-                <strong>JSON 输出</strong>
-                <div class="field-hint">模型支持结构化输出时开启</div>
-              </span>
-              <input type="checkbox" class="switch" role="switch" data-cfg="api.llm_support_json">
-            </label>
-            <label class="toggle-tile">
-              <span>
-                <strong>翻译前审校术语</strong>
-                <div class="field-hint">提取术语后先人工确认再翻译</div>
-              </span>
-              <input type="checkbox" class="switch" role="switch" checked data-cfg="pause_before_translate">
-            </label>
-            <label class="toggle-tile">
-              <span>
-                <strong>合成前校对字幕</strong>
-                <div class="field-hint">生成字幕后先暂停，校对完再合成</div>
-              </span>
-              <input type="checkbox" class="switch" role="switch" checked data-cfg="pause_after_translate">
-            </label>
-          </div>
+        <div class="set-group">
+          <div class="set-group-title">翻译</div>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">目标语言</span></span>
+            <span class="set-ctl"><input type="text" class="w-md" value="简体中文" data-cfg="target_language"></span>
+            <span class="field-key">target_language</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">翻译风格</span></span>
+            <span class="set-ctl"><input type="text" class="w-lg" value="" placeholder="选填，如口语化、简短自然" data-cfg="translation_style"></span>
+            <span class="field-key">translation_style</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">默认词表</span></span>
+            <span class="set-ctl">
+              <select class="w-md" data-cfg="glossary_domain">
+                <option value="">不挂载</option>
+                <option value="destiny2" selected>destiny2</option>
+              </select>
+            </span>
+            <span class="field-key">glossary_domain</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">二次润色</span><span class="set-hint">初译后再润色一遍，提升流畅度</span></span>
+            <span class="set-ctl"><input type="checkbox" class="switch" role="switch" data-cfg="reflect_translate"></span>
+            <span class="field-key">reflect_translate</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">JSON 输出</span><span class="set-hint">模型支持结构化输出时开启</span></span>
+            <span class="set-ctl"><input type="checkbox" class="switch" role="switch" data-cfg="api.llm_support_json"></span>
+            <span class="field-key">api.llm_support_json</span>
+          </label>
+        </div>
+
+        <div class="set-group">
+          <div class="set-group-title">人工审校</div>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">翻译前审校术语</span><span class="set-hint">提取术语后先人工确认再翻译</span></span>
+            <span class="set-ctl"><input type="checkbox" class="switch" role="switch" checked data-cfg="pause_before_translate"></span>
+            <span class="field-key">pause_before_translate</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">合成前校对字幕</span><span class="set-hint">生成字幕后先暂停，校对完再合成</span></span>
+            <span class="set-ctl"><input type="checkbox" class="switch" role="switch" checked data-cfg="pause_after_translate"></span>
+            <span class="field-key">pause_after_translate</span>
+          </label>
         </div>
       </section>
 
-      <!-- SECTION 2: 语音识别与人声分离 -->
-      <section class="cfg-section" id="cfg-sec-asr">
-        <div class="cfg-bar">
-          <div class="cfg-title">
-            <span>语音识别</span>
-          </div>
-        </div>
+      <section class="settings-page hidden" id="cfg-sec-asr">
+        <header class="page-head">
+          <h2 class="page-title">语音识别</h2>
+        </header>
 
-        <div class="cfg-body">
-          <div class="grid-4">
-            <label class="field">
-              <span class="field-label"><span>源语言</span><span class="field-key">whisper.language</span></span>
-              <select data-cfg="whisper.language">
+        <div class="set-group">
+          <div class="set-group-title">识别</div>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">源语言</span></span>
+            <span class="set-ctl">
+              <select class="w-md" data-cfg="whisper.language">
                 <option value="auto">自动检测</option>
                 <option value="en" selected>English</option>
                 <option value="zh">简体中文</option>
@@ -154,11 +141,13 @@
                 <option value="de">Deutsch</option>
                 <option value="ru">Русский</option>
               </select>
-            </label>
-
-            <label class="field">
-              <span class="field-label"><span>识别服务</span><span class="field-key">whisper.runtime</span></span>
-              <select id="cfg-asr-runtime" data-cfg="whisper.runtime">
+            </span>
+            <span class="field-key">whisper.language</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">识别服务</span></span>
+            <span class="set-ctl">
+              <select id="cfg-asr-runtime" class="w-lg" data-cfg="whisper.runtime">
                 <option value="local" selected>本地推理 (Qwen3-ASR / WhisperX)</option>
                 <option value="mimo">小米 MiMo ASR</option>
                 <option value="mai">微软 MAI-Transcribe-2</option>
@@ -169,479 +158,551 @@
                 <option value="replicate_parakeet">Replicate Parakeet</option>
                 <option value="replicate_whisper">Replicate WhisperX</option>
               </select>
-            </label>
+            </span>
+            <span class="field-key">whisper.runtime</span>
+          </label>
 
-            <label class="toggle-tile">
-              <span>
-                <strong>人声分离</strong>
-                <div class="field-hint">过滤嘈杂背景音乐，提取人声</div>
-              </span>
-              <input type="checkbox" class="switch" role="switch" data-cfg="demucs">
-            </label>
+          <div class="set-sub" id="asr-engine-panels">
+            <div class="set-sub-title" id="asr-panel-title">本地推理 (Qwen3-ASR / WhisperX) 参数</div>
+            <div data-asr-panel="local">
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">识别引擎</span></span>
+                <span class="set-ctl">
+                  <select id="cfg-local-backend" class="w-md" data-cfg="whisper.backend">
+                    <option value="qwen" selected>Qwen3-ASR + ForcedAligner</option>
+                    <option value="whisperx">WhisperX</option>
+                  </select>
+                </span>
+                <span class="field-key">whisper.backend</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">模型规格</span></span>
+                <span class="set-ctl">
+                  <select class="w-md" data-cfg="whisper.qwen_model">
+                    <option value="1.7b" selected>1.7B（推荐）</option>
+                    <option value="0.6b">0.6B（轻量）</option>
+                  </select>
+                </span>
+                <span class="field-key">whisper.qwen_model</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">加速后端</span></span>
+                <span class="set-ctl">
+                  <select class="w-md" data-cfg="whisper.qwen_engine">
+                    <option value="auto" selected>自动 (Apple Silicon 优先 MLX)</option>
+                    <option value="mlx">MLX</option>
+                    <option value="transformers">Transformers</option>
+                  </select>
+                </span>
+                <span class="field-key">whisper.qwen_engine</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">WhisperX 模型</span></span>
+                <span class="set-ctl">
+                  <select class="w-md" data-cfg="whisper.model">
+                    <option value="large-v3" selected>large-v3</option>
+                  </select>
+                </span>
+                <span class="field-key">whisper.model</span>
+              </label>
+            </div>
 
-            <label class="field">
-              <span class="field-label"><span>分离模型</span><span class="field-key">vocal_separation_model</span></span>
-              <select data-cfg="vocal_separation_model">
+            <div data-asr-panel="mimo" class="hidden">
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">MiMo API Key</span></span>
+                <span class="set-ctl"><input type="password" class="w-lg" placeholder="输入小米 MiMo API Key" data-cfg="whisper.mimo_api_key"></span>
+                <span class="field-key">whisper.mimo_api_key</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">MiMo 模型名称</span></span>
+                <span class="set-ctl"><input type="text" class="w-md" value="mimo-v2.5-asr" placeholder="如 mimo-v2.5-asr" data-cfg="whisper.mimo_model"></span>
+                <span class="field-key">whisper.mimo_model</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">对齐加速后端</span></span>
+                <span class="set-ctl">
+                  <select class="w-md" data-cfg="whisper.qwen_engine">
+                    <option value="auto" selected>自动 (Apple Silicon 优先 MLX)</option>
+                    <option value="mlx">MLX</option>
+                    <option value="transformers">Transformers</option>
+                  </select>
+                </span>
+                <span class="field-key">whisper.qwen_engine</span>
+              </label>
+            </div>
+
+            <div data-asr-panel="mai" class="hidden">
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">服务接入方</span></span>
+                <span class="set-ctl">
+                  <select class="w-md" data-cfg="whisper.mai_provider">
+                    <option value="azure" selected>微软 Azure Speech</option>
+                    <option value="openrouter">OpenRouter</option>
+                  </select>
+                </span>
+                <span class="field-key">whisper.mai_provider</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">Azure API Key</span></span>
+                <span class="set-ctl"><input type="password" class="w-lg" placeholder="输入 Azure Speech Key" data-cfg="whisper.mai_api_key"></span>
+                <span class="field-key">whisper.mai_api_key</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">服务区域</span></span>
+                <span class="set-ctl">
+                  <input type="text" class="w-md" placeholder="如 eastus，留空自动探测" data-cfg="whisper.mai_region">
+                  <button type="button" class="xs" id="btn-detect-mai-region">探测</button>
+                </span>
+                <span class="field-key">whisper.mai_region</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">OpenRouter Key</span></span>
+                <span class="set-ctl"><input type="password" class="w-lg" placeholder="使用 OpenRouter 时填写" data-cfg="whisper.mai_openrouter_api_key"></span>
+                <span class="field-key">whisper.mai_openrouter_api_key</span>
+              </label>
+            </div>
+
+            <div data-asr-panel="deepgram" class="hidden">
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">Deepgram API Key</span></span>
+                <span class="set-ctl"><input type="password" class="w-lg" placeholder="输入 Deepgram Key" data-cfg="whisper.deepgram_api_key"></span>
+                <span class="field-key">whisper.deepgram_api_key</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">Deepgram 模型</span></span>
+                <span class="set-ctl"><input type="text" class="w-md" value="nova-3" data-cfg="whisper.deepgram_model"></span>
+                <span class="field-key">whisper.deepgram_model</span>
+              </label>
+            </div>
+
+            <div data-asr-panel="elevenlabs" class="hidden">
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">ElevenLabs API Key</span></span>
+                <span class="set-ctl"><input type="password" class="w-lg" placeholder="输入 ElevenLabs Key" data-cfg="whisper.elevenlabs_api_key"></span>
+                <span class="field-key">whisper.elevenlabs_api_key</span>
+              </label>
+            </div>
+
+            <div data-asr-panel="assembly" class="hidden">
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">AssemblyAI API Key</span></span>
+                <span class="set-ctl"><input type="password" class="w-lg" placeholder="输入 AssemblyAI Key" data-cfg="whisper.assembly_api_key"></span>
+                <span class="field-key">whisper.assembly_api_key</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">AssemblyAI 语种</span></span>
+                <span class="set-ctl"><input type="text" class="w-md" value="en" data-cfg="whisper.assemblyai_lang"></span>
+                <span class="field-key">whisper.assemblyai_lang</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">AssemblyAI 模型</span></span>
+                <span class="set-ctl"><input type="text" class="w-md" value="universal" data-cfg="whisper.assemblyai_model"></span>
+                <span class="field-key">whisper.assemblyai_model</span>
+              </label>
+            </div>
+
+            <div data-asr-panel="zero" class="hidden">
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">Gladia Whisper Zero Key</span></span>
+                <span class="set-ctl"><input type="password" class="w-lg" placeholder="输入 Gladia Whisper Zero Key" data-cfg="whisper.whisperzero_api_key"></span>
+                <span class="field-key">whisper.whisperzero_api_key</span>
+              </label>
+            </div>
+
+            <div data-asr-panel="replicate" class="hidden">
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">Replicate API Token</span></span>
+                <span class="set-ctl"><input type="password" class="w-lg" placeholder="r8_..." data-cfg="whisper.replicate_api_key"></span>
+                <span class="field-key">whisper.replicate_api_key</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="set-group">
+          <div class="set-group-title">人声分离</div>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">人声分离</span><span class="set-hint">过滤嘈杂背景音乐，提取人声</span></span>
+            <span class="set-ctl"><input type="checkbox" class="switch" role="switch" data-cfg="demucs"></span>
+            <span class="field-key">demucs</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">分离模型</span></span>
+            <span class="set-ctl">
+              <select class="w-md" data-cfg="vocal_separation_model">
                 <option value="scnet" selected>scnet（默认）</option>
                 <option value="htdemucs">htdemucs</option>
                 <option value="mdx">mdx</option>
                 <option value="mel_band_roformer">mel_band_roformer（高保真）</option>
               </select>
+            </span>
+            <span class="field-key">vocal_separation_model</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="settings-page settings-page-wide hidden" id="cfg-sec-ass">
+        <div class="settings-page-main">
+          <header class="page-head">
+            <h2 class="page-title">字幕样式</h2>
+            <div class="page-actions">
+              <button type="button" class="xs" id="btn-reset-ass-style">恢复默认样式</button>
+            </div>
+          </header>
+
+          <div class="set-group">
+            <div class="set-group-title">压制</div>
+            <label class="set-row">
+              <span class="set-label"><span class="set-name">烧录硬字幕</span><span class="set-hint">将字幕压制到画面中</span></span>
+              <span class="set-ctl"><input type="checkbox" class="switch" role="switch" checked data-cfg="burn_subtitles"></span>
+              <span class="field-key">burn_subtitles</span>
+            </label>
+            <label class="set-row">
+              <span class="set-label"><span class="set-name">GPU 硬件加速</span><span class="set-hint">使用显卡加速压制</span></span>
+              <span class="set-ctl"><input type="checkbox" class="switch" role="switch" checked data-cfg="ffmpeg_gpu"></span>
+              <span class="field-key">ffmpeg_gpu</span>
+            </label>
+            <label class="set-row">
+              <span class="set-label"><span class="set-name">字幕视频显示</span></span>
+              <span class="set-ctl">
+                <select id="ass-burn-mode" class="w-md" data-cfg="subtitle.sub_video_subtitles">
+                  <option value="bilingual">双语上下同屏</option>
+                  <option value="translation" selected>仅译文</option>
+                  <option value="source">仅原文</option>
+                </select>
+              </span>
+              <span class="field-key">sub_video_subtitles</span>
+            </label>
+            <label class="set-row">
+              <span class="set-label"><span class="set-name">配音视频显示</span></span>
+              <span class="set-ctl">
+                <select class="w-md" data-cfg="subtitle.dub_video_subtitles">
+                  <option value="translation" selected>仅译文</option>
+                  <option value="bilingual">双语上下同屏</option>
+                  <option value="source">仅原文</option>
+                </select>
+              </span>
+              <span class="field-key">dub_video_subtitles</span>
             </label>
           </div>
 
-          <div class="engine-subbox" id="asr-engine-panels">
-            <div data-asr-panel="local" class="grid-4">
-              <label class="field">
-                <span class="field-label"><span>识别引擎</span><span class="field-key">whisper.backend</span></span>
-                <select id="cfg-local-backend" data-cfg="whisper.backend">
-                  <option value="qwen" selected>Qwen3-ASR + ForcedAligner</option>
-                  <option value="whisperx">WhisperX</option>
-                </select>
-              </label>
-              <label class="field">
-                <span class="field-label"><span>模型规格</span><span class="field-key">whisper.qwen_model</span></span>
-                <select data-cfg="whisper.qwen_model">
-                  <option value="1.7b" selected>1.7B（推荐）</option>
-                  <option value="0.6b">0.6B（轻量）</option>
-                </select>
-              </label>
-              <label class="field">
-                <span class="field-label"><span>加速后端</span><span class="field-key">whisper.qwen_engine</span></span>
-                <select data-cfg="whisper.qwen_engine">
-                  <option value="auto" selected>自动 (Apple Silicon 优先 MLX)</option>
-                  <option value="mlx">MLX</option>
-                  <option value="transformers">Transformers</option>
-                </select>
-              </label>
-              <label class="field">
-                <span class="field-label"><span>WhisperX 模型</span><span class="field-key">whisper.model</span></span>
-                <select data-cfg="whisper.model">
-                  <option value="large-v3" selected>large-v3</option>
-                </select>
-              </label>
-            </div>
-
-            <div data-asr-panel="mimo" class="grid-3 hidden">
-              <label class="field">
-                <span class="field-label"><span>MiMo API Key</span><span class="field-key">whisper.mimo_api_key</span></span>
-                <input type="password" placeholder="输入小米 MiMo API Key" data-cfg="whisper.mimo_api_key">
-              </label>
-              <label class="field">
-                <span class="field-label"><span>MiMo 模型名称</span><span class="field-key">whisper.mimo_model</span></span>
-                <input type="text" value="mimo-v2.5-asr" placeholder="如 mimo-v2.5-asr" data-cfg="whisper.mimo_model">
-              </label>
-              <label class="field">
-                <span class="field-label"><span>对齐加速后端</span><span class="field-key">whisper.qwen_engine</span></span>
-                <select data-cfg="whisper.qwen_engine">
-                  <option value="auto" selected>自动 (Apple Silicon 优先 MLX)</option>
-                  <option value="mlx">MLX</option>
-                  <option value="transformers">Transformers</option>
-                </select>
-              </label>
-            </div>
-
-            <div data-asr-panel="mai" class="grid-4 hidden">
-              <label class="field">
-                <span class="field-label"><span>服务接入方</span><span class="field-key">whisper.mai_provider</span></span>
-                <select data-cfg="whisper.mai_provider">
-                  <option value="azure" selected>微软 Azure Speech</option>
-                  <option value="openrouter">OpenRouter</option>
-                </select>
-              </label>
-              <label class="field">
-                <span class="field-label"><span>Azure API Key</span><span class="field-key">whisper.mai_api_key</span></span>
-                <input type="password" placeholder="输入 Azure Speech Key" data-cfg="whisper.mai_api_key">
-              </label>
-              <label class="field">
-                <span class="field-label"><span>服务区域</span><span class="field-key">whisper.mai_region</span></span>
-                <div class="row" style="flex-wrap:nowrap;">
-                  <input type="text" placeholder="如 eastus，留空自动探测" data-cfg="whisper.mai_region">
-                  <button type="button" class="xs" id="btn-detect-mai-region">探测</button>
-                </div>
-              </label>
-              <label class="field">
-                <span class="field-label"><span>OpenRouter Key</span><span class="field-key">whisper.mai_openrouter_api_key</span></span>
-                <input type="password" placeholder="使用 OpenRouter 时填写" data-cfg="whisper.mai_openrouter_api_key">
-              </label>
-            </div>
-
-            <div data-asr-panel="deepgram" class="grid-2 hidden">
-              <label class="field">
-                <span class="field-label"><span>Deepgram API Key</span><span class="field-key">whisper.deepgram_api_key</span></span>
-                <input type="password" placeholder="输入 Deepgram Key" data-cfg="whisper.deepgram_api_key">
-              </label>
-              <label class="field">
-                <span class="field-label"><span>Deepgram 模型</span><span class="field-key">whisper.deepgram_model</span></span>
-                <input type="text" value="nova-3" data-cfg="whisper.deepgram_model">
-              </label>
-            </div>
-
-            <div data-asr-panel="elevenlabs" class="grid-2 hidden">
-              <label class="field">
-                <span class="field-label"><span>ElevenLabs API Key</span><span class="field-key">whisper.elevenlabs_api_key</span></span>
-                <input type="password" placeholder="输入 ElevenLabs Key" data-cfg="whisper.elevenlabs_api_key">
-              </label>
-            </div>
-
-            <div data-asr-panel="assembly" class="grid-3 hidden">
-              <label class="field">
-                <span class="field-label"><span>AssemblyAI API Key</span><span class="field-key">whisper.assembly_api_key</span></span>
-                <input type="password" placeholder="输入 AssemblyAI Key" data-cfg="whisper.assembly_api_key">
-              </label>
-              <label class="field">
-                <span class="field-label"><span>AssemblyAI 语种</span><span class="field-key">whisper.assemblyai_lang</span></span>
-                <input type="text" value="en" data-cfg="whisper.assemblyai_lang">
-              </label>
-              <label class="field">
-                <span class="field-label"><span>AssemblyAI 模型</span><span class="field-key">whisper.assemblyai_model</span></span>
-                <input type="text" value="universal" data-cfg="whisper.assemblyai_model">
-              </label>
-            </div>
-
-            <div data-asr-panel="zero" class="grid-2 hidden">
-              <label class="field">
-                <span class="field-label"><span>Gladia Whisper Zero Key</span><span class="field-key">whisper.whisperzero_api_key</span></span>
-                <input type="password" placeholder="输入 Gladia Whisper Zero Key" data-cfg="whisper.whisperzero_api_key">
-              </label>
-            </div>
-
-            <div data-asr-panel="replicate" class="grid-2 hidden">
-              <label class="field">
-                <span class="field-label"><span>Replicate API Token</span><span class="field-key">whisper.replicate_api_key</span></span>
-                <input type="password" placeholder="r8_..." data-cfg="whisper.replicate_api_key">
-              </label>
-            </div>
+          <div class="set-group">
+            <div class="set-group-title">断句</div>
+            <label class="set-row">
+              <span class="set-label"><span class="set-name">单行字数上限</span></span>
+              <span class="set-ctl"><input type="number" class="mono w-num" value="75" data-cfg="subtitle.max_length"></span>
+              <span class="field-key">max_length</span>
+            </label>
+            <label class="set-row">
+              <span class="set-label"><span class="set-name">译文折算倍率</span></span>
+              <span class="set-ctl"><input type="number" class="mono w-num" step="0.05" value="1.3" data-cfg="subtitle.target_multiplier"></span>
+              <span class="field-key">target_multiplier</span>
+            </label>
           </div>
-        </div>
-      </section>
-      <!-- SECTION 3: 字幕切分、烧录与完整 ASS 样式实时预览 -->
-      <section class="cfg-section" id="cfg-sec-ass">
-        <div class="cfg-bar">
-          <div class="cfg-title">
-            <span>字幕样式</span>
-          </div>
-          <button type="button" class="xs" id="btn-reset-ass-style">恢复默认样式</button>
-        </div>
 
-        <div class="cfg-body">
-          <div style="display:grid; grid-template-columns: 1.32fr 1fr; gap:20px; align-items:start;">
-            <div style="display:flex; flex-direction:column; gap:16px;">
-              <div class="grid-3">
-                <label class="toggle-tile">
-                  <span>
-                    <strong>烧录硬字幕</strong>
-                    <div class="field-hint">将字幕压制到画面中</div>
-                  </span>
-                  <input type="checkbox" class="switch" role="switch" checked data-cfg="burn_subtitles">
-                </label>
-                <label class="toggle-tile">
-                  <span>
-                    <strong>GPU 硬件加速</strong>
-                    <div class="field-hint">使用显卡加速压制</div>
-                  </span>
-                  <input type="checkbox" class="switch" role="switch" checked data-cfg="ffmpeg_gpu">
-                </label>
-                <label class="field">
-                  <span class="field-label"><span>单行字数上限</span><span class="field-key">max_length</span></span>
-                  <input type="number" class="mono" value="75" data-cfg="subtitle.max_length">
-                </label>
-              </div>
-
-              <div class="grid-3">
-                <label class="field">
-                  <span class="field-label"><span>译文折算倍率</span><span class="field-key">target_multiplier</span></span>
-                  <input type="number" class="mono" step="0.05" value="1.3" data-cfg="subtitle.target_multiplier">
-                </label>
-                <label class="field">
-                  <span class="field-label"><span>字幕视频显示</span><span class="field-key">sub_video_subtitles</span></span>
-                  <select id="ass-burn-mode" data-cfg="subtitle.sub_video_subtitles">
-                    <option value="bilingual">双语上下同屏</option>
-                    <option value="translation" selected>仅译文</option>
-                    <option value="source">仅原文</option>
-                  </select>
-                </label>
-                <label class="field">
-                  <span class="field-label"><span>配音视频显示</span><span class="field-key">dub_video_subtitles</span></span>
-                  <select data-cfg="subtitle.dub_video_subtitles">
-                    <option value="translation" selected>仅译文</option>
-                    <option value="bilingual">双语上下同屏</option>
-                    <option value="source">仅原文</option>
-                  </select>
-                </label>
-              </div>
-
-              <div class="engine-subbox">
-                <div style="font-weight:600; font-size:var(--fs-xs); margin-block-end:12px; color:var(--brand-bright);">译文样式</div>
-                <div class="grid-4">
-                  <label class="field">
-                    <span class="field-label"><span>字体</span><span class="field-key">font_name</span></span>
-                    <input type="text" id="ass-tr-font" value="抖音美好体" placeholder="系统默认" data-cfg="subtitle.style.translation.font_name">
-                  </label>
-                  <label class="field">
-                    <span class="field-label"><span>字号</span><span class="field-key">font_size</span></span>
-                    <input type="number" class="mono" id="ass-tr-size" value="17" data-cfg="subtitle.style.translation.font_size">
-                  </label>
-                  <label class="field">
-                    <span class="field-label"><span>字体颜色</span><span class="field-key">font_color</span></span>
+          <div class="set-group">
+            <div class="set-group-title">样式</div>
+            <table class="style-table">
+              <thead>
+                <tr><th></th><th>译文</th><th>原文</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>字体</td>
+                  <td><input type="text" id="ass-tr-font" value="抖音美好体" placeholder="系统默认" title="subtitle.style.translation.font_name" data-cfg="subtitle.style.translation.font_name"></td>
+                  <td><input type="text" id="ass-src-font" value="" placeholder="系统默认" title="subtitle.style.source.font_name" data-cfg="subtitle.style.source.font_name"></td>
+                </tr>
+                <tr>
+                  <td>字号</td>
+                  <td><input type="number" class="mono w-num" id="ass-tr-size" value="17" title="subtitle.style.translation.font_size" data-cfg="subtitle.style.translation.font_size"></td>
+                  <td><input type="number" class="mono w-num" id="ass-src-size" value="14" title="subtitle.style.source.font_size" data-cfg="subtitle.style.source.font_size"></td>
+                </tr>
+                <tr>
+                  <td>字体颜色</td>
+                  <td>
                     <div class="color-field">
                       <input type="color" id="ass-tr-color-picker" class="color-swatch" value="#ffff00">
-                      <input type="text" id="ass-tr-color" class="mono" value="&H00FFFF" data-cfg="subtitle.style.translation.font_color">
+                      <input type="text" id="ass-tr-color" class="mono" value="&amp;H00FFFF" title="subtitle.style.translation.font_color" data-cfg="subtitle.style.translation.font_color">
                     </div>
-                  </label>
-                  <label class="field">
-                    <span class="field-label"><span>描边颜色</span><span class="field-key">outline_color</span></span>
-                    <input type="text" id="ass-tr-outline-color" class="mono" value="#000000" data-cfg="subtitle.style.translation.outline_color">
-                  </label>
-                </div>
-                <div class="grid-3" style="margin-block-start:12px;">
-                  <label class="field">
-                    <span class="field-label"><span>描边宽度</span><span class="field-key">outline_width</span></span>
-                    <input type="number" class="mono" step="0.5" id="ass-tr-outline-w" value="1.5" data-cfg="subtitle.style.translation.outline_width">
-                  </label>
-                  <label class="field">
-                    <span class="field-label"><span>背景色</span><span class="field-key">back_color</span></span>
-                    <input type="text" class="mono" value="&H33000000" data-cfg="subtitle.style.translation.back_color">
-                  </label>
-                  <label class="field">
-                    <span class="field-label"><span>底部边距</span><span class="field-key">margin_v</span></span>
-                    <input type="number" class="mono" id="ass-tr-margin" value="5" data-cfg="subtitle.style.translation.margin_v">
-                  </label>
-                </div>
-              </div>
-
-              <div class="engine-subbox">
-                <div style="font-weight:600; font-size:var(--fs-xs); margin-block-end:12px; color:var(--text-secondary);">原文样式</div>
-                <div class="grid-4">
-                  <label class="field">
-                    <span class="field-label"><span>字体</span><span class="field-key">font_name</span></span>
-                    <input type="text" id="ass-src-font" value="" placeholder="系统默认" data-cfg="subtitle.style.source.font_name">
-                  </label>
-                  <label class="field">
-                    <span class="field-label"><span>字号</span><span class="field-key">font_size</span></span>
-                    <input type="number" class="mono" id="ass-src-size" value="14" data-cfg="subtitle.style.source.font_size">
-                  </label>
-                  <label class="field">
-                    <span class="field-label"><span>字体颜色</span><span class="field-key">font_color</span></span>
+                  </td>
+                  <td>
                     <div class="color-field">
                       <input type="color" id="ass-src-color-picker" class="color-swatch" value="#ffffff">
-                      <input type="text" id="ass-src-color" class="mono" value="#FFFFFF" data-cfg="subtitle.style.source.font_color">
+                      <input type="text" id="ass-src-color" class="mono" value="#FFFFFF" title="subtitle.style.source.font_color" data-cfg="subtitle.style.source.font_color">
                     </div>
-                  </label>
-                  <label class="field">
-                    <span class="field-label"><span>描边颜色</span><span class="field-key">outline_color</span></span>
-                    <input type="text" id="ass-src-outline-color" class="mono" value="#000000" data-cfg="subtitle.style.source.outline_color">
-                  </label>
-                </div>
-              </div>
-            </div>
+                  </td>
+                </tr>
+                <tr>
+                  <td>描边颜色</td>
+                  <td><input type="text" id="ass-tr-outline-color" class="mono" value="#000000" title="subtitle.style.translation.outline_color" data-cfg="subtitle.style.translation.outline_color"></td>
+                  <td><input type="text" id="ass-src-outline-color" class="mono" value="#000000" title="subtitle.style.source.outline_color" data-cfg="subtitle.style.source.outline_color"></td>
+                </tr>
+                <tr>
+                  <td>描边宽度</td>
+                  <td><input type="number" class="mono w-num" step="0.5" id="ass-tr-outline-w" value="1.5" title="subtitle.style.translation.outline_width" data-cfg="subtitle.style.translation.outline_width"></td>
+                  <td class="style-na">—</td>
+                </tr>
+                <tr>
+                  <td>背景色</td>
+                  <td><input type="text" class="mono" value="&amp;H33000000" title="subtitle.style.translation.back_color" data-cfg="subtitle.style.translation.back_color"></td>
+                  <td class="style-na">—</td>
+                </tr>
+                <tr>
+                  <td>底部边距</td>
+                  <td><input type="number" class="mono w-num" id="ass-tr-margin" value="5" title="subtitle.style.translation.margin_v" data-cfg="subtitle.style.translation.margin_v"></td>
+                  <td class="style-na">—</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
 
-            <!-- 右侧：16:9 实时 ASS 字幕渲染监视画布 -->
-            <div>
-              <div class="field-label" style="margin-block-end:8px;">
-                <span>实时预览</span>
+        <div class="ass-preview">
+          <div class="set-group-title">预览</div>
+          <div class="ass-monitor" id="ass-live-stage">
+            <div class="ass-safe-frame"></div>
+            <div class="ass-hud-top">
+              <span class="ass-hud-tag">1920×1080</span>
+              <span class="ass-hud-tag">00:01:14</span>
+            </div>
+            <div class="ass-caption-stack" id="ass-preview-box" style="margin-block-end: 18px;">
+              <div id="ass-preview-tr" style="color:#ffff00; font-size:21px; font-weight:700; text-shadow: 0 0 4px #000, 1px 1px 2px #000;">
+                示例译文字幕样式预览，可实时调整字号、颜色与边距
               </div>
-              <div class="ass-monitor" id="ass-live-stage">
-                <div class="ass-safe-frame"></div>
-                <div class="ass-hud-top">
-                  <span class="ass-hud-tag">1920×1080</span>
-                  <span class="ass-hud-tag">00:01:14</span>
-                </div>
-                <div class="ass-caption-stack" id="ass-preview-box" style="margin-block-end: 18px;">
-                  <div id="ass-preview-tr" style="color:#ffff00; font-size:21px; font-weight:700; text-shadow: 0 0 4px #000, 1px 1px 2px #000;">
-                    示例译文字幕样式预览，可实时调整字号、颜色与边距
-                  </div>
-                  <div id="ass-preview-src" style="color:#ffffff; font-size:16px; text-shadow: 0 0 3px #000, 1px 1px 2px #000;">
-                    Sample bilingual subtitle style preview for live adjustment.
-                  </div>
-                </div>
+              <div id="ass-preview-src" style="color:#ffffff; font-size:16px; text-shadow: 0 0 3px #000, 1px 1px 2px #000;">
+                Sample bilingual subtitle style preview for live adjustment.
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- SECTION 4: 配音渠道与语速对齐参数 -->
-      <section class="cfg-section" id="cfg-sec-tts">
-        <div class="cfg-bar">
-          <div class="cfg-title">
-            <span>配音合成</span>
-          </div>
-        </div>
+      <section class="settings-page hidden" id="cfg-sec-tts">
+        <header class="page-head">
+          <h2 class="page-title">配音合成</h2>
+        </header>
 
-        <div class="cfg-body">
-          <div class="grid-4">
-            <label class="field">
-              <span class="field-label"><span>配音服务</span><span class="field-key">tts_method</span></span>
-              <select id="cfg-tts-method" data-cfg="tts_method">
+        <div class="set-group">
+          <div class="set-group-title">服务</div>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">配音服务</span></span>
+            <span class="set-ctl">
+              <select id="cfg-tts-method" class="w-md" data-cfg="tts_method">
                 <option value="fish_audio" selected>Fish Audio（克隆 / 预设）</option>
                 <option value="sf_fish_tts">SiliconFlow FishTTS</option>
                 <option value="sf_cosyvoice2">SiliconFlow CosyVoice2</option>
                 <option value="openai_tts">OpenAI 兼容接口</option>
                 <option value="edge_tts">微软 Edge TTS（免费）</option>
               </select>
-            </label>
-            <label class="field">
-              <span class="field-label"><span>语速范围（最小 / 常规 / 最大）</span><span class="field-key">speed_factor</span></span>
-              <div class="row" style="flex-wrap:nowrap;">
-                <input type="number" class="mono" step="0.05" value="1.0" title="最小语速" data-cfg="speed_factor.min">
-                <input type="number" class="mono" step="0.05" value="1.15" title="常规加速上限" data-cfg="speed_factor.accept">
-                <input type="number" class="mono" step="0.05" value="1.28" title="最大加速上限" data-cfg="speed_factor.max">
-              </div>
-            </label>
-            <label class="field">
-              <span class="field-label"><span>最短片段时长 (s)</span><span class="field-key">min_subtitle_duration</span></span>
-              <input type="number" class="mono" step="0.1" value="1.8" data-cfg="min_subtitle_duration">
-            </label>
-            <label class="field">
-              <span class="field-label"><span>对齐容差 (s)</span><span class="field-key">tolerance</span></span>
-              <input type="number" class="mono" step="0.1" value="1.2" data-cfg="tolerance">
-            </label>
+            </span>
+            <span class="field-key">tts_method</span>
+          </label>
+
+          <div class="set-sub" id="tts-engine-panels">
+            <div class="set-sub-title" id="tts-panel-title">Fish Audio（克隆 / 预设） 参数</div>
+            <div data-tts-panel="fish_audio">
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">API Key</span></span>
+                <span class="set-ctl"><input type="password" class="mono w-lg" value="" placeholder="输入 Fish Audio Key" data-cfg="fish_audio.api_key"></span>
+                <span class="field-key">fish_audio.api_key</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">配音模式</span></span>
+                <span class="set-ctl">
+                  <select class="w-md" data-cfg="fish_audio.mode">
+                    <option value="clone" selected>自动克隆原视频人声</option>
+                    <option value="preset">使用预设音色</option>
+                  </select>
+                </span>
+                <span class="field-key">fish_audio.mode</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">合成模型</span></span>
+                <span class="set-ctl">
+                  <select class="w-md" data-cfg="fish_audio.model">
+                    <option value="s2.1-pro" selected>s2.1-pro（推荐）</option>
+                    <option value="s2-pro">s2-pro</option>
+                    <option value="s1">s1</option>
+                  </select>
+                </span>
+                <span class="field-key">fish_audio.model</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">音色 ID</span></span>
+                <span class="set-ctl"><input type="text" class="mono w-lg" value="74c6aba5cbf94a15bbdc547ffce5cb38" data-cfg="fish_audio.voice_id"></span>
+                <span class="field-key">fish_audio.voice_id</span>
+              </label>
+            </div>
+
+            <div data-tts-panel="sf_fish_tts" class="hidden">
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">API Key</span></span>
+                <span class="set-ctl"><input type="password" class="w-lg" placeholder="sk-..." data-cfg="sf_fish_tts.api_key"></span>
+                <span class="field-key">sf_fish_tts.api_key</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">音色模式</span></span>
+                <span class="set-ctl">
+                  <select class="w-md" data-cfg="sf_fish_tts.mode">
+                    <option value="preset" selected>预设音色</option>
+                    <option value="custom">上传音频克隆</option>
+                    <option value="dynamic">逐句动态克隆</option>
+                  </select>
+                </span>
+                <span class="field-key">sf_fish_tts.mode</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">预设角色</span></span>
+                <span class="set-ctl"><input type="text" class="w-md" value="anna" data-cfg="sf_fish_tts.voice"></span>
+                <span class="field-key">sf_fish_tts.voice</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">音色 ID</span></span>
+                <span class="set-ctl"><input type="text" class="w-lg" placeholder="选填" data-cfg="sf_fish_tts.voice_id"></span>
+                <span class="field-key">sf_fish_tts.voice_id</span>
+              </label>
+            </div>
+
+            <div data-tts-panel="sf_cosyvoice2" class="hidden">
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">API Key</span></span>
+                <span class="set-ctl"><input type="password" class="w-lg" placeholder="sk-..." data-cfg="sf_cosyvoice2.api_key"></span>
+                <span class="field-key">sf_cosyvoice2.api_key</span>
+              </label>
+            </div>
+
+            <div data-tts-panel="openai_tts" class="hidden">
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">API Key</span></span>
+                <span class="set-ctl"><input type="password" class="w-lg" placeholder="sk-..." data-cfg="openai_tts.api_key"></span>
+                <span class="field-key">openai_tts.api_key</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">接口地址</span></span>
+                <span class="set-ctl"><input type="text" class="mono w-lg" value="https://api.openlux.ai/v1" data-cfg="openai_tts.base_url"></span>
+                <span class="field-key">openai_tts.base_url</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">模型</span></span>
+                <span class="set-ctl"><input type="text" class="mono w-md" value="gpt-4o-mini-tts" data-cfg="openai_tts.model"></span>
+                <span class="field-key">openai_tts.model</span>
+              </label>
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">音色</span></span>
+                <span class="set-ctl">
+                  <select class="w-md" data-cfg="openai_tts.voice">
+                    <option value="alloy" selected>alloy</option>
+                    <option value="echo">echo</option>
+                    <option value="fable">fable</option>
+                    <option value="onyx">onyx</option>
+                    <option value="nova">nova</option>
+                    <option value="shimmer">shimmer</option>
+                  </select>
+                </span>
+                <span class="field-key">openai_tts.voice</span>
+              </label>
+            </div>
+
+            <div data-tts-panel="edge_tts" class="hidden">
+              <label class="set-row">
+                <span class="set-label"><span class="set-name">语音角色</span></span>
+                <span class="set-ctl"><input type="text" class="mono w-md" value="zh-CN-XiaoxiaoNeural" data-cfg="edge_tts.voice"></span>
+                <span class="field-key">edge_tts.voice</span>
+              </label>
+            </div>
           </div>
+        </div>
 
-          <div class="engine-subbox" id="tts-engine-panels">
-            <div data-tts-panel="fish_audio" class="grid-4">
-              <label class="field">
-                <span class="field-label"><span>API Key</span><span class="field-key">fish_audio.api_key</span></span>
-                <input type="password" class="mono" value="" placeholder="输入 Fish Audio Key" data-cfg="fish_audio.api_key">
-              </label>
-              <label class="field">
-                <span class="field-label"><span>配音模式</span><span class="field-key">fish_audio.mode</span></span>
-                <select data-cfg="fish_audio.mode">
-                  <option value="clone" selected>自动克隆原视频人声</option>
-                  <option value="preset">使用预设音色</option>
-                </select>
-              </label>
-              <label class="field">
-                <span class="field-label"><span>合成模型</span><span class="field-key">fish_audio.model</span></span>
-                <select data-cfg="fish_audio.model">
-                  <option value="s2.1-pro" selected>s2.1-pro（推荐）</option>
-                  <option value="s2-pro">s2-pro</option>
-                  <option value="s1">s1</option>
-                </select>
-              </label>
-              <label class="field">
-                <span class="field-label"><span>音色 ID</span><span class="field-key">fish_audio.voice_id</span></span>
-                <input type="text" class="mono" value="74c6aba5cbf94a15bbdc547ffce5cb38" data-cfg="fish_audio.voice_id">
-              </label>
-            </div>
-
-            <div data-tts-panel="sf_fish_tts" class="grid-4 hidden">
-              <label class="field">
-                <span class="field-label"><span>API Key</span><span class="field-key">sf_fish_tts.api_key</span></span>
-                <input type="password" placeholder="sk-..." data-cfg="sf_fish_tts.api_key">
-              </label>
-              <label class="field">
-                <span class="field-label"><span>音色模式</span><span class="field-key">sf_fish_tts.mode</span></span>
-                <select data-cfg="sf_fish_tts.mode">
-                  <option value="preset" selected>预设音色</option>
-                  <option value="custom">上传音频克隆</option>
-                  <option value="dynamic">逐句动态克隆</option>
-                </select>
-              </label>
-              <label class="field">
-                <span class="field-label"><span>预设角色</span><span class="field-key">sf_fish_tts.voice</span></span>
-                <input type="text" value="anna" data-cfg="sf_fish_tts.voice">
-              </label>
-              <label class="field">
-                <span class="field-label"><span>音色 ID</span><span class="field-key">sf_fish_tts.voice_id</span></span>
-                <input type="text" placeholder="选填" data-cfg="sf_fish_tts.voice_id">
-              </label>
-            </div>
-
-            <div data-tts-panel="sf_cosyvoice2" class="grid-2 hidden">
-              <label class="field">
-                <span class="field-label"><span>API Key</span><span class="field-key">sf_cosyvoice2.api_key</span></span>
-                <input type="password" placeholder="sk-..." data-cfg="sf_cosyvoice2.api_key">
-              </label>
-            </div>
-
-            <div data-tts-panel="openai_tts" class="grid-4 hidden">
-              <label class="field">
-                <span class="field-label"><span>API Key</span><span class="field-key">openai_tts.api_key</span></span>
-                <input type="password" placeholder="sk-..." data-cfg="openai_tts.api_key">
-              </label>
-              <label class="field">
-                <span class="field-label"><span>接口地址</span><span class="field-key">openai_tts.base_url</span></span>
-                <input type="text" class="mono" value="https://api.openlux.ai/v1" data-cfg="openai_tts.base_url">
-              </label>
-              <label class="field">
-                <span class="field-label"><span>模型</span><span class="field-key">openai_tts.model</span></span>
-                <input type="text" class="mono" value="gpt-4o-mini-tts" data-cfg="openai_tts.model">
-              </label>
-              <label class="field">
-                <span class="field-label"><span>音色</span><span class="field-key">openai_tts.voice</span></span>
-                <select data-cfg="openai_tts.voice">
-                  <option value="alloy" selected>alloy</option>
-                  <option value="echo">echo</option>
-                  <option value="fable">fable</option>
-                  <option value="onyx">onyx</option>
-                  <option value="nova">nova</option>
-                  <option value="shimmer">shimmer</option>
-                </select>
-              </label>
-            </div>
-
-            <div data-tts-panel="edge_tts" class="grid-2 hidden">
-              <label class="field">
-                <span class="field-label"><span>语音角色</span><span class="field-key">edge_tts.voice</span></span>
-                <input type="text" class="mono" value="zh-CN-XiaoxiaoNeural" data-cfg="edge_tts.voice">
-              </label>
-            </div>
+        <div class="set-group">
+          <div class="set-group-title">对齐</div>
+          <div class="set-row">
+            <span class="set-label"><span class="set-name">语速范围</span></span>
+            <span class="set-ctl">
+              <span class="set-unit">最小</span>
+              <input type="number" class="mono w-num" step="0.05" value="1.0" title="最小语速" data-cfg="speed_factor.min">
+              <span class="set-unit">常规</span>
+              <input type="number" class="mono w-num" step="0.05" value="1.15" title="常规加速上限" data-cfg="speed_factor.accept">
+              <span class="set-unit">最大</span>
+              <input type="number" class="mono w-num" step="0.05" value="1.28" title="最大加速上限" data-cfg="speed_factor.max">
+            </span>
+            <span class="field-key">speed_factor</span>
           </div>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">最短片段时长</span></span>
+            <span class="set-ctl"><input type="number" class="mono w-num" step="0.1" value="1.8" data-cfg="min_subtitle_duration"><span class="set-unit">秒</span></span>
+            <span class="field-key">min_subtitle_duration</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">对齐容差</span></span>
+            <span class="set-ctl"><input type="number" class="mono w-num" step="0.1" value="1.2" data-cfg="tolerance"><span class="set-unit">秒</span></span>
+            <span class="field-key">tolerance</span>
+          </label>
         </div>
       </section>
 
-      <!-- SECTION 5: 下载与存储 -->
-      <section class="cfg-section" id="cfg-sec-ytb">
-        <div class="cfg-bar">
-          <div class="cfg-title">
-            <span>下载与存储</span>
-          </div>
-        </div>
+      <section class="settings-page hidden" id="cfg-sec-ytb">
+        <header class="page-head">
+          <h2 class="page-title">下载与存储</h2>
+        </header>
 
-        <div class="cfg-body">
-          <div class="grid-3">
-            <label class="field">
-              <span class="field-label"><span>下载画质</span><span class="field-key">ytb_resolution</span></span>
-              <select data-cfg="ytb_resolution">
+        <div class="set-group">
+          <div class="set-group-title">下载</div>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">下载画质</span></span>
+            <span class="set-ctl">
+              <select class="w-md" data-cfg="ytb_resolution">
                 <option value="1080" selected>1080p</option>
                 <option value="best">最高画质</option>
                 <option value="360">360p</option>
               </select>
-            </label>
-            <label class="field">
-              <span class="field-label"><span>Cookies 路径</span><span class="field-key">youtube.cookies_path</span></span>
-              <input type="text" class="mono" placeholder="选填，/Users/.../cookies.txt" data-cfg="youtube.cookies_path">
-            </label>
-            <label class="field">
-              <span class="field-label"><span>网络代理</span><span class="field-key">youtube.proxy</span></span>
-              <input type="text" class="mono" placeholder="选填，http://127.0.0.1:7890" data-cfg="youtube.proxy">
-            </label>
-          </div>
+            </span>
+            <span class="field-key">ytb_resolution</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">Cookies 路径</span></span>
+            <span class="set-ctl"><input type="text" class="mono w-lg" placeholder="选填，/Users/.../cookies.txt" data-cfg="youtube.cookies_path"></span>
+            <span class="field-key">youtube.cookies_path</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">网络代理</span></span>
+            <span class="set-ctl"><input type="text" class="mono w-lg" placeholder="选填，http://127.0.0.1:7890" data-cfg="youtube.proxy"></span>
+            <span class="field-key">youtube.proxy</span>
+          </label>
+        </div>
 
-          <div class="grid-3">
-            <label class="field">
-              <span class="field-label"><span>音频采样率</span><span class="field-key">audio.raw_sample_rate</span></span>
-              <select data-cfg="audio.raw_sample_rate">
+        <div class="set-group">
+          <div class="set-group-title">音频</div>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">音频采样率</span></span>
+            <span class="set-ctl">
+              <select class="w-md" data-cfg="audio.raw_sample_rate">
                 <option value="44100" selected>44100 Hz（推荐）</option>
                 <option value="32000">32000 Hz</option>
                 <option value="16000">16000 Hz</option>
               </select>
-            </label>
-            <label class="field">
-              <span class="field-label"><span>音频码率</span><span class="field-key">audio.raw_bitrate</span></span>
-              <select data-cfg="audio.raw_bitrate">
+            </span>
+            <span class="field-key">audio.raw_sample_rate</span>
+          </label>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">音频码率</span></span>
+            <span class="set-ctl">
+              <select class="w-md" data-cfg="audio.raw_bitrate">
                 <option value="192k" selected>192k</option>
                 <option value="128k">128k</option>
                 <option value="96k">96k</option>
               </select>
-            </label>
-            <label class="field">
-              <span class="field-label"><span>模型缓存目录</span><span class="field-key">model_dir</span></span>
-              <input type="text" class="mono" value="./_model_cache" data-cfg="model_dir">
-            </label>
-          </div>
+            </span>
+            <span class="field-key">audio.raw_bitrate</span>
+          </label>
+        </div>
+
+        <div class="set-group">
+          <div class="set-group-title">存储</div>
+          <label class="set-row">
+            <span class="set-label"><span class="set-name">模型缓存目录</span></span>
+            <span class="set-ctl"><input type="text" class="mono w-lg" value="./_model_cache" data-cfg="model_dir"></span>
+            <span class="field-key">model_dir</span>
+          </label>
         </div>
       </section>
 
@@ -650,13 +711,11 @@
 
   <!-- 视频预览弹窗 -->
   <dialog id="video-preview-dialog" closedby="any" aria-labelledby="preview-dialog-title">
-    <div class="cfg-bar">
-      <div class="cfg-title">
-        <span id="preview-dialog-title">视频预览</span>
-      </div>
+    <div class="dialog-bar">
+      <span class="dialog-title" id="preview-dialog-title">视频预览</span>
       <button type="button" class="xs" id="btn-close-preview-modal">关闭</button>
     </div>
-    <div class="cfg-body" id="video-preview-body">
+    <div class="dialog-body" id="video-preview-body">
       <div class="ass-monitor" style="aspect-ratio:16/9;">
         <div class="ass-safe-frame"></div>
         <div class="ass-hud-top">

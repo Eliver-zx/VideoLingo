@@ -303,9 +303,13 @@ def test_shared_pipeline_order_and_done_markers(tmp_path, monkeypatch):
         for _, group in pipeline.SUBTITLE_STEPS + pipeline.DUBBING_STEPS
         for call in group
     ]
+    assert "_7_sub_into_vid.merge_subtitles_to_video" not in expected
     assert calls == expected
     assert Path("output/.subtitle_done").exists()
     assert Path("output/.dubbing_done").exists()
+    burn_steps = pipeline.get_steps("burn")
+    assert len(burn_steps) == 1
+    assert burn_steps[0][0] == "Merging subtitles into the video"
     monkeypatch.setattr(
         pipeline,
         "import_module",
@@ -559,3 +563,45 @@ def test_nested_progress_scope_and_log_event_ring_buffer(tmp_path, monkeypatch):
     finally:
         runner.remove_listener(events.append)
         TaskRunner._current = prev_current
+
+
+def test_get_task_utterances_asr_words_fallback_and_raw_backfill(client):
+    ws = TaskWorkspace(Path("output") / "asr_stage_task")
+    ws.ensure_dirs()
+    ws.save_words(
+        [
+            {"text": "are", "start": 0.0, "end": 0.2},
+            {"text": "you", "start": 0.2, "end": 0.4},
+            {"text": "ready", "start": 0.4, "end": 0.7},
+            {"text": "for", "start": 1.5, "end": 1.7},
+            {"text": "destiny", "start": 1.7, "end": 2.2},
+        ]
+    )
+
+    res = client.get("/api/tasks/asr_stage_task/utterances")
+    assert res.status_code == 200
+    utts = res.json()["utterances"]
+    assert len(utts) == 2
+    assert utts[0]["src_raw"] == "are you ready"
+    assert utts[0]["gap_after"] == 0.8
+    assert utts[1]["src_raw"] == "for destiny"
+
+    ws.save_utterances(
+        [
+            {
+                "id": 0,
+                "word_span": [0, 3],
+                "start": 0.0,
+                "end": 0.7,
+                "gap_after": 0.8,
+                "src": "Are you ready?",
+                "tgt": "你准备好了吗？",
+            }
+        ]
+    )
+    res2 = client.get("/api/tasks/asr_stage_task/utterances")
+    assert res2.status_code == 200
+    utts2 = res2.json()["utterances"]
+    assert len(utts2) == 1
+    assert utts2[0]["src_raw"] == "are you ready"
+    assert utts2[0]["src_punct"] == "Are you ready?"

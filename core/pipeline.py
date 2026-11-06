@@ -51,6 +51,8 @@ SUBTITLE_STEPS = [
         "Cutting and aligning long subtitles",
         ("_5_split_sub.split_for_sub_main", "_6_gen_sub.align_timestamp_main"),
     ),
+]
+BURN_STEPS = [
     ("Merging subtitles into the video", ("_7_sub_into_vid.merge_subtitles_to_video",)),
 ]
 # Only the source subtitles: no translation and no video
@@ -223,10 +225,12 @@ def _finish(marker):
 
 def get_steps(stage="subtitles", dubbing=False):
     """Build a fresh sequential plan. Existing intermediate files support retries."""
-    if stage not in {"transcribe", "subtitles", "dubbing", "all"}:
+    if stage not in {"transcribe", "subtitles", "burn", "dubbing", "all"}:
         raise ValueError(f"Unknown stage: {stage}")
     if stage == "transcribe":
         return [(label, partial(_execute, calls)) for label, calls in TRANSCRIBE_STEPS]
+    if stage == "burn":
+        return [(label, partial(_execute, calls)) for label, calls in BURN_STEPS]
     stages = []
     if stage in {"subtitles", "all"}:
         stages.append((SUBTITLE_STEPS, _TEXT_DONE_MARKER, "Finalize subtitle outputs"))

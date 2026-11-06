@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import platform
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -186,7 +187,7 @@ runner.add_listener(_on_runner_event)
 
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    stage: Literal["transcribe", "subtitles", "dubbing", "all"] | None = None
+    stage: Literal["transcribe", "subtitles", "burn", "dubbing", "all"] | None = None
     dubbing: bool | None = None
     target_language: str | None = Field(default=None, min_length=1)
     source_language: str | None = Field(default=None, min_length=1)
@@ -690,7 +691,7 @@ def run_task(task_id: str, request: RunRequest):
     manifest = ws.load_manifest()
     exec_info = manifest.get("execution") or {}
     saved_stage = exec_info.get("desired_stage")
-    effective_stage: Literal["transcribe", "subtitles", "dubbing", "all"] = (
+    effective_stage: Literal["transcribe", "subtitles", "burn", "dubbing", "all"] = (
         request.stage
         if request.stage is not None
         else (
@@ -722,10 +723,17 @@ def run_task(task_id: str, request: RunRequest):
     needs_dubbing = effective_stage == "dubbing" or (
         effective_stage == "all" and effective_dub
     )
-    if needs_dubbing and media_kind in ("audio", "subtitle"):
+    if (needs_dubbing or effective_stage == "burn") and media_kind in (
+        "audio",
+        "subtitle",
+    ):
         raise HTTPException(
             422, "Input without a video supports subtitles only, as in the UI."
         )
+    if effective_stage == "burn" and not all(
+        (ws.root / name).exists() for name in ("src.srt", "trans.srt")
+    ):
+        raise HTTPException(409, "Generate subtitles before burning video.")
     if effective_stage == "dubbing" and not (
         ws.has_utterances()
         or all((ws.root / name).exists() for name in ("src.srt", "trans.srt"))
@@ -742,12 +750,13 @@ def run_task(task_id: str, request: RunRequest):
     if request.glossary_domain is not None:
         overrides["glossary_domain"] = request.glossary_domain.strip()
     manifest["config_override"] = overrides
-    manifest.setdefault("execution", {}).update(
-        {
-            "desired_stage": effective_stage,
-            "dubbing_enabled": needs_dubbing,
-        }
-    )
+    if effective_stage != "burn":
+        manifest.setdefault("execution", {}).update(
+            {
+                "desired_stage": effective_stage,
+                "dubbing_enabled": needs_dubbing,
+            }
+        )
     ws.save_manifest(manifest)
 
     raw_steps = list(get_steps(effective_stage, needs_dubbing))
@@ -885,10 +894,113 @@ def update_task_terms(task_id: str, request: TermsUpdateRequest):
     }
 
 
+def _clean_asr_word_token(raw_text: Any) -> str:
+    tok = str(raw_text or "").strip().strip(',.;:?!，。；：？！"“”')
+    return tok if tok else str(raw_text or "").strip()
+
+
+def _build_asr_segments_from_words(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not words:
+        return []
+    asr_utts: list[dict[str, Any]] = []
+    chunk_start_idx = 0
+    n = len(words)
+    for i, w in enumerate(words):
+        is_last = i == n - 1
+        gap = (
+            max(0.0, float(words[i + 1].get("start", 0.0)) - float(w.get("end", 0.0)))
+            if not is_last
+            else 0.0
+        )
+        word_count = i - chunk_start_idx + 1
+        if is_last or gap >= 0.4 or word_count >= 20:
+            slice_words = words[chunk_start_idx : i + 1]
+            token_items = []
+            raw_tokens = []
+            for offset, sw in enumerate(slice_words):
+                clean_tok = _clean_asr_word_token(sw.get("text", sw.get("word", "")))
+                if not clean_tok:
+                    continue
+                raw_tokens.append(clean_tok)
+                token_items.append(
+                    {
+                        "idx": chunk_start_idx + offset,
+                        "text": clean_tok,
+                        "start": round(float(sw.get("start", 0.0)), 3),
+                        "end": round(float(sw.get("end", 0.0)), 3),
+                    }
+                )
+            raw_str = " ".join(raw_tokens)
+            s_sec = round(float(slice_words[0].get("start", 0.0)), 3)
+            e_sec = round(float(slice_words[-1].get("end", s_sec)), 3)
+            asr_utts.append(
+                {
+                    "id": len(asr_utts),
+                    "word_span": [chunk_start_idx, i + 1],
+                    "start": s_sec,
+                    "end": e_sec,
+                    "gap_after": round(gap, 3),
+                    "cut_reason": "pause"
+                    if (not is_last and gap >= 0.4)
+                    else ("eof" if is_last else "window"),
+                    "src_raw": raw_str,
+                    "src_punct": "",
+                    "src": raw_str,
+                    "tgt": "",
+                    "words": token_items,
+                    "sub_cues": [],
+                }
+            )
+            chunk_start_idx = i + 1
+    return asr_utts
+
+
 @app.get("/api/tasks/{task_id}/utterances")
 def get_task_utterances(task_id: str):
     ws = _resolve_workspace(task_id)
-    return {"utterances": ws.load_utterances()}
+    words = ws.load_words()
+    asr_segments = _build_asr_segments_from_words(words)
+    utts = ws.load_utterances()
+    if utts:
+        for u in utts:
+            span = u.get("word_span")
+            raw_from_words = ""
+            if (
+                words
+                and isinstance(span, list)
+                and len(span) == 2
+                and 0 <= int(span[0]) < int(span[1]) <= len(words)
+            ):
+                raw_from_words = " ".join(
+                    _clean_asr_word_token(sw.get("text", sw.get("word", "")))
+                    for sw in words[int(span[0]) : int(span[1])]
+                    if _clean_asr_word_token(sw.get("text", sw.get("word", "")))
+                )
+            existing_raw = str(u.get("src_raw") or "").strip()
+            if raw_from_words:
+                u["src_raw"] = raw_from_words
+            elif (
+                not existing_raw
+                or existing_raw == str(u.get("src_punct") or u.get("src") or "").strip()
+            ):
+                base_src = (
+                    existing_raw
+                    or str(u.get("src_punct") or u.get("src") or "").strip()
+                )
+                cleaned_raw = re.sub(r"[,.;:?!，。；：？！\"“”]+", "", base_src)
+                u["src_raw"] = re.sub(r"\s+", " ", cleaned_raw).strip()
+            if not str(u.get("src_punct") or "").strip():
+                u["src_punct"] = str(u.get("src") or "").strip()
+        return {
+            "utterances": utts,
+            "asr_segments": asr_segments,
+            "total_words": len(words),
+        }
+    return {
+        "utterances": asr_segments,
+        "asr_segments": asr_segments,
+        "total_words": len(words),
+    }
 
 
 @app.put("/api/tasks/{task_id}/utterances")

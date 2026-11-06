@@ -86,7 +86,6 @@ def test_video_translation_and_dubbing(configured_workdir):
     for filename in (
         "src.srt",
         "trans.srt",
-        "output_sub.mp4",
         "output_dub.mp4",
         "dub.mp3",
     ):

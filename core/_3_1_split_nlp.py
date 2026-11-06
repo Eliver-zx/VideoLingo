@@ -1071,8 +1071,13 @@ def _build_utterances_from_sentences(
         )
         src_raw = join_words(
             [
-                str(w.get("text", w.get("word", ""))).strip()
+                str(w.get("text", w.get("word", "")))
+                .strip()
+                .strip(',.;:?!，。；：？！"“”')
                 for w in word_dicts[w_start:w_end]
+                if str(w.get("text", w.get("word", "")))
+                .strip()
+                .strip(',.;:?!，。；：？！"“”')
             ],
             joiner,
         ).strip()

@@ -170,7 +170,6 @@
 
     function resetWorkbenchToEmpty() {
       isEditingTerms = false;
-      isEditingUtterances = false;
       setAutosaveStatus('idle', '');
       document.getElementById('detail-task-title').textContent = '未选择任务';
       const detailBadge = document.getElementById('detail-task-badge');
@@ -181,6 +180,7 @@
       document.getElementById('detail-domain-pill').textContent = '无领域';
       REAL_TASK_TERMS.splice(0, REAL_TASK_TERMS.length);
       STREAM_TABLE_ROWS.splice(0, STREAM_TABLE_ROWS.length);
+      ASR_SEGMENT_ROWS.splice(0, ASR_SEGMENT_ROWS.length);
       SUBTITLE_CUE_ROWS.splice(0, SUBTITLE_CUE_ROWS.length);
       PIPELINE_BATCH_NODES.splice(
         0,
@@ -204,7 +204,6 @@
       const resetEdits = Boolean(options.resetEdits);
       if (resetEdits) {
         isEditingTerms = false;
-        isEditingUtterances = false;
         setAutosaveStatus('idle', '');
       }
       const task = REAL_TASKS.find(x => x.id === taskId);
@@ -387,10 +386,10 @@
         }
 
         const utts = Array.isArray(uttsData.utterances) ? uttsData.utterances : [];
+        const asrSegments = Array.isArray(uttsData.asr_segments) ? uttsData.asr_segments : [];
+        const totalWords = Number(uttsData.total_words || 0);
         const sd = taskData.stages_done || {};
-        if (!preserveEdits || !isEditingUtterances) {
-          rebuildStreamRowsFromUtterances(utts, sd);
-        }
+        rebuildStreamRowsFromUtterances(utts, sd, asrSegments, totalWords);
 
         syncPipelineRibbon(card, STREAM_TABLE_ROWS.length, REAL_TASK_TERMS.length);
         if (card.state === 'paused' && card.stateLabel === '待审术语') {
@@ -400,9 +399,7 @@
         }
         renderBatchTree();
         syncDetailPane();
-        if (!preserveEdits || !isEditingUtterances) {
-          renderStreamTable();
-        }
+        renderStreamTable();
         if (!preserveEdits || !isEditingTerms) {
           renderTaskTerms();
         }
@@ -411,19 +408,86 @@
       }
     }
 
-    function rebuildStreamRowsFromUtterances(utts, sd = {}) {
+    function formatPunctuatedHtml(punctText, rawText) {
+      const text = String(punctText || '');
+      if (!text) return '';
+      const rawTokens = new Set(
+        String(rawText || '')
+          .split(/\s+/)
+          .filter(Boolean)
+      );
+      return escapeHtml(text).replace(
+        /([,.;:?!，。；：？！—–…]+|\b[A-Z][a-zA-Z0-9'-]*\b)/g,
+        match => {
+          if (/^[,.;:?!，。；：？！—–…]+$/.test(match)) {
+            return `<span class="punct-chip">${match}</span>`;
+          }
+          if (rawTokens.size > 0 && !rawTokens.has(match) && rawTokens.has(match.toLowerCase())) {
+            return `<span class="case-fix-token" title="大小写/专有名词恢复">${match}</span>`;
+          }
+          return match;
+        }
+      );
+    }
+
+    function rebuildStreamRowsFromUtterances(utts, sd = {}, asrSegments = [], totalWordsArg = 0) {
+      const mappedAsrRows = (Array.isArray(asrSegments) ? asrSegments : []).map((seg, i) => {
+        const numStr = `#${String(i + 1).padStart(3, '0')}`;
+        const startSec = Number(seg.start || 0);
+        const endSec = Number(seg.end || startSec);
+        const durSec = Math.max(0, endSec - startSec);
+        const gapAfter = Number(seg.gap_after || 0);
+        const span = Array.isArray(seg.word_span) && seg.word_span.length >= 2
+          ? [Number(seg.word_span[0] || 0), Number(seg.word_span[1] || 0)]
+          : null;
+        const wordsList = Array.isArray(seg.words) ? seg.words : [];
+        const srcRawText = String(seg.src_raw || seg.src || '');
+        const wordCount = wordsList.length > 0
+          ? wordsList.length
+          : (span && span[1] > span[0] ? (span[1] - span[0]) : (srcRawText ? srcRawText.trim().split(/\s+/).length : 0));
+        return {
+          idx: numStr,
+          startSec,
+          endSec,
+          durSec,
+          gapAfter,
+          cutReason: String(seg.cut_reason || (gapAfter >= 0.4 ? 'pause' : 'window')),
+          wordSpan: span,
+          wordCount,
+          srcRawText,
+          words: wordsList,
+          uttIndex: i,
+        };
+      });
+      ASR_SEGMENT_ROWS.splice(0, ASR_SEGMENT_ROWS.length, ...mappedAsrRows);
+
       if (utts.length > 0) {
         const cueRows = [];
+        let totalWords = Number(totalWordsArg || 0);
+        let countedWords = 0;
         const rows = utts.map((u, i) => {
           const numStr = `#${String(i + 1).padStart(3, '0')}`;
-          const tcStr = `${formatTimecode(u.start)} → ${formatTimecode(u.end)}`;
+          const startSec = Number(u.start || 0);
+          const endSec = Number(u.end || startSec);
+          const durSec = Math.max(0, endSec - startSec);
+          const gapAfter = Number(u.gap_after || 0);
+          const tcStr = `${formatTimecode(startSec)} → ${formatTimecode(endSec)}`;
           const rawCues = Array.isArray(u.sub_cues) && u.sub_cues.length > 0
             ? u.sub_cues
             : [{ src: u.src, tgt: u.tgt, start: u.start, end: u.end }];
           const hasCues = rawCues.length > 1;
           const srcText = String(u.src ?? '');
+          const srcRawText = String(u.src_raw || srcText);
+          const srcPunctText = String(u.src_punct || srcText);
           const tgtText = String(u.tgt ?? '');
           const ttsText = String(u.tts_text ?? tgtText);
+          const span = Array.isArray(u.word_span) && u.word_span.length >= 2
+            ? [Number(u.word_span[0] || 0), Number(u.word_span[1] || 0)]
+            : null;
+          const wordCount = span && span[1] > span[0]
+            ? (span[1] - span[0])
+            : (srcRawText ? srcRawText.trim().split(/\s+/).length : 0);
+          countedWords += wordCount;
           const cues = rawCues.map(c => ({
             src: String(c.src ?? '').trim(),
             tgt: String(c.tgt ?? c.trans ?? c.text ?? '').trim(),
@@ -454,7 +518,15 @@
             stage: hasCues ? 'split' : 'translate',
             isSplit: hasCues,
             tc: tcStr,
+            startSec,
+            endSec,
+            durSec,
+            gapAfter,
+            wordSpan: span,
+            wordCount,
             meta: hasCues ? `拆为 ${cues.length} 轴` : '单轴',
+            srcRawText,
+            srcPunctText,
             srcText,
             tgtText,
             ttsText,
@@ -465,15 +537,18 @@
             rawUtt: { ...u, src: srcText, tgt: tgtText, tts_text: ttsText },
           };
         });
+        if (!totalWords) totalWords = countedWords;
         STREAM_TABLE_ROWS.splice(0, STREAM_TABLE_ROWS.length, ...rows);
         SUBTITLE_CUE_ROWS.splice(0, SUBTITLE_CUE_ROWS.length, ...cueRows);
 
         const splitRows = rows.filter(r => r.isSplit);
+        const asrSegCount = ASR_SEGMENT_ROWS.length || rows.length;
+        const asrMeta = sd.asr ? (totalWords > 0 ? `${totalWords} 词` : '已完成') : '未开始';
         const baseNodes = [
           { id: 'runtime-log', kind: 'summary', step: 'LOG', title: '运行日志', meta: `${REAL_SYSTEM_LOGS.length} 条`, time: '', desc: '运行日志 (runtime.log)' },
           { id: 'all', kind: 'summary', step: 'SRT', title: '成品字幕', meta: `${cueRows.length} 轴`, time: '', desc: `成品字幕 (${cueRows.length} 轴)` },
-          { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: sd.asr ? '已完成' : '未开始', time: '', desc: '语音识别' },
-          { id: 'nlp-all', kind: 'step', step: '02', title: '标点与断句', meta: `${utts.length} 句`, time: '', desc: `标点与断句 (${utts.length} 句)` },
+          { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: asrMeta, time: '', desc: `语音识别 · 词级时间戳对齐 (${totalWords} 词 / ${asrSegCount} 段声学切片)` },
+          { id: 'nlp-all', kind: 'step', step: '02', title: '标点与断句', meta: `${utts.length} 句`, time: '', desc: `标点恢复与语义断句 (${utts.length} 句)` },
           { id: 'terms-03', kind: 'step', step: '03', title: '术语审校', meta: `${REAL_TASK_TERMS.length} 条`, time: '', desc: '术语审校' },
           { id: 'step-04-group', kind: 'step', step: '04', title: '字幕翻译', meta: `${utts.length} 句`, time: '', desc: `字幕翻译 (${utts.length} 句)` },
           { id: 'split-04', kind: 'step', step: '05', title: '长句拆行', meta: `${splitRows.length} 句`, time: '', desc: `长句拆行 (${splitRows.length} 句 → ${cueRows.length} 轴)` },
@@ -1018,10 +1093,7 @@
           const cues = Array.isArray(r.cues) && r.cues.length > 0 ? r.cues : [{ src: r.srcText, tgt: r.tgtText }];
           return `
             <tr data-utt-row="${r.uttIndex}">
-              <td class="sub-idx">
-                <div>${escapeHtml(r.idx)}</div>
-                <div class="sub-split-badge">${cues.length} 轴</div>
-              </td>
+              <td class="sub-idx">${escapeHtml(r.idx)}</td>
               <td>
                 <div class="sub-cue-group">
                   ${cues.map((c, cIdx) => `
@@ -1041,47 +1113,71 @@
         return;
       }
 
-      // 3. 01 语音识别 / 02 标点与断句 / 04 字幕翻译: 展示全部句子
-      const isTranslationStage = activeBatchId === 'step-04-group';
+      // 3. 01 语音识别 / 02 标点与断句 / 04 字幕翻译: 按阶段特征展示
+      const isAsrStage = activeBatchId === 'asr-01';
+      const isNlpStage = activeBatchId === 'nlp-all';
       if (thead) {
-        thead.innerHTML = isTranslationStage
-          ? `
+        if (isAsrStage) {
+          thead.innerHTML = `
+            <tr>
+              <th style="width:56px;">#</th>
+              <th>语音识别词级对齐流（ForcedAligner 词级时间戳 · 无句界与标点）</th>
+            </tr>
+          `;
+        } else if (isNlpStage) {
+          thead.innerHTML = `
+            <tr>
+              <th style="width:56px;">#</th>
+              <th>标点恢复与语义断句（上：恢复标点与句界 · 下：识别原始词流对比）</th>
+            </tr>
+          `;
+        } else {
+          thead.innerHTML = `
             <tr>
               <th style="width:56px;">#</th>
               <th>翻译结果（上译文 / 下原文）</th>
             </tr>
-          `
-          : `
-            <tr>
-              <th style="width:56px;">#</th>
-              <th style="width:47%;">原文</th>
-              <th style="width:47%;">译文</th>
-            </tr>
           `;
+        }
       }
 
-      const filtered = STREAM_TABLE_ROWS.filter(r => {
+      const sourceRows = (isAsrStage && ASR_SEGMENT_ROWS.length > 0)
+        ? ASR_SEGMENT_ROWS
+        : STREAM_TABLE_ROWS;
+
+      const filtered = sourceRows.filter(r => {
         if (!query) return true;
         const srcPlain = String(r.srcText ?? r.srcHtml ?? '').toLowerCase();
+        const rawPlain = String(r.srcRawText ?? '').toLowerCase();
+        const punctPlain = String(r.srcPunctText ?? '').toLowerCase();
         const tgtPlain = String(r.tgtText ?? r.tgtHtml ?? '').toLowerCase();
         return (
           r.idx.toLowerCase().includes(query) ||
           srcPlain.includes(query) ||
-          tgtPlain.includes(query)
+          rawPlain.includes(query) ||
+          punctPlain.includes(query) ||
+          (!isAsrStage && !isNlpStage && tgtPlain.includes(query))
         );
       });
 
-      document.getElementById('stream-row-counter').textContent = query
-        ? `${filtered.length} / ${STREAM_TABLE_ROWS.length} 句`
-        : `共 ${filtered.length} 句`;
+      const totalWordsCount = sourceRows.reduce((acc, r) => acc + (r.wordCount || 0), 0);
+      if (isAsrStage) {
+        document.getElementById('stream-row-counter').textContent = query
+          ? `${filtered.length} / ${sourceRows.length} 段`
+          : `共 ${sourceRows.length} 段声学切片 · ${totalWordsCount} 词`;
+      } else {
+        document.getElementById('stream-row-counter').textContent = query
+          ? `${filtered.length} / ${sourceRows.length} 句`
+          : `共 ${filtered.length} 句`;
+      }
 
       if (filtered.length === 0) {
         const emptyHint = REAL_TASKS.length === 0
           ? '当前暂无任务，请点击左上角「新建」导入视频或字幕文件'
-          : (STREAM_TABLE_ROWS.length === 0 ? '当前阶段尚未生成字幕数据' : '未匹配到符合搜索条件的字幕行');
+          : (sourceRows.length === 0 ? '当前阶段尚未生成字幕数据' : '未匹配到符合搜索条件的字幕行');
         tbody.innerHTML = `
           <tr>
-            <td colspan="${isTranslationStage ? 2 : 3}" style="padding:36px 16px; text-align:center; color:var(--text-muted); font-size:var(--fs-xs);">
+            <td colspan="2" style="padding:36px 16px; text-align:center; color:var(--text-muted); font-size:var(--fs-xs);">
               ${escapeHtml(emptyHint)}
             </td>
           </tr>
@@ -1089,18 +1185,39 @@
         return;
       }
 
-      if (isTranslationStage) {
+      if (isAsrStage) {
         tbody.innerHTML = filtered.map(r => {
           const uIdx = Number(r.uttIndex ?? 0);
-          const srcVal = r.srcText !== undefined ? r.srcText : (r.rawUtt?.src ?? '');
-          const tgtVal = r.tgtText !== undefined ? r.tgtText : (r.rawUtt?.tgt ?? '');
+          const rawVal = String(r.srcRawText || r.srcText || '').trim();
+          const wordsList = Array.isArray(r.words) && r.words.length > 0
+            ? r.words
+            : rawVal.split(/\s+/).filter(Boolean).map(t => ({ text: t, start: null }));
+          return `
+          <tr data-utt-row="${uIdx}">
+            <td class="sub-idx">${escapeHtml(r.idx)}</td>
+            <td>
+              <div class="asr-token-stream">
+                ${wordsList.map(w => `<span class="asr-word-chip"><span class="asr-word-text">${escapeHtml(w.text)}</span>${w.start !== null && w.start !== undefined ? `<span class="asr-word-ts">${Number(w.start).toFixed(2)}s</span>` : ''}</span>`).join(' ')}
+              </div>
+            </td>
+          </tr>
+        `;
+        }).join('');
+        return;
+      }
+
+      if (isNlpStage) {
+        tbody.innerHTML = filtered.map(r => {
+          const uIdx = Number(r.uttIndex ?? 0);
+          const punctVal = String(r.srcPunctText || r.srcText || '').trim();
+          const rawVal = String(r.srcRawText || '').trim();
           return `
           <tr data-utt-row="${uIdx}">
             <td class="sub-idx">${escapeHtml(r.idx)}</td>
             <td>
               <div class="sub-bilingual-stack">
-                <div class="sub-line-tgt">${escapeHtml(tgtVal || '—')}</div>
-                <div class="sub-line-src">${escapeHtml(srcVal)}</div>
+                <div class="sub-line-tgt">${formatPunctuatedHtml(punctVal, rawVal)}</div>
+                ${rawVal ? `<div class="sub-line-src mono">原始词流：${escapeHtml(rawVal)}</div>` : ''}
               </div>
             </td>
           </tr>
@@ -1116,8 +1233,12 @@
         return `
         <tr data-utt-row="${uIdx}">
           <td class="sub-idx">${escapeHtml(r.idx)}</td>
-          <td class="sub-src">${escapeHtml(srcVal)}</td>
-          <td class="sub-tgt">${escapeHtml(tgtVal)}</td>
+          <td>
+            <div class="sub-bilingual-stack">
+              <div class="sub-line-tgt">${escapeHtml(tgtVal || '—')}</div>
+              <div class="sub-line-src">${escapeHtml(srcVal)}</div>
+            </div>
+          </td>
         </tr>
       `;
       }).join('');
@@ -1740,7 +1861,7 @@
         try {
           await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/run`, {
             method: 'POST',
-            body: JSON.stringify({ stage: 'subtitles', dubbing: false }),
+            body: JSON.stringify({ stage: 'burn', dubbing: false }),
           });
           await loadBackendTasks();
         } catch (err) {
@@ -2258,10 +2379,13 @@
       loadDomainDictEntries(activeGlossaryDomain, e.target.value);
     });
 
-    document.querySelectorAll('.settings-nav .settings-nav-item').forEach(link => {
-      link.addEventListener('click', () => {
-        document.querySelectorAll('.settings-nav .settings-nav-item').forEach(l => l.classList.remove('active'));
-        link.classList.add('active');
+    const settingsNavItems = document.querySelectorAll('.settings-nav-item');
+    settingsNavItems.forEach(item => {
+      item.addEventListener('click', () => {
+        const target = item.getAttribute('data-settings-page');
+        settingsNavItems.forEach(i => i.classList.toggle('active', i === item));
+        document.querySelectorAll('.settings-page').forEach(page => page.classList.toggle('hidden', page.id !== target));
+        document.querySelector('.settings-canvas').scrollTop = 0;
       });
     });
 
@@ -2275,6 +2399,7 @@
       document.querySelectorAll('#asr-engine-panels [data-asr-panel]').forEach(p => {
         p.classList.toggle('hidden', p.getAttribute('data-asr-panel') !== targetPanel);
       });
+      document.getElementById('asr-panel-title').textContent = `${asrRuntimeSelect.selectedOptions[0].textContent} 参数`;
     }
     asrRuntimeSelect.addEventListener('change', syncAsrRuntimePanel);
 
@@ -2284,6 +2409,7 @@
       document.querySelectorAll('#tts-engine-panels [data-tts-panel]').forEach(p => {
         p.classList.toggle('hidden', p.getAttribute('data-tts-panel') !== val);
       });
+      document.getElementById('tts-panel-title').textContent = `${ttsMethodSelect.selectedOptions[0].textContent} 参数`;
     }
     ttsMethodSelect.addEventListener('change', syncTtsMethodPanel);
 
@@ -2393,59 +2519,6 @@
         reportActionError('MAI', err);
       }
       btn.textContent = '探测';
-    });
-
-    document.getElementById('btn-reset-default-config')?.addEventListener('click', async () => {
-      const defaults = {
-        max_workers: 4,
-        target_language: '简体中文',
-        'api.reasoning_effort': 'none',
-        reflect_translate: false,
-        pause_before_translate: false,
-        pause_after_translate: false,
-        vocal_separation_model: 'scnet',
-        'whisper.language': 'en',
-        'whisper.runtime': 'local',
-        'whisper.backend': 'qwen',
-        'whisper.qwen_model': '1.7b',
-        'whisper.qwen_engine': 'auto',
-        burn_subtitles: true,
-        ffmpeg_gpu: true,
-        'subtitle.max_length': 75,
-        'subtitle.target_multiplier': 1.3,
-        'subtitle.sub_video_subtitles': 'translation',
-        'subtitle.dub_video_subtitles': 'translation',
-        'speed_factor.min': 1.0,
-        'speed_factor.accept': 1.15,
-        'speed_factor.max': 1.28,
-        min_subtitle_duration: 1.8,
-        tolerance: 1.2,
-        ytb_resolution: '1080',
-        'audio.raw_sample_rate': 44100,
-        'audio.raw_bitrate': '192k',
-      };
-      Object.entries(defaults).forEach(([k, v]) => {
-        document.querySelectorAll(`[data-cfg="${k}"]`).forEach(el => {
-          if (el.type === 'checkbox') el.checked = Boolean(v);
-          else el.value = String(v);
-        });
-      });
-      document.getElementById('btn-reset-ass-style')?.click();
-      syncAsrRuntimePanel();
-      syncTtsMethodPanel();
-      if (isBackendConnected) {
-        try {
-          await apiFetch('/api/config', {
-            method: 'PUT',
-            body: JSON.stringify({ updates: defaults }),
-          });
-          setAutosaveStatus('completed', '已恢复默认');
-        } catch (err) {
-          reportActionError('CONFIG', err);
-        }
-      } else {
-        setAutosaveStatus('completed', '已恢复默认');
-      }
     });
 
     document.getElementById('btn-fetch-models')?.addEventListener('click', async () => {
@@ -2692,7 +2765,7 @@
             autoResizeThemeTextarea(themeInput);
           }
           renderTaskTerms();
-        } else if ((artifact === 'utterances' || artifact === 'words' || artifact === 'subtitles') && !isEditingUtterances && !editing) {
+        } else if ((artifact === 'utterances' || artifact === 'words' || artifact === 'subtitles') && !editing) {
           const uttsData = await apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/utterances`);
           if (taskId !== activeTaskId) return;
           const card = REAL_TASKS.find(x => x.id === taskId);
@@ -2709,7 +2782,7 @@
         }
         renderBatchTree();
         syncDetailPane();
-        if (!editing && !isEditingUtterances) {
+        if (!editing) {
           renderStreamTable();
         }
       } catch (err) {

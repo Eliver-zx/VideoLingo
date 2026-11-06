@@ -8,7 +8,6 @@
     let activeTaskId = '';
     let activeBatchId = 'all';
     let isEditingTerms = false;
-    let isEditingUtterances = false;
 
     /** @type {Array<{src: string, tgt: string, aliases: string[], note: string, fix_source: boolean, promote: boolean}>} */
     const REAL_TASK_TERMS = [];
@@ -28,6 +27,9 @@
 
     /** @type {Array<Record<string, any>>} */
     const STREAM_TABLE_ROWS = [];
+
+    /** @type {Array<Record<string, any>>} */
+    const ASR_SEGMENT_ROWS = [];
 
     /** @type {Array<Record<string, any>>} */
     const SUBTITLE_CUE_ROWS = [];
