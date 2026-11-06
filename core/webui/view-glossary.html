@@ -17,7 +17,7 @@
           <input id="new-domain-input" type="text" class="mono" placeholder="例如：poe2 或 unreal5">
         </label>
         <div class="row" style="justify-content:space-between;">
-          <button type="button" class="primary xs" id="btn-create-domain">+ 新建</button>
+          <button type="button" class="primary xs" id="btn-create-domain"><svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新建</span></button>
           <button type="button" class="danger xs" id="btn-delete-domain">删除</button>
         </div>
       </div>
@@ -36,7 +36,7 @@
           <div class="row">
             <input id="glossary-csv-search" type="text" placeholder="搜索术语…" style="inline-size:200px;">
             <button type="button" class="xs" id="btn-import-glossary">导入</button>
-            <button type="button" class="xs" id="btn-add-domain-term">+ 新增</button>
+            <button type="button" class="xs" id="btn-add-domain-term"><svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新增</span></button>
             <button type="button" class="primary xs" id="btn-save-domain-csv">保存</button>
           </div>
         </div>
@@ -45,11 +45,11 @@
           <table class="data-grid">
             <thead>
               <tr>
-                <th style="width:16%;">原文</th>
-                <th style="width:15%;">译名</th>
-                <th style="width:32%;">术语别名</th>
-                <th style="width:27%;">备注</th>
-                <th style="width:10%;">操作</th>
+                <th style="width:18%;">原文</th>
+                <th style="width:16%;">译名</th>
+                <th style="width:36%;">术语别名</th>
+                <th style="width:30%;">备注</th>
+                <th style="width:64px; text-align:right;">操作</th>
               </tr>
             </thead>
             <tbody id="domain-csv-tbody"></tbody>
@@ -57,16 +57,13 @@
         </div>
       </section>
 
-      <!-- 下半屏：权威大词典 dict.json 实时检索与一键转入 -->
+      <!-- 下半屏：内置词典 dict.json 检索 -->
       <section class="glossary-pane" style="border-block-end:none;">
         <div class="subpane-bar">
           <div class="row">
             <strong style="font-size:var(--fs-sm); font-weight:600;">内置词典</strong>
             <span class="field-key">dict.json</span>
-            <span class="status-pill" id="dict-count-pill">
-              <span class="status-dot"></span>
-              <span>未挂载词典</span>
-            </span>
+            <span class="status-label" id="dict-count-pill">未挂载词典</span>
           </div>
           <div class="row">
             <input id="dict-search-input" type="text" value="" placeholder="搜索词典…" style="inline-size:240px;">
@@ -78,9 +75,8 @@
           <table class="data-grid">
             <thead>
               <tr>
-                <th style="width:32%;">原文</th>
-                <th style="width:42%;">译名</th>
-                <th style="width:26%;">操作</th>
+                <th style="width:40%;">原文</th>
+                <th style="width:60%;">译名</th>
               </tr>
             </thead>
             <tbody id="dict-search-tbody"></tbody>

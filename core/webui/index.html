@@ -14,28 +14,15 @@
        ========================================================= -->
   <header class="topbar">
     <div class="brand-cluster">
-      <svg class="brand-logo" viewBox="0 0 28 28" fill="none" aria-hidden="true">
-        <defs>
-          <linearGradient id="vl-play-grad" x1="3" y1="3" x2="24" y2="25" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stop-color="#4f46e5"/>
-            <stop offset="100%" stop-color="#3730a3"/>
-          </linearGradient>
-        </defs>
-        <!-- Video Play Prism (Repo Brand Silhouette) -->
-        <path d="M4.5 5.6C4.5 3.95 6.32 2.94 7.72 3.81L23.58 13.61C24.91 14.43 24.91 16.37 23.58 17.19L7.72 26.99C6.32 27.86 4.5 26.85 4.5 25.2V5.6Z" transform="translate(0 -1.4)" fill="url(#vl-play-grad)"/>
-        <!-- Lingo Speech Bubble Overlay -->
-        <path d="M13.6 7.8C17.47 7.8 20.6 10.35 20.6 13.5C20.6 16.65 17.47 19.2 13.6 19.2C12.48 19.2 11.42 18.98 10.48 18.59L7.3 20.35V16.12C6.85 15.32 6.6 14.43 6.6 13.5C6.6 10.35 9.73 7.8 13.6 7.8Z" fill="#ffffff"/>
-        <!-- Speech Dots -->
-        <circle cx="10.7" cy="12.7" r="1.15" fill="#312e81"/>
-        <circle cx="13.6" cy="13.5" r="1.15" fill="#4f46e5"/>
-        <circle cx="16.5" cy="14.3" r="1.15" fill="#312e81"/>
+      <svg class="brand-logo" viewBox="0 0 28 28" aria-hidden="true">
+        <rect x="1" y="1" width="26" height="26" rx="6" fill="#1f1b18"/>
+        <rect x="5.5" y="11" width="2.2" height="6" rx="1.1" fill="#c4501b"/>
+        <rect x="9.3" y="7.5" width="2.2" height="13" rx="1.1" fill="#c4501b"/>
+        <rect x="13.1" y="10" width="2.2" height="8" rx="1.1" fill="#c4501b"/>
+        <rect x="17.4" y="11.4" width="5.6" height="2.2" rx="1.1" fill="#ffffff"/>
+        <rect x="17.4" y="15.2" width="3.8" height="2.2" rx="1.1" fill="#ffffff" fill-opacity="0.6"/>
       </svg>
       <span class="brand-name">VideoLingo</span>
-      <span class="brand-divider"></span>
-      <span class="status-pill" id="top-runner-badge">
-        <span class="status-dot" style="color:var(--text-muted);"></span>
-        <span>暂无任务</span>
-      </span>
     </div>
 
     <nav class="segmented-track" aria-label="主工作区切换">
@@ -55,10 +42,7 @@
     </nav>
 
     <div class="topbar-actions">
-      <span class="status-pill completed" id="autosave-indicator">
-        <span class="status-dot"></span>
-        <span>已就绪</span>
-      </span>
+      <span class="status-label" id="autosave-indicator" aria-live="polite"></span>
     </div>
   </header>
 
@@ -92,11 +76,8 @@
       <div class="task-command-bar">
         <div class="task-identity">
           <h1 class="task-heading" id="detail-task-title">未选择任务</h1>
-          <span class="status-pill" id="detail-task-badge">
-            <span class="status-dot"></span>
-            <span>等待导入</span>
-          </span>
-          <span class="status-pill mono" id="detail-domain-pill">无领域</span>
+          <span class="status-label" id="detail-task-badge">等待导入</span>
+          <span class="tag mono" id="detail-domain-pill">无领域</span>
         </div>
 
         <div class="toolbar-group">
@@ -108,7 +89,7 @@
             <svg class="icon" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             <span>打开目录</span>
           </button>
-          <button type="button" class="emerald" id="btn-burn-sub-video" title="压制双语字幕视频 output_sub.mp4">
+          <button type="button" id="btn-burn-sub-video" title="压制双语字幕视频 output_sub.mp4">
             <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
             <span>烧录字幕</span>
           </button>
@@ -120,7 +101,10 @@
             <svg class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             <span>预览</span>
           </button>
-          <button type="button" class="danger xs" id="btn-stop-task">停止</button>
+          <button type="button" class="danger" id="btn-stop-task">
+            <svg class="icon" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+            <span>停止</span>
+          </button>
         </div>
       </div>
 
@@ -214,7 +198,7 @@
               </div>
               <div class="row" style="gap:8px;">
                 <input id="task-terms-search" type="text" placeholder="搜索术语…" style="inline-size:160px;">
-                <button type="button" class="xs" id="btn-add-task-term">+ 新增</button>
+                <button type="button" class="xs" id="btn-add-task-term"><svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新增</span></button>
                 <button type="button" class="xs" id="btn-batch-fix-on">全选修正</button>
                 <button type="button" class="xs" id="btn-batch-promote-on">全选入库</button>
                 <button type="button" class="xs" id="btn-rerun-term-extract">重新提取</button>
@@ -451,7 +435,7 @@
           <input id="new-domain-input" type="text" class="mono" placeholder="例如：poe2 或 unreal5">
         </label>
         <div class="row" style="justify-content:space-between;">
-          <button type="button" class="primary xs" id="btn-create-domain">+ 新建</button>
+          <button type="button" class="primary xs" id="btn-create-domain"><svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新建</span></button>
           <button type="button" class="danger xs" id="btn-delete-domain">删除</button>
         </div>
       </div>
@@ -470,7 +454,7 @@
           <div class="row">
             <input id="glossary-csv-search" type="text" placeholder="搜索术语…" style="inline-size:200px;">
             <button type="button" class="xs" id="btn-import-glossary">导入</button>
-            <button type="button" class="xs" id="btn-add-domain-term">+ 新增</button>
+            <button type="button" class="xs" id="btn-add-domain-term"><svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新增</span></button>
             <button type="button" class="primary xs" id="btn-save-domain-csv">保存</button>
           </div>
         </div>
@@ -479,11 +463,11 @@
           <table class="data-grid">
             <thead>
               <tr>
-                <th style="width:16%;">原文</th>
-                <th style="width:15%;">译名</th>
-                <th style="width:32%;">术语别名</th>
-                <th style="width:27%;">备注</th>
-                <th style="width:10%;">操作</th>
+                <th style="width:18%;">原文</th>
+                <th style="width:16%;">译名</th>
+                <th style="width:36%;">术语别名</th>
+                <th style="width:30%;">备注</th>
+                <th style="width:64px; text-align:right;">操作</th>
               </tr>
             </thead>
             <tbody id="domain-csv-tbody"></tbody>
@@ -491,16 +475,13 @@
         </div>
       </section>
 
-      <!-- 下半屏：权威大词典 dict.json 实时检索与一键转入 -->
+      <!-- 下半屏：内置词典 dict.json 检索 -->
       <section class="glossary-pane" style="border-block-end:none;">
         <div class="subpane-bar">
           <div class="row">
             <strong style="font-size:var(--fs-sm); font-weight:600;">内置词典</strong>
             <span class="field-key">dict.json</span>
-            <span class="status-pill" id="dict-count-pill">
-              <span class="status-dot"></span>
-              <span>未挂载词典</span>
-            </span>
+            <span class="status-label" id="dict-count-pill">未挂载词典</span>
           </div>
           <div class="row">
             <input id="dict-search-input" type="text" value="" placeholder="搜索词典…" style="inline-size:240px;">
@@ -512,9 +493,8 @@
           <table class="data-grid">
             <thead>
               <tr>
-                <th style="width:32%;">原文</th>
-                <th style="width:42%;">译名</th>
-                <th style="width:26%;">操作</th>
+                <th style="width:40%;">原文</th>
+                <th style="width:60%;">译名</th>
               </tr>
             </thead>
             <tbody id="dict-search-tbody"></tbody>
@@ -567,10 +547,7 @@
           <div class="row">
             <button type="button" class="xs" id="btn-fetch-models">获取模型列表</button>
             <button type="button" class="primary xs" id="btn-check-llm">测试连接</button>
-            <span class="status-pill" id="llm-check-status">
-              <span class="status-dot"></span>
-              <span>未测试</span>
-            </span>
+            <span class="status-label" id="llm-check-status">未测试</span>
           </div>
         </div>
 

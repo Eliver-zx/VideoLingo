@@ -415,7 +415,6 @@ def test_fastapi_webui_tasks_terms_and_utterances_endpoints(
         # Topbar & Shell
         "VideoLingo",
         'data-theme="light"',
-        'id="top-runner-badge"',
         'id="tab-workbench"',
         'id="nav-task-count"',
         'id="tab-glossary"',

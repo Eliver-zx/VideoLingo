@@ -20,7 +20,6 @@
       inline-size: 26px;
       block-size: 26px;
       flex-shrink: 0;
-      filter: drop-shadow(0 2px 4px rgba(79, 70, 229, 0.2));
     }
 
     .brand-name {
@@ -28,13 +27,6 @@
       font-size: var(--fs-lg);
       letter-spacing: -0.015em;
       color: var(--text-primary);
-    }
-
-    .brand-divider {
-      inline-size: 1px;
-      block-size: 16px;
-      background: var(--border-strong);
-      flex-shrink: 0;
     }
 
     .topbar-actions {
@@ -88,7 +80,7 @@
 
     .task-item {
       padding: 10px 12px;
-      border-radius: 10px;
+      border-radius: var(--radius-md);
       cursor: pointer;
       display: flex;
       flex-direction: column;
@@ -102,7 +94,7 @@
 
     .task-item.active {
       background: var(--bg-pane);
-      box-shadow: 0 0 0 1px var(--border), 0 4px 12px -4px rgba(15, 23, 42, 0.1);
+      box-shadow: 0 0 0 1px var(--border-strong);
     }
 
     .task-item-top {
@@ -139,7 +131,7 @@
     .progress-track {
       block-size: 4px;
       border-radius: 999px;
-      background: rgba(15, 23, 42, 0.07);
+      background: rgba(41, 33, 26, 0.08);
       overflow: hidden;
     }
 
@@ -150,8 +142,8 @@
       transition: inline-size 220ms ease;
     }
 
-    .progress-fill.completed { background: var(--emerald); }
-    .progress-fill.paused { background: #d97706; }
+    .progress-fill.completed { background: var(--text-faint); }
+    .progress-fill.paused { background: var(--blue); }
     .progress-fill.error { background: var(--rose); }
 
     .rail-footer {
@@ -170,7 +162,7 @@
     .settings-canvas {
       background: var(--bg-pane);
       border: 1px solid var(--border);
-      border-radius: 14px;
+      border-radius: var(--radius-lg);
       box-shadow: var(--shadow-sheet);
       overflow: hidden;
       min-inline-size: 0;
@@ -257,7 +249,7 @@
       inline-size: 8px;
       block-size: 8px;
       border-radius: 50%;
-      background: #cbd2dc;
+      background: var(--border-strong);
       flex-shrink: 0;
     }
 
@@ -266,7 +258,7 @@
     }
 
     .pipe-node.done .pipe-dot {
-      background: var(--emerald);
+      background: var(--text-muted);
     }
 
     .pipe-node.active {
@@ -276,23 +268,21 @@
 
     .pipe-node.active .pipe-dot {
       background: var(--brand);
-      box-shadow: 0 0 0 4px var(--brand-soft);
     }
 
     .pipe-node.paused {
-      color: var(--amber);
+      color: var(--blue);
       font-weight: 600;
     }
 
     .pipe-node.paused .pipe-dot {
-      background: #d97706;
-      box-shadow: 0 0 0 4px var(--amber-soft);
+      background: var(--blue);
     }
 
     .pipe-num {
       font-family: var(--font-mono);
       font-size: var(--fs-2xs);
-      color: #98a2b3;
+      color: var(--text-faint);
     }
 
     .pipe-stat {
@@ -309,7 +299,7 @@
     }
 
     .pipe-line.done {
-      background: rgba(5, 150, 105, 0.4);
+      background: var(--text-faint);
     }
 
     /* =========================================================
@@ -319,11 +309,9 @@
       max-inline-size: 600px;
       inline-size: calc(100vw - 48px);
       max-block-size: calc(100vh - 48px);
-      border-radius: 18px;
-      border: 1px solid rgba(148, 163, 184, 0.28);
-      box-shadow:
-        0 32px 80px -16px rgba(15, 23, 42, 0.24),
-        0 8px 24px -8px rgba(15, 23, 42, 0.08);
+      border-radius: var(--radius-lg);
+      border: 0;
+      box-shadow: var(--shadow-modal);
       background: var(--bg-pane);
       overflow: hidden;
     }
@@ -352,7 +340,7 @@
       inline-size: 32px;
       block-size: 32px;
       padding: 0;
-      border-radius: 999px;
+      border-radius: var(--radius-sm);
       color: var(--text-muted);
     }
 
@@ -421,8 +409,8 @@
       align-items: center;
       gap: 12px;
       padding: 10px 10px 10px 16px;
-      border-radius: 12px;
-      border: 1.5px dashed var(--border-strong);
+      border-radius: var(--radius-md);
+      border: 1px dashed var(--border-hover);
       background: var(--bg-sidebar);
       transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
     }
@@ -432,17 +420,17 @@
       border-style: solid;
       border-color: var(--brand);
       background: var(--bg-pane);
-      box-shadow: 0 0 0 4px var(--brand-soft);
+      box-shadow: 0 0 0 1px var(--brand);
     }
 
     .nt-drop.has-file {
       border-style: solid;
-      border-color: var(--emerald);
+      border-color: var(--border-strong);
       background: var(--bg-pane);
     }
 
     .nt-drop.has-file .nt-drop-icon {
-      color: var(--emerald-bright);
+      color: var(--brand);
     }
 
     .nt-drop-icon {
@@ -471,7 +459,7 @@
     .nt-browse {
       block-size: 34px;
       padding-inline: 14px;
-      border-radius: 8px;
+      border-radius: var(--radius-sm);
       font-size: 12.5px;
       flex-shrink: 0;
     }
@@ -482,15 +470,15 @@
       gap: 12px;
       block-size: 42px;
       padding-inline: 16px;
-      border-radius: 10px;
-      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-strong);
       background: var(--bg-pane);
-      transition: border-color 160ms ease, box-shadow 160ms ease;
+      transition: border-color 120ms ease, box-shadow 120ms ease;
     }
 
     .nt-affix:focus-within {
       border-color: var(--brand);
-      box-shadow: 0 0 0 4px var(--brand-soft);
+      box-shadow: 0 0 0 1px var(--brand);
     }
 
     .nt-affix-label {
@@ -532,13 +520,8 @@
     .nt-lang input[type="text"] {
       block-size: 42px;
       padding-inline: 13px;
-      border-radius: 10px;
-      border-color: var(--border);
+      border-radius: var(--radius-md);
       font-size: 13.5px;
-      box-shadow: none;
-    }
-    .nt-lang input[type="text"]:focus {
-      box-shadow: 0 0 0 4px var(--brand-soft);
     }
 
     .nt-lang-arrow {
@@ -558,8 +541,8 @@
       inline-size: 100%;
       block-size: 42px;
       padding-inline: 13px 11px;
-      border-radius: 10px;
-      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-strong);
       background: var(--bg-pane);
       box-shadow: none;
       display: flex;
@@ -569,20 +552,19 @@
       font-size: 13.5px;
       font-weight: 500;
       color: var(--text-primary);
-      transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+      transition: border-color 120ms ease, box-shadow 120ms ease;
     }
 
     .nt-select-trigger:hover {
       background: var(--bg-pane);
-      border-color: var(--border-strong);
-      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      border-color: var(--border-hover);
     }
 
     .nt-dropdown.open .nt-select-trigger,
     .nt-select-trigger:focus-visible {
       outline: none;
       border-color: var(--brand);
-      box-shadow: 0 0 0 4px var(--brand-soft);
+      box-shadow: 0 0 0 1px var(--brand);
     }
 
     .nt-select-value {
@@ -601,7 +583,7 @@
       color: var(--text-muted);
       background: var(--bg-subtle);
       padding: 2px 6px;
-      border-radius: 5px;
+      border-radius: var(--radius-xs);
       line-height: 1.2;
     }
 
@@ -615,37 +597,28 @@
 
     .nt-dropdown.open .nt-select-chevron {
       transform: rotate(180deg);
-      color: var(--brand);
     }
 
     .nt-menu {
       position: absolute;
-      inset-block-start: calc(100% + 6px);
+      inset-block-start: calc(100% + 4px);
       inset-inline: 0;
       z-index: 30;
       background: var(--bg-pane);
-      border: 1px solid rgba(148, 163, 184, 0.32);
-      border-radius: 12px;
-      box-shadow:
-        0 16px 36px -6px rgba(15, 23, 42, 0.16),
-        0 4px 12px -2px rgba(15, 23, 42, 0.06);
-      padding: 5px;
+      border: 0;
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-pop);
+      padding: 4px;
       opacity: 0;
       visibility: hidden;
       pointer-events: none;
-      transform: translateY(-4px) scale(0.98);
-      transform-origin: top center;
-      transition:
-        opacity 140ms ease,
-        transform 160ms cubic-bezier(0.22, 1, 0.36, 1),
-        visibility 140ms;
+      transition: opacity 100ms ease, visibility 100ms;
     }
 
     .nt-dropdown.open .nt-menu {
       opacity: 1;
       visibility: visible;
       pointer-events: auto;
-      transform: translateY(0) scale(1);
     }
 
     .nt-menu-list {
@@ -658,10 +631,10 @@
 
     .nt-menu-item {
       inline-size: 100%;
-      block-size: 34px;
+      block-size: 32px;
       padding-inline: 10px;
       border: 0;
-      border-radius: 8px;
+      border-radius: var(--radius-sm);
       background: transparent;
       box-shadow: none;
       display: flex;
@@ -683,8 +656,8 @@
     }
 
     .nt-menu-item.active {
-      background: rgba(79, 70, 229, 0.075);
-      color: var(--brand-bright);
+      background: var(--bg-subtle);
+      color: var(--text-primary);
       font-weight: 600;
     }
 
@@ -699,11 +672,6 @@
       font-weight: 400;
       color: var(--text-muted);
       flex-shrink: 0;
-    }
-
-    .nt-menu-item.active .nt-item-sub {
-      color: var(--brand);
-      font-weight: 500;
     }
 
     .nt-menu-sep {
@@ -731,8 +699,8 @@
       flex-direction: column;
       gap: 4px;
       padding: 14px 40px 14px 16px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-strong);
       background: var(--bg-pane);
       cursor: pointer;
       user-select: none;
@@ -740,7 +708,7 @@
     }
 
     .nt-option:hover {
-      border-color: var(--border-strong);
+      border-color: var(--border-hover);
     }
 
     .nt-option::after {
@@ -758,7 +726,7 @@
 
     .nt-option:has(input:checked) {
       border-color: var(--brand);
-      background: rgba(79, 70, 229, 0.035);
+      background: rgba(196, 80, 27, 0.04);
       box-shadow: 0 0 0 1px var(--brand);
     }
 
@@ -807,15 +775,13 @@
     }
 
     .nt-btn {
-      block-size: 38px;
-      padding-inline: 16px;
-      border-radius: 10px;
+      block-size: 34px;
+      padding-inline: 14px;
       font-size: 13px;
     }
 
     .nt-btn.primary {
-      padding-inline: 20px;
-      box-shadow: 0 2px 8px rgba(79, 70, 229, 0.25);
+      padding-inline: 18px;
     }
 
     @media (max-width: 560px) {
@@ -944,7 +910,7 @@
       font-family: var(--font-mono);
       font-size: var(--fs-2xs);
       font-weight: 500;
-      color: #98a2b3;
+      color: var(--text-faint);
       min-inline-size: 22px;
       flex-shrink: 0;
     }
@@ -995,7 +961,7 @@
     .batch-time {
       font-family: var(--font-mono);
       font-size: 11px;
-      color: #98a2b3;
+      color: var(--text-faint);
       min-inline-size: 30px;
       text-align: right;
     }
@@ -1094,7 +1060,7 @@
       display: inline-block;
       margin-block-start: 4px;
       padding: 1px 6px;
-      border-radius: 999px;
+      border-radius: var(--radius-xs);
       background: var(--bg-subtle);
       color: var(--text-secondary);
       font-family: var(--font-sans);
@@ -1128,9 +1094,9 @@
       justify-content: center;
       inline-size: 18px;
       block-size: 18px;
-      border-radius: 5px;
-      background: var(--brand-soft);
-      color: var(--brand-bright);
+      border-radius: var(--radius-xs);
+      background: var(--bg-subtle);
+      color: var(--text-secondary);
       font-family: var(--font-mono);
       font-size: 10.5px;
       font-weight: 600;
@@ -1182,7 +1148,7 @@
       display: inline-block;
       padding: 0 6px;
       margin-inline: 1px;
-      border-radius: 5px;
+      border-radius: var(--radius-xs);
       background: var(--brand-soft);
       color: var(--brand-bright);
       border: 1px solid var(--brand-border);
@@ -1196,7 +1162,7 @@
       justify-content: center;
       padding: 0 5px;
       margin-inline: 3px;
-      border-radius: 5px;
+      border-radius: var(--radius-xs);
       background: var(--amber-soft);
       color: var(--amber);
       border: 1px solid var(--amber-border);
@@ -1210,9 +1176,9 @@
       display: inline-block;
       padding: 0 5px;
       margin-inline: 2px;
-      border-radius: 5px;
-      background: var(--emerald-soft);
-      color: var(--emerald-bright);
+      border-radius: var(--radius-xs);
+      background: var(--bg-subtle);
+      color: var(--text-secondary);
       font-family: var(--font-mono);
       font-weight: 500;
     }

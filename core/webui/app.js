@@ -72,8 +72,8 @@
     function setAutosaveStatus(state, text) {
       const saveBadge = document.getElementById('autosave-indicator');
       if (!saveBadge) return;
-      saveBadge.className = `status-pill ${state}`;
-      saveBadge.innerHTML = `<span class="status-dot"></span><span>${escapeHtml(text)}</span>`;
+      saveBadge.className = `status-label ${state}`;
+      saveBadge.textContent = text;
     }
 
     // =========================================================================
@@ -126,30 +126,9 @@
     // =========================================================================
     // 3. 左侧任务队列轨渲染与切换
     // =========================================================================
-    function updateTopRunnerBadge() {
-      const badge = document.getElementById('top-runner-badge');
-      if (!badge) return;
-      if (REAL_TASKS.length === 0) {
-        badge.innerHTML = `<span class="status-dot" style="color:var(--text-muted);"></span><span>暂无任务</span>`;
-        return;
-      }
-      const runningCount = REAL_TASKS.filter(t => t.rawState === 'running' || t.rawState === 'stopping').length;
-      const queuedCount = REAL_TASKS.filter(t => t.rawState === 'queued').length;
-      const pausedCount = REAL_TASKS.filter(t => t.rawState === 'paused').length;
-      if (runningCount > 0) {
-        const qSuffix = queuedCount > 0 ? ` · ${queuedCount} 个排队` : '';
-        badge.innerHTML = `<span class="status-dot" style="color:var(--brand-bright);"></span><span>${runningCount} 个任务运行中${qSuffix}</span>`;
-      } else if (pausedCount > 0) {
-        badge.innerHTML = `<span class="status-dot" style="color:var(--amber);"></span><span>${pausedCount} 个任务待审校</span>`;
-      } else {
-        badge.innerHTML = `<span class="status-dot" style="color:var(--emerald-bright);"></span><span>共 ${REAL_TASKS.length} 个任务就绪</span>`;
-      }
-    }
-
     function renderTaskRail() {
       const box = document.getElementById('task-rail-list');
       document.getElementById('nav-task-count').textContent = String(REAL_TASKS.length);
-      updateTopRunnerBadge();
       if (REAL_TASKS.length === 0) {
         box.innerHTML = `
           <div style="padding:28px 14px; text-align:center; color:var(--text-muted); font-size:var(--fs-xs); line-height:1.6;">
@@ -166,10 +145,7 @@
           <div class="task-item ${active}" data-task-id="${escapeAttr(t.id)}">
             <div class="task-item-top">
               <span class="task-item-name" title="${escapeAttr(t.title)}">${escapeHtml(t.title)}</span>
-              <span class="status-pill ${pillClass}">
-                <span class="status-dot"></span>
-                <span>${escapeHtml(t.stateLabel)}</span>
-              </span>
+              <span class="status-label ${pillClass}">${escapeHtml(t.stateLabel)}</span>
             </div>
             <div class="task-item-meta">
               <span class="mono">${escapeHtml(t.domain || '无领域')}</span>
@@ -195,12 +171,12 @@
     function resetWorkbenchToEmpty() {
       isEditingTerms = false;
       isEditingUtterances = false;
-      setAutosaveStatus('completed', '已就绪');
+      setAutosaveStatus('idle', '');
       document.getElementById('detail-task-title').textContent = '未选择任务';
       const detailBadge = document.getElementById('detail-task-badge');
       if (detailBadge) {
-        detailBadge.className = 'status-pill';
-        detailBadge.innerHTML = '<span class="status-dot"></span><span>等待导入</span>';
+        detailBadge.className = 'status-label';
+        detailBadge.textContent = '等待导入';
       }
       document.getElementById('detail-domain-pill').textContent = '无领域';
       REAL_TASK_TERMS.splice(0, REAL_TASK_TERMS.length);
@@ -229,7 +205,7 @@
       if (resetEdits) {
         isEditingTerms = false;
         isEditingUtterances = false;
-        setAutosaveStatus('completed', '已就绪');
+        setAutosaveStatus('idle', '');
       }
       const task = REAL_TASKS.find(x => x.id === taskId);
       if (!task) {
@@ -1245,11 +1221,11 @@
       const subStepStr = String(exec.sub_step || '').trim();
       const pillClass = card.state === 'completed' ? 'completed' : (card.state === 'paused' ? 'paused' : (card.state === 'error' ? 'error' : (isRunning ? 'running' : 'paused')));
       if (detailBadge) {
-        detailBadge.className = `status-pill ${pillClass}`;
+        detailBadge.className = `status-label ${pillClass}`;
         const badgeLabel = isRunning && subStepStr
           ? `${card.stateLabel || '运行中'} · ${subStepStr}`
           : (card.stateLabel || '就绪');
-        detailBadge.innerHTML = `<span class="status-dot"></span><span>${escapeHtml(badgeLabel)}</span>`;
+        detailBadge.textContent = badgeLabel;
       }
 
       const activeStage1 = isRunning && !sd.asr && (curStepStr.includes('transcription') || !curStepStr);
@@ -1360,7 +1336,7 @@
 
       if (filtered.length === 0) {
         const emptyHint = REAL_TASK_TERMS.length === 0
-          ? '当前任务暂无提取的术语，可点击右上角「+ 新增」手动添加或「重新提取」'
+          ? '当前任务暂无提取的术语，可点击右上角「新增」手动添加或「重新提取」'
           : '未匹配到符合搜索条件的术语';
         tbody.innerHTML = `
           <tr>
@@ -1384,7 +1360,7 @@
                   <button type="button" class="alias-del" data-del-alias="${idx}:${aIdx}" title="移除别名">×</button>
                 </span>
               `).join('')}
-              <input type="text" class="alias-add-input mono" placeholder="+ 添加别名" data-add-alias="${idx}">
+              <input type="text" class="alias-add-input mono" placeholder="添加别名…" data-add-alias="${idx}">
             </div>
           </td>
           <td><input type="text" class="cell-input" value="${escapeAttr(t.note)}" placeholder="选填备注" data-term-field="note" data-idx="${idx}"></td>
@@ -1884,15 +1860,13 @@
           const hint = d.has_dict
             ? `${d.terms_count || 0} 条术语 · ${dictLabel}`
             : `${d.terms_count || 0} 条术语`;
-          const pillClass = idx === 0 ? 'status-pill completed' : 'status-pill';
-          const pillText = idx === 0 ? '默认' : '可用';
           return `
             <div class="domain-item ${active}" data-domain="${escapeAttr(d.domain)}">
               <div style="min-inline-size:0;">
                 <strong class="mono" style="font-size:var(--fs-sm); display:block;">${escapeHtml(d.domain)}</strong>
                 <div class="field-hint" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(hint)}</div>
               </div>
-              <span class="${pillClass}">${pillText}</span>
+              ${idx === 0 ? '<span class="tag">默认</span>' : ''}
             </div>
           `;
         }).join('');
@@ -1909,11 +1883,9 @@
       const dictPill = document.getElementById('dict-count-pill');
       if (dictPill) {
         if (activeMeta?.has_dict) {
-          dictPill.className = 'status-pill completed';
-          dictPill.innerHTML = `<span class="status-dot"></span><span>${Number(activeMeta.dict_count || 0).toLocaleString()} 词</span>`;
+          dictPill.textContent = `${Number(activeMeta.dict_count || 0).toLocaleString()} 词`;
         } else {
-          dictPill.className = 'status-pill';
-          dictPill.innerHTML = `<span class="status-dot"></span><span>未挂载词典</span>`;
+          dictPill.textContent = '未挂载词典';
         }
       }
 
@@ -2066,7 +2038,7 @@
       if (rows.length === 0) {
         const emptyHint = !activeGlossaryDomain
           ? '请先在左侧选择或新建一个领域词表'
-          : (list.length === 0 ? '当前领域暂无自定义术语，可点击右上角「导入」或「+ 新增」' : '未匹配到符合搜索条件的自定义术语');
+          : (list.length === 0 ? '当前领域暂无自定义术语，可点击右上角「导入」或「新增」' : '未匹配到符合搜索条件的自定义术语');
         tbody.innerHTML = `
           <tr>
             <td colspan="5" style="padding:28px 16px; text-align:center; color:var(--text-muted); font-size:var(--fs-xs);">
@@ -2088,11 +2060,17 @@
                   <button type="button" class="alias-del" data-del-csv-alias="${idx}:${aIdx}" title="移除别名">×</button>
                 </span>
               `).join('')}
-              <input type="text" class="alias-add-input mono" placeholder="+ 添加别名" data-add-csv-alias="${idx}">
+              <input type="text" class="alias-add-input mono" placeholder="添加别名…" data-add-csv-alias="${idx}">
             </div>
           </td>
           <td><input type="text" class="cell-input" value="${escapeAttr(t.note)}" placeholder="选填备注" data-csv-field="note" data-idx="${idx}"></td>
-          <td><button type="button" class="danger xs" data-del-csv="${idx}">删除</button></td>
+          <td>
+            <div class="term-actions">
+              <button type="button" class="term-icon-btn is-del" data-del-csv="${idx}" title="移除该条术语" aria-label="移除术语">
+                <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+          </td>
         </tr>
       `).join('');
 
@@ -2261,31 +2239,19 @@
           : '未匹配到符合搜索条件的词条';
         tbody.innerHTML = `
           <tr>
-            <td colspan="3" style="padding:28px 16px; text-align:center; color:var(--text-muted); font-size:var(--fs-xs);">
+            <td colspan="2" style="padding:28px 16px; text-align:center; color:var(--text-muted); font-size:var(--fs-xs);">
               ${escapeHtml(emptyHint)}
             </td>
           </tr>
         `;
         return;
       }
-      tbody.innerHTML = matched.map((item, i) => `
+      tbody.innerHTML = matched.map(item => `
         <tr>
           <td class="mono" style="font-weight:600;">${escapeHtml(item.k)}</td>
-          <td style="color:var(--emerald-bright); font-weight:600;">${escapeHtml(item.v)}</td>
-          <td><button type="button" class="xs" data-promote-dict="${i}">+ 加入自定义术语</button></td>
+          <td style="color:var(--brand-bright); font-weight:600;">${escapeHtml(item.v)}</td>
         </tr>
       `).join('');
-
-      tbody.querySelectorAll('[data-promote-dict]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const item = matched[Number(btn.getAttribute('data-promote-dict'))];
-          const list = getActiveDomainTerms();
-          if (item && !list.some(x => x.src === item.k)) {
-            list.unshift({ src: item.k, tgt: item.v, aliases: [], note: '来自内置词典', fix_source: false, promote: true });
-            renderDomainCsvTable();
-          }
-        });
-      });
     }
 
     document.getElementById('dict-search-input').addEventListener('input', e => {
@@ -2486,7 +2452,10 @@
       const baseUrl = document.querySelector('[data-cfg="api.base_url"]')?.value || '';
       const apiKey = document.querySelector('[data-cfg="api.key"]')?.value || '';
       const statusEl = document.getElementById('llm-check-status');
-      if (statusEl) statusEl.textContent = '正在获取模型列表…';
+      if (statusEl) {
+        statusEl.className = 'status-label';
+        statusEl.textContent = '正在获取模型列表…';
+      }
       try {
         const res = await apiFetch('/api/llm/models', {
           method: 'POST',
@@ -2501,9 +2470,13 @@
         }
         if (statusEl) {
           statusEl.textContent = ok ? `已获取 ${res.models.length} 个模型` : (res.error || res.message || '获取失败');
+          statusEl.className = ok ? 'status-label' : 'status-label error';
         }
       } catch (err) {
-        if (statusEl) statusEl.textContent = `获取模型失败: ${err.message}`;
+        if (statusEl) {
+          statusEl.textContent = `获取模型失败: ${err.message}`;
+          statusEl.className = 'status-label error';
+        }
       }
     });
 
@@ -2513,7 +2486,10 @@
       const model = document.querySelector('[data-cfg="api.model"]')?.value || '';
       const reasoningEffort = document.querySelector('[data-cfg="api.reasoning_effort"]')?.value || 'none';
       const statusEl = document.getElementById('llm-check-status');
-      if (statusEl) statusEl.textContent = '正在检测连通性…';
+      if (statusEl) {
+        statusEl.className = 'status-label';
+        statusEl.textContent = '正在检测连通性…';
+      }
       try {
         const res = await apiFetch('/api/llm/check', {
           method: 'POST',
@@ -2522,12 +2498,12 @@
         const ok = Boolean(res.valid ?? res.ok);
         if (statusEl) {
           statusEl.textContent = ok ? '连通正常' : `检测失败: ${res.error || res.message || '不可用'}`;
-          statusEl.style.color = ok ? 'var(--emerald-bright)' : 'var(--rose)';
+          statusEl.className = ok ? 'status-label' : 'status-label error';
         }
       } catch (err) {
         if (statusEl) {
           statusEl.textContent = `检测异常: ${err.message}`;
-          statusEl.style.color = 'var(--rose)';
+          statusEl.className = 'status-label error';
         }
       }
     });
