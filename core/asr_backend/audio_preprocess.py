@@ -79,24 +79,34 @@ def _ffmpeg_has_encoder(encoder_name: str) -> bool:
         return False
 
 
-# Raw extraction quality: 32 kHz / 128 kbps preserves bandwidth for Demucs vocals and voice cloning reference clips.
+# Raw extraction quality:
+# - High-quality mode (dubbing / Demucs vocal separation): 32-44.1 kHz stereo / 128-192 kbps
+# - Lightweight ASR mode (subtitles / transcription only): 16 kHz mono / 48 kbps (~75% smaller)
 RAW_AUDIO_SAMPLE_RATE = 32000
 RAW_AUDIO_BITRATE = "128k"
+ASR_AUDIO_SAMPLE_RATE = 16000
+ASR_AUDIO_BITRATE = "48k"
 
 
-def raw_audio_settings():
-    """Sample rate and MP3 bitrate for raw.mp3; the keys are optional so old config.yaml files keep working."""
-    sample_rate = int(load_key_or("audio.raw_sample_rate", RAW_AUDIO_SAMPLE_RATE))
-    bitrate = str(load_key_or("audio.raw_bitrate", RAW_AUDIO_BITRATE))
+def raw_audio_settings(high_quality: bool = True) -> tuple[int, str, int]:
+    """Sample rate, MP3 bitrate, and channel count for raw.mp3."""
+    if not high_quality:
+        key_name = "audio.asr_sample_rate"
+        sample_rate = int(load_key_or(key_name, ASR_AUDIO_SAMPLE_RATE))
+        bitrate = str(load_key_or("audio.asr_bitrate", ASR_AUDIO_BITRATE))
+        channels = 1
+    else:
+        key_name = "audio.raw_sample_rate"
+        sample_rate = int(load_key_or(key_name, RAW_AUDIO_SAMPLE_RATE))
+        bitrate = str(load_key_or("audio.raw_bitrate", RAW_AUDIO_BITRATE))
+        channels = 2
     if sample_rate < 16000:
-        raise ValueError(
-            "audio.raw_sample_rate must be at least 16000 Hz for speech recognition"
-        )
-    return sample_rate, bitrate
+        raise ValueError(f"{key_name} must be at least 16000 Hz for speech recognition")
+    return sample_rate, bitrate, channels
 
 
-def _raw_audio_command(input_file: str):
-    sample_rate, bitrate = raw_audio_settings()
+def _raw_audio_command(input_file: str, high_quality: bool = True):
+    sample_rate, bitrate, channels = raw_audio_settings(high_quality=high_quality)
     raw_out = resolve_task_path(_RAW_AUDIO_FILE)
     if _ffmpeg_has_encoder("libmp3lame"):
         return [
@@ -116,7 +126,7 @@ def _raw_audio_command(input_file: str):
             "-ar",
             str(sample_rate),
             "-ac",
-            "2",
+            str(channels),
             "-metadata",
             "encoding=UTF-8",
             raw_out,
@@ -142,7 +152,7 @@ def _raw_audio_command(input_file: str):
         "-ar",
         str(sample_rate),
         "-ac",
-        "2",
+        str(channels),
         "-f",
         "wav",
         raw_out,
@@ -173,28 +183,41 @@ def normalize_audio_volume(
     return output_path
 
 
-def convert_video_to_audio(video_file: str):
+def convert_video_to_audio(
+    video_file: str, *, high_quality: bool = True, force: bool = False
+):
     audio_dir = resolve_task_path(_AUDIO_DIR)
     raw_file = resolve_task_path(_RAW_AUDIO_FILE)
     os.makedirs(audio_dir, exist_ok=True)
-    if not os.path.exists(raw_file):
-        rprint("[blue]🎬➡️🎵 Converting to high quality audio with FFmpeg ......[/blue]")
+    if force or not os.path.exists(raw_file):
+        mode_desc = (
+            "high quality audio"
+            if high_quality
+            else "lightweight ASR audio (16kHz mono)"
+        )
+        rprint(f"[blue]🎬➡️🎵 Converting to {mode_desc} with FFmpeg ......[/blue]")
         subprocess.run(
-            _raw_audio_command(video_file), check=True, stderr=subprocess.PIPE
+            _raw_audio_command(video_file, high_quality=high_quality),
+            check=True,
+            stderr=subprocess.PIPE,
         )
         rprint(
             f"[green]🎬➡️🎵 Converted <{video_file}> to <{raw_file}> with FFmpeg\n[/green]"
         )
 
 
-def prepare_audio_for_asr(audio_file: str):
+def prepare_audio_for_asr(
+    audio_file: str, *, high_quality: bool = True, force: bool = False
+):
     audio_dir = resolve_task_path(_AUDIO_DIR)
     raw_file = resolve_task_path(_RAW_AUDIO_FILE)
     os.makedirs(audio_dir, exist_ok=True)
-    if not os.path.exists(raw_file):
+    if force or not os.path.exists(raw_file):
         rprint("[blue]🎵 Preparing uploaded audio for ASR with FFmpeg ......[/blue]")
         subprocess.run(
-            _raw_audio_command(audio_file), check=True, stderr=subprocess.PIPE
+            _raw_audio_command(audio_file, high_quality=high_quality),
+            check=True,
+            stderr=subprocess.PIPE,
         )
         rprint(f"[green]🎵 Prepared <{audio_file}> as <{raw_file}>\n[/green]")
 

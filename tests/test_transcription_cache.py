@@ -32,7 +32,7 @@ class TranscriptionCacheTests(unittest.TestCase):
         self.addCleanup(os.chdir, self.cwd)
         self.media = Path("input.wav")
         self.media.write_bytes(b"synthetic input one")
-        self.whisper = {
+        self.whisper: dict[str, object] = {
             "runtime": "elevenlabs",
             "model": "large-v3",
             "language": "auto",
@@ -207,7 +207,7 @@ class TranscriptionCacheTests(unittest.TestCase):
         ws._clean_stage_outputs("asr")
         language, prepare = self.run_transcribe(transcriber)
         self.assertEqual(transcriber.call_count, 1)
-        prepare.assert_called_once_with(str(self.media))
+        prepare.assert_called_once_with(str(self.media), high_quality=False)
         language.assert_called_once_with("whisper.detected_language", "en")
         self.assertEqual(expected, ws.load_words())
 

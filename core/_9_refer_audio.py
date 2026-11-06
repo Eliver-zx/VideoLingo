@@ -7,6 +7,7 @@ from core.utils import rprint
 from core.utils.models import (
     _AUDIO_REFERS_DIR,
     _AUDIO_SEGS_DIR,  # noqa: F401
+    _BACKGROUND_AUDIO_FILE,
     _RAW_AUDIO_FILE,
     _VOCAL_AUDIO_FILE,
     resolve_task_path,
@@ -33,8 +34,41 @@ def extract_audio(audio_data, sr, start_time, end_time, out_file):
     sf.write(out_file, audio_data[start:end], sr)
 
 
+def _ensure_high_quality_raw_audio(raw_audio_file: str) -> None:
+    """Upgrade a lightweight 16 kHz mono ASR raw.mp3 to stereo high-quality audio when dubbing runs later."""
+    if not os.path.exists(raw_audio_file):
+        return
+    try:
+        info = sf.info(raw_audio_file)
+    except (OSError, RuntimeError):
+        return
+    if info.samplerate >= 32000 and info.channels >= 2:
+        return
+    from core._1_ytdlp import find_media_file
+    from core.asr_backend.audio_preprocess import (
+        convert_video_to_audio,
+        prepare_audio_for_asr,
+    )
+
+    try:
+        media_file, media_type = find_media_file()
+    except ValueError:
+        return
+    if media_type == "video":
+        convert_video_to_audio(media_file, high_quality=True, force=True)
+    elif media_type == "audio":
+        prepare_audio_for_asr(media_file, high_quality=True, force=True)
+    else:
+        return
+    for stale_stem in (_VOCAL_AUDIO_FILE, _BACKGROUND_AUDIO_FILE):
+        stale_path = resolve_task_path(stale_stem)
+        if os.path.exists(stale_path):
+            os.remove(stale_path)
+
+
 def extract_refer_audio_main():
     raw_audio_file = resolve_task_path(_RAW_AUDIO_FILE)
+    _ensure_high_quality_raw_audio(raw_audio_file)
     vocal_audio_file = resolve_task_path(_VOCAL_AUDIO_FILE)
     refers_dir = resolve_task_path(_AUDIO_REFERS_DIR)
     reference_audio = raw_audio_file

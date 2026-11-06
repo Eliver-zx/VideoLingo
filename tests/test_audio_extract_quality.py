@@ -75,8 +75,76 @@ def test_raw_extraction_uses_v2_quality_by_default(
 
 def test_sample_rate_below_recognition_rate_is_rejected(tmp_path, monkeypatch):
     configure_extraction(monkeypatch, tmp_path, {"audio.raw_sample_rate": 8000})
-    with pytest.raises(ValueError):
-        audio_preprocess.raw_audio_settings()
+    with pytest.raises(ValueError, match="audio.raw_sample_rate"):
+        audio_preprocess.raw_audio_settings(high_quality=True)
+    configure_extraction(monkeypatch, tmp_path, {"audio.asr_sample_rate": 8000})
+    with pytest.raises(ValueError, match="audio.asr_sample_rate"):
+        audio_preprocess.raw_audio_settings(high_quality=False)
+
+
+def test_asr_lightweight_vs_dubbing_high_quality_audio_modes(tmp_path, monkeypatch):
+    """Pure ASR / subtitle mode uses 16 kHz mono 48k MP3, while dubbing / demucs uses stereo high-quality MP3."""
+    from core import _2_asr, _9_refer_audio
+    from core.workspace import TaskWorkspace, workspace_context
+
+    configure_extraction(
+        monkeypatch,
+        tmp_path,
+        {"audio.raw_sample_rate": 44100, "audio.raw_bitrate": "192k"},
+        encoder=True,
+    )
+    ws = TaskWorkspace(tmp_path / "ws_modes")
+    ws.ensure_dirs()
+    video_path = tmp_path / "lecture.mp4"
+    video_path.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    ws.init_from_local_file(video_path, title="Lecture")
+    ws.update_manifest(
+        execution={"desired_stage": "subtitles", "dubbing_enabled": False}
+    )
+
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        subprocess, "run", lambda command, **kwargs: commands.append(command)
+    )
+
+    with workspace_context(ws):
+        # 1. Subtitles-only mode without demucs -> lightweight 16 kHz mono 48k
+        _2_asr.prepare_audio(str(video_path), "video", demucs=False)
+        assert len(commands) == 1
+        cmd_asr = commands[-1]
+        assert cmd_asr[cmd_asr.index("-ar") + 1] == "16000"
+        assert cmd_asr[cmd_asr.index("-ac") + 1] == "1"
+        assert cmd_asr[cmd_asr.index("-b:a") + 1] == "48k"
+
+        # 2. Dubbing enabled -> high-quality 44.1 kHz stereo 192k
+        ws.update_manifest(execution={"desired_stage": "all", "dubbing_enabled": True})
+        _2_asr.prepare_audio(str(video_path), "video", demucs=False)
+        assert len(commands) == 2
+        cmd_dub = commands[-1]
+        assert cmd_dub[cmd_dub.index("-ar") + 1] == "44100"
+        assert cmd_dub[cmd_dub.index("-ac") + 1] == "2"
+        assert cmd_dub[cmd_dub.index("-b:a") + 1] == "192k"
+
+        # 3. _ensure_high_quality_raw_audio upgrades a 16 kHz mono raw.mp3 and removes stale vocal/background stems
+        fake_raw = tmp_path / "raw.mp3"
+        fake_raw.write_bytes(b"fake")
+        stale_vocal = ws.audio_dir / "vocal.mp3"
+        stale_bg = ws.audio_dir / "background.mp3"
+        stale_vocal.write_bytes(b"stale-vocal")
+        stale_bg.write_bytes(b"stale-bg")
+        monkeypatch.setattr(
+            _9_refer_audio.sf,
+            "info",
+            lambda _: type("Info", (), {"samplerate": 16000, "channels": 1})(),
+        )
+        _9_refer_audio._ensure_high_quality_raw_audio(str(fake_raw))
+        assert len(commands) == 3
+        cmd_upg = commands[-1]
+        assert cmd_upg[cmd_upg.index("-ar") + 1] == "44100"
+        assert cmd_upg[cmd_upg.index("-ac") + 1] == "2"
+        assert cmd_upg[cmd_upg.index("-b:a") + 1] == "192k"
+        assert not stale_vocal.exists()
+        assert not stale_bg.exists()
 
 
 def test_ffmpeg_has_encoder_raises_runtime_error_when_ffmpeg_missing(

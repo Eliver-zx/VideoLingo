@@ -20,6 +20,22 @@ from core.utils.models import (
     resolve_task_path,
 )
 from core.asr_backend import transcription_cache as cache
+from core.workspace import get_active_workspace
+
+
+def _needs_high_quality_audio(demucs: bool) -> bool:
+    """Return True when vocal separation or dubbing requires stereo high-sample-rate audio."""
+    if demucs:
+        return True
+    ws = get_active_workspace()
+    if ws.manifest_path.is_file():
+        exec_cfg = ws.load_manifest().get("execution") or {}
+        if (
+            exec_cfg.get("dubbing_enabled")
+            or exec_cfg.get("desired_stage") == "dubbing"
+        ):
+            return True
+    return False
 
 
 def local_backend(whisper):
@@ -40,10 +56,11 @@ WHISPERX_NOT_INSTALLED = (
 
 def prepare_audio(media_file, media_type, demucs):
     """The audio of the input for the recognition and the dubbing. Returns the audio with the voice."""
+    high_quality = _needs_high_quality_audio(bool(demucs))
     if media_type == "video":
-        convert_video_to_audio(media_file)
+        convert_video_to_audio(media_file, high_quality=high_quality)
     else:
-        prepare_audio_for_asr(media_file)
+        prepare_audio_for_asr(media_file, high_quality=high_quality)
 
     # Vocal separation:
     if not demucs:

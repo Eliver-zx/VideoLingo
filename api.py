@@ -113,7 +113,7 @@ def _trigger_shutdown() -> None:
 
 def _on_runner_event(payload: dict[str, Any]) -> None:
     task_id = payload.get("task_id")
-    if task_id:
+    if task_id and payload.get("type") != "task_progress":
         ws = TaskWorkspace(OUTPUT / task_id) if (OUTPUT / task_id).is_dir() else None
         if ws and ws.manifest_path.is_file():
             try:
@@ -121,6 +121,8 @@ def _on_runner_event(payload: dict[str, Any]) -> None:
                     execution={
                         "state": payload.get("state"),
                         "current_step": payload.get("step"),
+                        "sub_step": payload.get("sub_step"),
+                        "sub_progress": payload.get("sub_progress", 0.0),
                         "step_index": payload.get("step_index", -1),
                         "total_steps": payload.get("total_steps", 0),
                         "progress": payload.get("progress", 0.0),
@@ -1497,6 +1499,8 @@ def webui_static_asset(asset_name: str):
 
 def _create_uvicorn_server(host: str = "127.0.0.1", port: int = 8501):
     import uvicorn
+
+    _shutdown_event.clear()
 
     class _VideoLingoServer(uvicorn.Server):
         def handle_exit(self, sig: int, frame: Any) -> None:
