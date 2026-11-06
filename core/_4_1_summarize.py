@@ -255,6 +255,13 @@ _IRREGULAR_LEMMAS: dict[str, str] = {
     "elves": "elf",
     "loaves": "loaf",
     "calves": "calf",
+    "dwarves": "dwarf",
+    "scarves": "scarf",
+    "hooves": "hoof",
+    "wharves": "wharf",
+    "sheaves": "sheaf",
+    "wives": "wife",
+    "staves": "staff",
     "children": "child",
     "men": "man",
     "women": "woman",
@@ -292,6 +299,11 @@ def _fold_text_for_tokens(text: str) -> str:
     s = str(text).replace("’", "'").replace("‘", "'")
     decomposed = unicodedata.normalize("NFKD", s)
     s = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    s = re.sub(
+        r"\b(?:[a-zA-Z]\.){2,}[a-zA-Z]?(?!\w)",
+        lambda m: m.group(0).replace(".", ""),
+        s,
+    )
     s = re.sub(r"(?<=[a-zA-Z0-9])'s\b", "", s, flags=re.IGNORECASE)
     s = re.sub(r"(?<=[a-zA-Z0-9]s)'(?!\w)", "", s, flags=re.IGNORECASE)
     return s
@@ -308,8 +320,6 @@ def _stem_en_token(token: str) -> str:
         return t[:-3] + "y"
     if t.endswith("ied") and len(t) > 4:
         return t[:-3] + "y"
-    if t.endswith("ves") and len(t) > 4:
-        return t[:-3] + "f"
     if (
         t.endswith("es")
         and len(t) > 4
@@ -320,7 +330,7 @@ def _stem_en_token(token: str) -> str:
         base = t[:-2]
         if base in _INVARIANT_WORDS:
             return base
-        if len(base) >= 3 and base[-1] == base[-2] and base[-1] not in "lsz":
+        if len(base) >= 3 and base[-1] == base[-2] and base[-1] not in "lszf":
             return base[:-1]
         if len(base) >= 3:
             return base
@@ -328,7 +338,7 @@ def _stem_en_token(token: str) -> str:
         base = t[:-3]
         if base in _INVARIANT_WORDS:
             return base
-        if len(base) >= 3 and base[-1] == base[-2] and base[-1] not in "lsz":
+        if len(base) >= 3 and base[-1] == base[-2] and base[-1] not in "lszf":
             return base[:-1]
         if len(base) >= 3:
             return base
@@ -383,6 +393,8 @@ def _is_grammatical_inflection_of(cand: str, canonical: str) -> bool:
     if not cand or not canonical:
         return False
     if not canonical.isascii() and cand.isascii():
+        return False
+    if "." in canonical and "." not in cand:
         return False
     _, cand_stems = _tokenize_and_normalize(cand)
     _, canon_stems = _tokenize_and_normalize(canonical)
@@ -1138,6 +1150,20 @@ def _get_kb_index(
                     if st_tuple not in stem_ngram_map:
                         stem_ngram_map[st_tuple] = entry
 
+        for key, entry in kb_entries.items():
+            for al in entry.get("aliases") or []:
+                al_str = str(al).strip()
+                if not al_str:
+                    continue
+                al_low = al_str.lower()
+                if al_low in _KB_STOP_TOKENS or al_low in _KB_CONVERSATIONAL_STOPWORDS:
+                    continue
+                _, al_stems = _tokenize_and_normalize(al_str)
+                if al_stems and len(al_stems) <= 6:
+                    for st_tuple in _stem_key_variants(al_stems):
+                        if st_tuple not in stem_ngram_map:
+                            stem_ngram_map[st_tuple] = entry
+
         kb_data = {
             "entries": kb_entries,
             "exact_lower_map": exact_lower_map,
@@ -1670,7 +1696,8 @@ def _merge_terminology_results(
         custom_by_src_lower[s_low] = entry
         _, stems = _tokenize_and_normalize(src)
         if stems:
-            by_stem_key[tuple(stems)] = tgt
+            for st_var in _stem_key_variants(stems):
+                by_stem_key[st_var] = tgt
 
     for _, res in chunk_results_sorted:
         for raw_term in res.get("terms", []):
@@ -1684,7 +1711,6 @@ def _merge_terminology_results(
             s_low = src.lower()
             aliases = _normalize_aliases(raw_term.get("aliases"), src)
             _, stems = _tokenize_and_normalize(src)
-            stem_tuple = tuple(stems) if stems else ()
 
             custom_key = (
                 s_low
@@ -1704,10 +1730,14 @@ def _merge_terminology_results(
             if custom_key and custom_key in custom_by_src_lower:
                 custom_entry = custom_by_src_lower[custom_key]
                 base_aliases = custom_entry.get("aliases") or []
+                base_aliases_low = {a.lower() for a in base_aliases}
                 cand_aliases = _normalize_aliases(
                     [*([src] if custom_key != s_low else []), *aliases],
                     custom_entry["src"],
                 )
+                new_asr_aliases = [
+                    a for a in cand_aliases if a.lower() not in base_aliases_low
+                ]
 
                 if custom_key not in by_src_lower:
                     canonical_entry = {
@@ -1732,7 +1762,7 @@ def _merge_terminology_results(
                 )
                 if merged_aliases:
                     canonical_entry["aliases"] = merged_aliases
-                    if raw_term.get("fix_source") is not False:
+                    if new_asr_aliases and raw_term.get("fix_source") is not False:
                         canonical_entry["fix_source"] = True
                     for a in merged_aliases:
                         by_alias_lower[a.lower()] = custom_key
@@ -1759,10 +1789,17 @@ def _merge_terminology_results(
                         by_alias_lower[a.lower()] = target_key
                 continue
 
-            if stem_tuple and stem_tuple in by_stem_key:
-                tgt = by_stem_key[stem_tuple]
-            elif stem_tuple:
-                by_stem_key[stem_tuple] = tgt
+            matched_tgt = None
+            if stems:
+                for st_var in _stem_key_variants(stems):
+                    if st_var in by_stem_key:
+                        matched_tgt = by_stem_key[st_var]
+                        break
+            if matched_tgt is not None:
+                tgt = matched_tgt
+            elif stems:
+                for st_var in _stem_key_variants(stems):
+                    by_stem_key.setdefault(st_var, tgt)
 
             entry = {"src": src, "tgt": tgt, "note": note, "source": "task"}
             if aliases:
@@ -1811,6 +1848,52 @@ def _merge_terminology_results(
     }
 
 
+def _attach_scanned_kb_terms(
+    summary_dict: dict,
+    scanned_kb_terms: list[dict[str, Any]] | None = None,
+) -> dict:
+    if not scanned_kb_terms:
+        return summary_dict
+    by_src_lower: dict[str, dict[str, Any]] = {
+        str(t.get("src") or "").strip().lower(): dict(t)
+        for t in (summary_dict.get("terms") or [])
+        if isinstance(t, dict) and str(t.get("src") or "").strip()
+    }
+    for term in scanned_kb_terms:
+        s = str(term.get("src") or "").strip()
+        tg = str(term.get("tgt") or "").strip()
+        if not s or not tg:
+            continue
+        s_low = s.lower()
+        if s_low not in by_src_lower:
+            by_src_lower[s_low] = {
+                "src": s,
+                "tgt": tg,
+                "note": str(term.get("note") or "").strip(),
+                "aliases": _normalize_aliases(term.get("aliases"), s),
+                "fix_source": bool(term.get("fix_source", False)),
+                "source": "task",
+            }
+        else:
+            existing = by_src_lower[s_low]
+            if term.get("fix_source"):
+                existing["fix_source"] = True
+            if not existing.get("note") and term.get("note"):
+                existing["note"] = str(term["note"]).strip()
+            kb_aliases = _normalize_aliases(term.get("aliases"), s)
+            if kb_aliases:
+                merged_al = _normalize_aliases(
+                    [*(existing.get("aliases") or []), *kb_aliases],
+                    str(existing["src"]),
+                )
+                if merged_al:
+                    existing["aliases"] = merged_al
+    return {
+        **summary_dict,
+        "terms": list(by_src_lower.values()),
+    }
+
+
 def _consolidate_terms_with_llm(
     merged_summary: dict,
     chunk_results: list[tuple[int, dict]],
@@ -1822,7 +1905,7 @@ def _consolidate_terms_with_llm(
     """Run an LLM Reduce pass to unify cross-chunk ASR variants and align with authoritative KB candidates."""
     raw_terms = merged_summary.get("terms") or []
     if not raw_terms and not full_text:
-        return merged_summary
+        return _attach_scanned_kb_terms(merged_summary, scanned_kb_terms)
 
     custom_by_low = {
         str(t["src"]).strip().lower(): t for t in custom_terms_list if t.get("src")
@@ -1851,7 +1934,7 @@ def _consolidate_terms_with_llm(
                 has_kb_candidates = True
         enriched_terms.append(item)
 
-    if kb_data and kb_data.get("entries") and full_text:
+    if scanned_kb_terms is None and kb_data and kb_data.get("entries") and full_text:
         scanned_kb_hits = _scan_text_for_kb_terms(full_text, kb_data, max_hints=35)
         for kb_hit in scanned_kb_hits:
             hit_low = kb_hit["src"].lower()
@@ -1870,9 +1953,9 @@ def _consolidate_terms_with_llm(
                 has_kb_candidates = True
 
     if not enriched_terms:
-        return merged_summary
+        return _attach_scanned_kb_terms(merged_summary, scanned_kb_terms)
     if len(chunk_results) <= 1 and not has_kb_candidates:
-        return merged_summary
+        return _attach_scanned_kb_terms(merged_summary, scanned_kb_terms)
 
     check_cancel()
     prompt = get_consolidate_terms_prompt(
@@ -1891,14 +1974,14 @@ def _consolidate_terms_with_llm(
         rprint(
             f"[yellow]⚠️ LLM term consolidation failed, using deterministic merge: {exc}[/yellow]"
         )
-        return merged_summary
+        return _attach_scanned_kb_terms(merged_summary, scanned_kb_terms)
 
     if not isinstance(resp, dict) or not isinstance(resp.get("terms"), list):
-        return merged_summary
+        return _attach_scanned_kb_terms(merged_summary, scanned_kb_terms)
 
     # Guard against naive unit-test mocks that return a single chunk's response verbatim
     if any(resp == cr for _, cr in chunk_results):
-        return merged_summary
+        return _attach_scanned_kb_terms(merged_summary, scanned_kb_terms)
 
     # Preserve original surface forms from raw_terms that were merged into a canonical KB term
     resp_terms = [dict(t) for t in resp["terms"] if isinstance(t, dict)]
@@ -2022,9 +2105,7 @@ def get_summary():
                 raise
 
     scanned_terms_list = list(all_scanned_kb_terms.values())
-    summary = _merge_terminology_results(
-        chunk_results, custom_terms_list, scanned_kb_terms=scanned_terms_list
-    )
+    summary = _merge_terminology_results(chunk_results, custom_terms_list)
     full_text = " ".join(chunks)
     report_progress(0.20, "术语归并消歧…")
     summary = _consolidate_terms_with_llm(

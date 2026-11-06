@@ -1611,6 +1611,8 @@ def test_inflections_match_search_without_source_replacement_while_asr_aliases_r
     assert s41._normalize_aliases(
         ["weakened", "weakening", "weakens", "weeken"], "Weaken"
     ) == ["weeken"]
+    assert s41._normalize_aliases(["glaives", "Glaive's"], "Glaive") == []
+    assert s41._normalize_aliases(["buffed", "buffing", "buffs"], "Buff") == []
     assert (
         s41._normalize_aliases(
             ["Agers Scepter", "Ager’s Scepters", "ager scepter"], "Ager's Scepter"
@@ -1621,6 +1623,8 @@ def test_inflections_match_search_without_source_replacement_while_asr_aliases_r
 
     terms = [
         {"src": "Wolf", "tgt": "群狼", "aliases": ["Wolves"], "source": "task"},
+        {"src": "Glaive", "tgt": "偃月", "aliases": ["glaives"], "source": "task"},
+        {"src": "Buff", "tgt": "增益", "aliases": ["buffed"], "source": "task"},
         {
             "src": "Weaken",
             "tgt": "削弱",
@@ -1658,29 +1662,91 @@ def test_inflections_match_search_without_source_replacement_while_asr_aliases_r
             "aliases": ["sabathun"],
             "source": "task",
         },
+        {
+            "src": "Khvostov 7G-0X",
+            "tgt": "赫沃斯托夫 7G-0X",
+            "aliases": ["Kavostov", "Khvostov"],
+            "source": "task",
+        },
+        {
+            "src": "Well of Radiance",
+            "tgt": "光焰之井",
+            "aliases": ["Well"],
+            "source": "task",
+        },
+        {
+            "src": "D.A.R.C.I.",
+            "tgt": "达尔西",
+            "aliases": [],
+            "source": "task",
+        },
     ]
     ws.save_terms("Destiny 2", terms)
+    loaded_terms = ws.load_terms()["terms"]
 
-    # 2. apply_fix_source_terms replaces ASR aliases ('gally', 'sabathun') but NEVER replaces inflections
-    src_line = "The Wolves are weakened, scorched, jolted, and igniting while using Agers Scepter and gally against sabathun."
-    fixed_line = s42.apply_fix_source_terms(src_line, terms)
-    assert (
-        fixed_line
-        == "The Wolves are weakened, scorched, jolted, and igniting while using Agers Scepter and Gjallarhorn against Savathûn."
+    # 2. apply_fix_source_terms (both in-memory and after ws.load_terms round-trip) replaces ASR aliases
+    # without duplicating substring aliases ('Khvostov 7G-0X'), touching stopwords ('Well'), or replacing inflections
+    src_line = (
+        "Well, the Wolves and glaives are buffed, weakened, scorched, jolted, and igniting "
+        "while using Agers Scepter, Kavostov, Khvostov 7G-0X, DARCI, and gally against sabathun."
     )
+    expected_fixed = (
+        "Well, the Wolves and glaives are buffed, weakened, scorched, jolted, and igniting "
+        "while using Agers Scepter, Khvostov 7G-0X, Khvostov 7G-0X, DARCI, and Gjallarhorn against Savathûn."
+    )
+    assert s42.apply_fix_source_terms(src_line, terms) == expected_fixed
+    assert s42.apply_fix_source_terms(src_line, loaded_terms) == expected_fixed
 
-    # 3. search_things_to_note_in_prompt matches all canonical entries from the inflected words in the chunk
+    # 3. _merge_terminology_results does not promote fix_source=False custom shorthands unless new ASR aliases exist
+    merged_custom = s41._merge_terminology_results(
+        [
+            (
+                0,
+                {
+                    "theme": "Raid",
+                    "terms": [
+                        {"src": "Well of Radiance", "tgt": "光焰之井", "note": ""}
+                    ],
+                },
+            )
+        ],
+        [
+            {
+                "src": "Well of Radiance",
+                "tgt": "光焰之井",
+                "aliases": ["Well"],
+                "fix_source": False,
+            }
+        ],
+    )
+    assert not merged_custom["terms"][0].get("fix_source", False)
+
+    # 4. _get_kb_index + _scan_text_for_kb_terms matches dotted acronyms ('DARCI' -> 'D.A.R.C.I.') and KB aliases ('gally')
+    kb_idx = s41._get_kb_index(terms)
+    kb_scanned_srcs = {
+        h["src"]
+        for h in s41._scan_text_for_kb_terms(
+            "Equipping DARCI and gally with glaives.", kb_idx
+        )
+    }
+    assert {"D.A.R.C.I.", "Gjallarhorn", "Glaive"} <= kb_scanned_srcs
+
+    # 5. search_things_to_note_in_prompt matches all canonical entries from the inflected words in the chunk
     with workspace_context(ws):
-        note_prompt = s41.search_things_to_note_in_prompt(fixed_line)
+        note_prompt = s41.search_things_to_note_in_prompt(expected_fixed)
     assert note_prompt is not None
     for canonical, zh in (
         ("Wolf", "群狼"),
+        ("Glaive", "偃月"),
+        ("Buff", "增益"),
         ("Weaken", "削弱"),
         ("Scorch", "灼烧"),
         ("Jolt", "颠簸"),
         ("Ager's Scepter", "阿格尔的权杖"),
         ("Gjallarhorn", "加拉尔号角"),
         ("Savathûn", "萨瓦图恩"),
+        ("Khvostov 7G-0X", "赫沃斯托夫 7G-0X"),
+        ("D.A.R.C.I.", "达尔西"),
     ):
         assert f'"{canonical}"' in note_prompt and f'"{zh}"' in note_prompt
     assert '"点燃"' in note_prompt and (

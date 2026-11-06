@@ -6,8 +6,10 @@ import pandas as pd
 from core.concurrency import ContextThreadPoolExecutor
 from core.translate_lines import translate_lines
 from core._4_1_summarize import (
+    _KB_CONVERSATIONAL_STOPWORDS,
+    _KB_STOP_TOKENS,
     _get_term_index,
-    _tokenize_and_normalize,
+    _is_grammatical_inflection_of,
     search_things_to_note_in_prompt,
 )
 from core._6_gen_sub import align_timestamp
@@ -25,26 +27,15 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 console = Console()
 
 
-def _norm_e(tok: str) -> str:
-    return (
-        tok[:-1]
-        if len(tok) >= 4
-        and tok.endswith("e")
-        and not tok.endswith(("ee", "ie", "ye", "oe"))
-        else tok
-    )
-
-
-def _is_inflection_candidate(cand: str, canonical: str) -> bool:
-    if not cand or not canonical:
-        return False
-    if not canonical.isascii() and cand.isascii():
-        return False
-    _, cand_stems = _tokenize_and_normalize(cand)
-    _, canon_stems = _tokenize_and_normalize(canonical)
-    if not cand_stems or len(cand_stems) != len(canon_stems):
-        return False
-    return [_norm_e(x) for x in cand_stems] == [_norm_e(x) for x in canon_stems]
+def _cand_regex_str(cand: str) -> str:
+    if re.match(r"^[\w\s\.\-]+$", cand, flags=re.ASCII):
+        toks = re.findall(r"\w+", cand, flags=re.ASCII)
+        if len(toks) >= 2:
+            sep = r"(?:[\s,\-–—]+|\s*\.\s*)+"
+            trail_dot = r"\.?" if cand.endswith(".") else ""
+            return rf"(?<!\w){sep.join(re.escape(t) for t in toks)}{trail_dot}(?!\w)"
+        return rf"(?<!\w){re.escape(cand)}(?!\w)"
+    return re.escape(cand)
 
 
 def apply_fix_source_terms(text: str, terms: list[dict]) -> str:
@@ -80,30 +71,19 @@ def apply_fix_source_terms(text: str, terms: list[dict]) -> str:
             if (
                 a_low != canonical.lower()
                 and a_low not in canonical_lows
-                and not _is_inflection_candidate(a_str, canonical)
+                and a_low not in _KB_STOP_TOKENS
+                and a_low not in _KB_CONVERSATIONAL_STOPWORDS
+                and not _is_grammatical_inflection_of(a_str, canonical)
             ):
                 candidates.append(a_str)
-        if entry.get("fix_source"):
-            candidates.append(canonical)
-        for cand in sorted(set(candidates), key=len, reverse=True):
-            if not cand:
-                continue
-            if re.match(r"^[\w\s\.\-]+$", cand, flags=re.ASCII):
-                toks = re.findall(r"\w+", cand, flags=re.ASCII)
-                if len(toks) >= 2:
-                    sep = r"(?:[\s,\-–—]+|\s*\.\s*)+"
-                    trail_dot = r"\.?" if cand.endswith(".") else ""
-                    pattern = re.compile(
-                        rf"(?<!\w){sep.join(re.escape(t) for t in toks)}{trail_dot}(?!\w)",
-                        flags=re.IGNORECASE,
-                    )
-                else:
-                    pattern = re.compile(
-                        rf"(?<!\w){re.escape(cand)}(?!\w)", flags=re.IGNORECASE
-                    )
-            else:
-                pattern = re.compile(re.escape(cand), flags=re.IGNORECASE)
-            out = pattern.sub(canonical, out)
+        if not candidates and (raw_aliases or not entry.get("fix_source")):
+            continue
+        all_targets = sorted({*candidates, canonical}, key=len, reverse=True)
+        pattern = re.compile(
+            "|".join(f"(?:{_cand_regex_str(c)})" for c in all_targets if c),
+            flags=re.IGNORECASE,
+        )
+        out = pattern.sub(canonical, out)
     return out
 
 

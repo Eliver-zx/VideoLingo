@@ -995,13 +995,17 @@ class TaskWorkspace:
                     if str(a).strip() and str(a).strip().lower() != src.lower()
                 )
             )
+            raw_fix = item.get("fix_source")
+            source_str = str(item.get("source") or "task")
             cleaned = {
                 "src": src,
                 "tgt": tgt,
                 "aliases": aliases,
                 "note": str(item.get("note") or "").strip(),
-                "fix_source": bool(item.get("fix_source", False)),
-                "source": str(item.get("source") or "task"),
+                "fix_source": bool(raw_fix)
+                if raw_fix is not None
+                else bool(aliases and source_str == "task"),
+                "source": source_str,
             }
             idx = len(cleaned_terms)
             cleaned_terms.append(cleaned)
