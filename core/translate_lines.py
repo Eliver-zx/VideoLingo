@@ -91,7 +91,7 @@ def translate_lines(
     def retry_translation(prompt, length, step_name):
         def valid_faith(response_data):
             return valid_translate_result(
-                response_data, [str(i) for i in range(1, length + 1)], ["direct"]
+                response_data, [str(i) for i in range(1, length + 1)], ["trans"]
             )
 
         def valid_express(response_data):
@@ -137,10 +137,10 @@ def translate_lines(
         faith_result[i].setdefault(
             "origin", line_list[idx] if idx < len(line_list) else ""
         )
-        faith_result[i]["direct"] = _normalize_book_marks(
-            faith_result[i]["direct"].replace("\n", " ")
-        )
-    direct_lines = [faith_result[i]["direct"].strip() for i in faith_result]
+        normalized = _normalize_book_marks(faith_result[i]["trans"].replace("\n", " "))
+        faith_result[i]["trans"] = normalized
+        faith_result[i]["direct"] = normalized
+    direct_lines = [faith_result[i]["trans"].strip() for i in faith_result]
 
     # If reflect_translate is False or not set, use faithful translation directly
     reflect_translate = load_key("reflect_translate")

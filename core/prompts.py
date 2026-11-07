@@ -107,15 +107,24 @@ Note: Start your answer with ```json and end with ```, do not add any other text
 
 ## ================================================================
 # @ _4_1_summarize.py
-def _format_term_prompt_line(term: dict) -> str:
+def _format_term_prompt_line(term: dict, canonical_only: bool = False) -> str:
     src = str(term.get("src") or "").strip()
     tgt = str(term.get("tgt") or "").strip()
-    if not src:
+    if not src or not tgt:
         return ""
-    aliases = [str(a).strip() for a in (term.get("aliases") or []) if str(a).strip()]
-    if aliases:
-        return f"{src}:{tgt} aliases:{{{', '.join(aliases)}}}"
-    return f"{src}:{tgt}"
+    if canonical_only:
+        return f"{src}:{tgt}"
+    aliases = [
+        str(a).strip()
+        for a in (term.get("aliases") or [])
+        if str(a).strip() and str(a).strip().lower() != src.lower()
+    ]
+    src_matched = bool(term.get("src_matched", not aliases))
+    lines = [
+        *([f"{src}:{tgt}"] if src_matched else []),
+        *(f"{al}:{tgt} ({src})" for al in aliases),
+    ]
+    return "\n".join(lines)
 
 
 def get_summary_prompt(
@@ -148,7 +157,7 @@ def get_summary_prompt(
         )
         if isinstance(prev_terms, list) and prev_terms:
             prev_lines = [
-                _format_term_prompt_line(t)
+                _format_term_prompt_line(t, canonical_only=True)
                 for t in prev_terms
                 if isinstance(t, dict) and str(t.get("src") or "").strip()
             ]
@@ -156,8 +165,8 @@ def get_summary_prompt(
             if prev_lines:
                 existing_terms_note = (
                     "\n# existing_terms_note\n"
-                    "### Full-Video Detected Terms\n"
-                    "Full canonical terms detected across the video (use these to resolve shorthands, abbreviations, or ASR misspellings in the current chunk):\n"
+                    "### Full-Video & Candidate Reference Terms\n"
+                    "Canonical reference terms from the video and domain glossary (use these to resolve shorthands, abbreviations, or ASR misspellings in the current chunk):\n"
                     + "\n".join(prev_lines)
                 )
 
@@ -168,8 +177,8 @@ def get_summary_prompt(
 ## 2. 核心任务
 1. **主题总结 (`theme`)**：用两句话精炼概括当前文本块的核心主题与讨论要点。
 2. **权威术语核对与简称/错词关联**：
-   - `# terms_note` 是当前文本块中已精确匹配出的权威参考术语；`# existing_terms_note` 是整部视频其他段落中出现的完整权威术语。
-   - 检查原文 `<text>` 中是否使用了 `# terms_note` 或 `# existing_terms_note` 中某条完整术语的 **口语简称、首字母缩写或 ASR 语音/拼写讹误**（例如全片出现过完整术语 `Cuirass of the Falling Star`、`Shards of Galanor`、`Heart of Inmost Light`、`One Thousand Voices`、`Star-Eater Scales`、`Spirit of Verity`，而当前 `<text>` 中简称为 `Cuirass`/`Curious`、`Shards`、`HOIL`/`Hoyle`、`1K`、`Star-Eater`、`Verity`）。若有，请将该完整权威术语填入 `src`，官方译名填入 `tgt`，并将当前 `<text>` 中实际出现的简称或 ASR 错词原样填入 `aliases` 数组！
+   - `# terms_note` 是当前文本块中已匹配出的权威参考术语（格式为 `src:tgt` 或 `alias:tgt (src)`）；`# existing_terms_note` 是整部视频及领域词库中的相关候选完整术语（格式为 `src:tgt`）。
+   - 检查原文 `<text>` 中是否使用了 `# terms_note` 或 `# existing_terms_note` 中某条完整术语的 **口语简称、首字母缩写或 ASR 语音/拼写讹误**（例如参考词条为 `Cuirass of the Falling Star`、`Shards of Galanor`、`Heart of Inmost Light`、`One Thousand Voices`、`Star-Eater Scales`、`Spirit of Verity`，而当前 `<text>` 中简称为 `Cuirass`/`Curious`、`Shards`、`HOIL`/`Hoyle`、`1K`、`Star-Eater`、`Verity`）。若有，请将该完整权威术语填入 `src`，官方译名填入 `tgt`，并将当前 `<text>` 中实际出现的简称或 ASR 错词原样填入 `aliases` 数组！
    - 若 `# terms_note` 中的某条一词多义词（如 `Super`, `adds`, `build`）在当前 `<text>` 中仅作为普通日常副词/动词使用（如 `"super complicated"`, `"want to add"`），请忽略该词，不要将其输出到 `terms`。
    - **绝对严禁**：严禁将名词单复数（如 shotgun/shotguns）、名词所有格（`'s`）、动词时态变化（`-ed`, `-ing`）或包含该词的其他独立词组（如把 `"build score"` 当成 `"build"` 的别名、把 `"surge matching"` 当成 `"Surge"` 的别名）填入 `aliases`！`aliases` **仅限指代同一实体的口语简称、缩写或 ASR 拼写/同音识别错误**。
 3. **提取新术语**：提取原文 `<text>` 中未在下方列出但属于专有名词、扩展包/副本/活动名、核心系统与界面模块、武器、护甲、技能、游戏/业务机制、地名、人名、首领名、领域行话的新术语，并给出准确的 {tgt_lang} 译名。
@@ -203,68 +212,6 @@ def get_summary_prompt(
 Note: Start your answer with ```json and end with ```, do not add any other text.
 """.strip()
     return summary_prompt
-
-
-def get_consolidate_terms_prompt(
-    raw_terms: list[dict], theme: str = "", target_language: str | None = None
-):
-    src_lang = get_source_language()
-    tgt_lang = target_language or load_key("target_language")
-    if raw_terms:
-        raw_json = (
-            "[\n"
-            + ",\n".join(json.dumps(item, ensure_ascii=False) for item in raw_terms)
-            + "\n]"
-        )
-    else:
-        raw_json = "[]"
-    return f"""
-## Role
-You are a terminology consolidation and official localization specialist for **{src_lang}** to **{tgt_lang}** video translation.
-
-## Task
-Below is a raw terminology list extracted from chunks of a video transcript (Theme: {theme or "General"}).
-Some entries may include:
-- `kb_candidates`: fuzzy-matched candidates from an authoritative reference glossary (`term-map.json`).
-- `source_hint: "kb_scan_candidate"`: reference glossary entries detected directly in the transcript via N-gram scan that chunk extraction may have overlooked.
-
-Consolidate, deduplicate, and refine this list into a unified, accurate glossary:
-1. **Authoritative Glossary Alignment (`kb_candidates`)**:
-   - When an extracted term or its ASR variant corresponds to an authoritative entry in `kb_candidates`, **adopt the canonical `src` and official `{tgt_lang}` translation `tgt` from `kb_candidates`**.
-   - **CRITICAL**: Whenever `src` is normalized to a full canonical name, **keep the exact shorthand, abbreviation, or ASR surface forms that appeared in the transcript inside `aliases`** so text matching can still find them in the transcript.
-2. **Verify Direct Glossary Scan Candidates (`source_hint: "kb_scan_candidate"`)**:
-   - Entries marked with `source_hint: "kb_scan_candidate"` matched the transcript text against the reference glossary and include a `context_snippet` showing the surrounding words in the transcript.
-   - **Check `context_snippet` carefully**:
-     - **Keep** the entry ONLY if it is used as a genuine domain term, proper noun, entity, technical mechanism, or specialized item in `context_snippet`.
-     - **Discard** the entry if `context_snippet` shows it is just an ordinary conversational phrase or number that coincidentally shares a name with a glossary entry (e.g., `"it's cool"` in `"because it's cool"`, `"second chance"` in `"give this a second chance"`, `"plus one"` in `"10 plus one"`).
-3. **Cross-Chunk ASR Variant & Shorthand Unification**:
-   - Merge duplicate entries that refer to the same entity under different ASR phonetic spellings, abbreviations, or inflections into a single entry, combining all transcript surface forms into `aliases` and using one consistent `{tgt_lang}` `tgt`.
-   - Keep `tgt` as a **clean subtitle-ready term** with zero parenthetical explanations or quotation marks.
-   - If an entry accidentally glues two distinct terms together (e.g., a modifier + an entity name), separate them into their respective canonical entries.
-4. **Preserve Domain Coverage & Prune Generic Noise**:
-   - Keep all genuine domain terms, proper nouns, specialized items, acronyms, and technical jargon across all chunks.
-   - Remove purely generic everyday words where literal translation is already unambiguous.
-
-## Raw Extracted Terms
-```json
-{raw_json}
-```
-
-## Output in only JSON format and no other text
-```json
-{{
-  "terms": [
-    {{
-      "src": "canonical {src_lang} term",
-      "tgt": "accurate unified {tgt_lang} translation",
-      "aliases": ["exact transcript surface form or ASR variant (if any)"]
-    }}
-  ]
-}}
-```
-
-Note: Start your answer with ```json and end with ```, do not add any other text.
-""".strip()
 
 
 ## ================================================================
@@ -320,49 +267,38 @@ def get_prompt_faithfulness(lines, shared_prompt):
     )
     line_splits = lines.split("\n")
 
-    json_dict = {}
-    for i, line in enumerate(line_splits, 1):
-        json_dict[str(i)] = {
+    json_dict = {
+        str(i): {
             "origin": line,
-            "direct": f"<<请逐行翻译为{TARGET_LANGUAGE}，确保忠实于原文，且仅输出翻译后结果>>",
+            "trans": f"<<请一步到位翻译为精准、自然地道、符合口语字幕节奏的{TARGET_LANGUAGE}最终译文>>",
         }
+        for i, line in enumerate(line_splits, 1)
+    }
     json_format = json.dumps(json_dict, indent=4, ensure_ascii=False)
 
     prompt_faithfulness = f"""
-## Role: Expert Linguistic Translator
+## Role: Senior Subtitle Localization Specialist
 {style_prompt}
 ## Task Description:
-Translate the provided {SRC_LANGUAGE} text lines (from video context) into {TARGET_LANGUAGE} line by line. The primary goal is to **faithfully** reproduce the original meaning, tone, and nuances, while also ensuring the translation **conforms to the expressive conventions of {TARGET_LANGUAGE}**.
-
-## Context:
-- Source Language: {SRC_LANGUAGE}
-- Target Language: {TARGET_LANGUAGE}
-- Content: Video subtitles/transcript lines.
-- Terminology & Context: Provided below under 'Terminology & Shared Context'.
+Translate the provided {SRC_LANGUAGE} video transcript lines into final, broadcast-ready {TARGET_LANGUAGE} subtitles line by line in a **single pass**. Achieve both **uncompromising semantic accuracy** and **native, idiomatic spoken fluency** directly in your output—do not produce stiff literal translationese.
 
 ## Translation Guidelines:
-1. **Line-by-Line Translation**: Translate each line independently while maintaining semantic continuity from adjacent context lines.
-2. **Faithful Rendition**: Accurately convey the original semantics, tone (formal, informal, enthusiastic, serious), and subtle nuances.
-3. **Natural Flow, Spoken Cadence, and Clause Unpacking**:
-   - The translation must align with {TARGET_LANGUAGE}'s patterns of thought, reading habits, and spoken subtitle rhythm.
-   - **Unpack long modifiers**: Break up English post-nominal clauses (`that ...`, `which ...`, `with ...`, `in ...`) and stacked modifiers into sequential short clauses separated by commas (，). Never stack long `的` chains or long `在……上/中` wrappers into a single 25+ character run-on clause.
-   - **Breathing room (clause length ceiling)**: Insert natural Chinese commas (，) at topic-comment or breath boundaries so each clause stays concise (10–16 Chinese characters, never exceeding 18 characters without a comma pause).
-   - Disfluency removal: Remove meaningless spoken filler words (`uh`, `um`, `you know`, `like`), producing clean, punchy subtitles.
-4. **Mandatory Terminology Consistency**:
-   - Strictly adhere to the official translations in `### 术语库-词典` (formatted as `src:tgt` or `src:tgt aliases:{{...}}`). Whenever the source text contains either `src` or any surface form listed in `aliases`, you **MUST** use the exact `tgt`.
-   - **Inflection Rule**: When a term appears in the original text in plural form, possessive (`'s`), or verb inflections (`-ed`, `-ing`), you **MUST** use the canonical official translation from `### 术语库-词典` corresponding to its base term, integrating it accurately and grammatically into the sentence. It is strictly forbidden to invent alternative translations or translate it literally.
-5. **Proper Noun Handling**:
-   - Preserve unlisted proper nouns (people, places, brands, model numbers) in their original form unless a standard recognized {TARGET_LANGUAGE} equivalent exists.
-6. **Strict Subtitle Punctuation & No Annotations**:
+1. **Line-by-Line Completeness & Context Continuity**:
+   - Translate each line accurately while maintaining smooth logical and tonal continuity with `<previous_context>`, `<subsequent_context>`, and adjacent lines.
+   - Preserve all numbers, percentages, mechanics, and causal relationships without omission.
+2. **Native Spoken Flow & Clause Unpacking (Single-Pass Polish)**:
+   - Organize clauses according to natural {TARGET_LANGUAGE} spoken word order and narrative flow rather than mirroring {SRC_LANGUAGE} syntax.
+   - **Unpack long modifiers**: Break up post-nominal clauses (`that ...`, `which ...`, `with ...`, `where ...`) and stacked modifiers into sequential short clauses separated by commas (，). Avoid long `的` chains or clunky `在……上/中` wrappers.
+   - **Subtitle breathing room**: Insert natural commas (，) at topic-comment or breath boundaries so each clause stays concise (10–16 Chinese characters, never exceeding 18 characters without a comma pause).
+   - Strip meaningless spoken fillers (`uh`, `um`, `you know`, `like`) for crisp, punchy subtitles.
+3. **Strict Terminology Adherence & Contextual Sense Disambiguation**:
+   - Strictly use the official translations in `### 术语库-词典` (formatted as `src:tgt` or `alias:tgt (canonical_src)`) whenever the source line refers to that domain entity, including across plurals, possessives (`'s`), or verb inflections (`-ed`, `-ing`).
+   - **Sense check**: If a word in `### 术语库-词典` is used in the sentence purely as an everyday general expression (e.g., `"the number of"` meaning quantity, `"break ground"` meaning make progress, `"recent success"` meaning achievement), translate its natural everyday meaning instead of forcing a glossary term.
+   - **No untranslated common words**: Never leave ordinary {SRC_LANGUAGE} words (such as `past`, `boss`, `update`, `patch`, `test`) untranslated in {TARGET_LANGUAGE} sentences; only standard acronyms/abbreviations (`DPS`, `PvE`, `PvP`, `DoT`) or model numbers may remain in Latin letters.
+4. **Strict Subtitle Punctuation & Zero Annotations**:
    - **Allowed punctuation ONLY**: comma (，), period (。), question mark (？), enumeration comma (、), and exclamation mark (！).
    - **Forbidden punctuation**: NEVER output dashes (`——`, `—`, `--`), colons (`：`, `:`), semicolons (`；`, `;`), quotation marks (`“”`, `‘’`, `""`, `''`, `「」`, `『』`), book title marks (`《》`, `〈〉`), or parenthetical notes. Use a comma (，) instead of dashes, colons, or semicolons, and write all term, skill, and work names as plain text without quotes.
-   - Do NOT add annotations, explanations, or source terms in parentheses (e.g., translate "Still Hunt" to "静谧狩猎", NEVER "静谧狩猎 (Still Hunt)").
-
-## Reference Examples:
-* Original: "Hey guys, welcome back to the channel!" -> Translation: "大家好，欢迎回到频道！" (Informal, direct, aligns with spoken language habits, natural punctuation)
-* Original: "The algorithm uses a Still Hunt approach." (Assuming "Still Hunt: 静谧狩猎" is in glossary) -> Translation: "该算法使用静谧狩猎方法。" (Strict terminology adherence, natural word order)
-* Original: "This is powered by the new Nvidia RTX 4090." -> Translation: "这由新的英伟达 RTX 4090 驱动。" (Proper noun preserved, structure is natural)
-* Original: "Crew and Alex, for example, are both on Trench Barrel aggressive shotguns..." (Assuming Crew/Alex not in glossary, "Trench Barrel: 战壕枪管", "aggressive frame: 攻击架构") -> Translation: "例如，Crew和Alex都装备了带有战壕枪管的攻击型霰弹枪..." (Terminology strictly preserved across inflection 'shotguns' -> '霰弹枪', names preserved, natural syntax)
+   - Do NOT append original source terms or explanations in parentheses (write `静谧狩猎`, NEVER `静谧狩猎 (Still Hunt)`).
 
 ## Input Text Lines:
 <source_lines>
@@ -373,13 +309,10 @@ Translate the provided {SRC_LANGUAGE} text lines (from video context) into {TARG
 {shared_prompt}
 
 ## Output Format:
-Provide the translation results strictly in the following JSON format. Fill in the `"direct"` field for each line number with your {TARGET_LANGUAGE} translation.
-
+Return ONLY the following JSON object, filling `"trans"` with the final polished {TARGET_LANGUAGE} subtitle for each line:
 ```json
 {json_format}
 ```
-
-Think step-by-step to ensure all instructions and constraints are met before generating the final JSON output.
 """.strip()
     return prompt_faithfulness
 
@@ -424,7 +357,7 @@ You will produce a 'free' translation that meets these exacting standards, stric
    - Unpack long post-nominal modifiers and prepositional chains into short, breathable sequential clauses separated by commas (，), keeping each clause concise (10–16 Chinese characters, never exceeding 18 characters without a comma pause).
    - Remove spoken hesitation fillers (`uh`, `um`, `you know`) and awkward translationese or stacked literal calques.
 4. **Mandatory Terminology & Proper Noun Preservation**:
-   - **Strict Terminology Enforcement**: Strictly enforce the provided glossary and dictionary in `### 术语库-词典` (formatted as `src:tgt` or `src:tgt aliases:{{...}}`). Every glossary translation MUST remain intact in 'free' — never abbreviate, paraphrase, or alter official terms during polishing. When terms appear with inflections (plurals, `'s`, `-ed`, `-ing`), maintain their standard canonical translation.
+   - **Strict Terminology Enforcement**: Strictly enforce the provided glossary and dictionary in `### 术语库-词典` (formatted as `src:tgt` or `alias:tgt (canonical_src)`). Every glossary translation MUST remain intact in 'free' — never abbreviate, paraphrase, or alter official terms during polishing. When terms appear with inflections (plurals, `'s`, `-ed`, `-ing`), maintain their standard canonical translation.
    - **Proper Nouns**: Ensure proper nouns (not in glossary) remain intact or in their standard {TARGET_LANGUAGE} form.
 5. **Strict Subtitle Punctuation & No Annotations**:
    - **Allowed punctuation ONLY**: comma (，), period (。), question mark (？), enumeration comma (、), and exclamation mark (！).

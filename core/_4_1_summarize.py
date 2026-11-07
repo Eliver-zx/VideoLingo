@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from functools import lru_cache
 import json
 import os
@@ -13,7 +14,7 @@ from nltk.stem import SnowballStemmer
 import pandas as pd
 
 from core.concurrency import ContextThreadPoolExecutor
-from core.prompts import get_consolidate_terms_prompt, get_summary_prompt
+from core.prompts import get_summary_prompt
 from core.utils import (
     ask_gpt,
     check_cancel,
@@ -387,37 +388,71 @@ def load_custom_terms() -> list[dict[str, Any]]:
     return terms
 
 
-def _build_term_matcher(entries: list[dict[str, Any]]) -> dict[str, Any]:
-    exact_ngram_map: dict[tuple[str, ...], tuple[dict[str, Any], str]] = {}
-    stem_ngram_map: dict[tuple[str, ...], tuple[dict[str, Any], str]] = {}
+@dataclass(frozen=True, slots=True)
+class SurfaceRule:
+    entry: dict[str, Any]
+    surface: str
+    is_canonical_src: bool
+    sig: tuple[str, str]
+
+
+@dataclass(slots=True)
+class TermHit:
+    entry: dict[str, Any]
+    src_matched: bool = False
+    matched_aliases: list[str] = field(default_factory=list)
+    first_token_idx: int = 0
+
+
+def _append_rule(
+    bucket_map: dict[Any, list[SurfaceRule]],
+    key: Any,
+    rule: SurfaceRule,
+) -> None:
+    bucket = bucket_map.get(key)
+    if bucket is None:
+        bucket_map[key] = [rule]
+        return
+    sig = rule.sig
+    for r in bucket:
+        if r.sig == sig:
+            return
+    bucket.append(rule)
+
+
+def _build_term_matcher(
+    entries: list[dict[str, Any]], max_rare_token_df: int = 8
+) -> dict[str, Any]:
+    exact_ngram_map: dict[tuple[str, ...], list[SurfaceRule]] = {}
+    stem_ngram_map: dict[tuple[str, ...], list[SurfaceRule]] = {}
     first_stem_lengths: dict[str, set[int]] = {}
-    compact_stem_map: dict[str, tuple[dict[str, Any], str]] = {}
-    symbol_cjk_terms: list[tuple[str, re.Pattern[str] | None, dict[str, Any], str]] = []
-    token_inv: dict[str, list[dict[str, Any]]] = {}
+    compact_stem_map: dict[str, list[SurfaceRule]] = {}
+    symbol_cjk_terms: list[tuple[str, re.Pattern[str] | None, SurfaceRule]] = []
+    raw_token_inv: dict[str, list[dict[str, Any]]] = {}
 
     for entry in entries:
         src = str(entry.get("src") or "").strip()
         tgt = str(entry.get("tgt") or "").strip()
         if not src or not tgt:
             continue
+        sig = (src.lower(), tgt.lower())
         aliases = _normalize_aliases(entry.get("aliases"), src)
-        surfaces = [src, *aliases]
-        for q in re.findall(r'"([^"]+)"', src):
-            qs = q.strip()
-            if len(qs) >= 3 and qs.lower() not in {s.lower() for s in surfaces}:
-                surfaces.append(qs)
+        surface_specs = [(src, True), *((al, False) for al in aliases)]
 
-        for surf in surfaces:
-            s_clean = surf.strip()
+        for surf_str, is_src in surface_specs:
+            s_clean = surf_str.strip()
             if not s_clean:
                 continue
+            rule = SurfaceRule(
+                entry=entry, surface=s_clean, is_canonical_src=is_src, sig=sig
+            )
             if _CJK_RE.search(s_clean) or _SIGNIFICANT_SYMBOL_RE.search(s_clean):
                 pat = None
                 if not _CJK_RE.search(s_clean):
                     pat = re.compile(
                         rf"(?<![A-Za-z0-9]){re.escape(s_clean.lower())}(?![A-Za-z0-9])"
                     )
-                symbol_cjk_terms.append((s_clean.lower(), pat, entry, s_clean))
+                symbol_cjk_terms.append((s_clean.lower(), pat, rule))
                 continue
 
             bw, st, rw = _tokenize_surface(s_clean)
@@ -426,14 +461,9 @@ def _build_term_matcher(entries: list[dict[str, Any]]) -> dict[str, Any]:
             if all(w in _KB_STOP_TOKENS for w in bw):
                 continue
 
-            bw_tup = tuple(bw)
-            if bw_tup not in exact_ngram_map:
-                exact_ngram_map[bw_tup] = (entry, s_clean)
-
-            st_tup = tuple(st)
-            if st_tup not in stem_ngram_map:
-                stem_ngram_map[st_tup] = (entry, s_clean)
-            first_stem_lengths.setdefault(st[0], set()).add(len(st_tup))
+            _append_rule(exact_ngram_map, tuple(bw), rule)
+            _append_rule(stem_ngram_map, tuple(st), rule)
+            first_stem_lengths.setdefault(st[0], set()).add(len(st))
 
             joined_bw = "".join(bw)
             joined_rw = "".join(rw)
@@ -445,77 +475,97 @@ def _build_term_matcher(entries: list[dict[str, Any]]) -> dict[str, Any]:
                 _stem_word(joined_bw),
                 _stem_word(joined_rw),
             ):
-                if (
-                    len(ck) >= 3
-                    and ck not in _KB_STOP_TOKENS
-                    and ck not in compact_stem_map
-                ):
-                    compact_stem_map[ck] = (entry, s_clean)
+                if len(ck) >= 3 and ck not in _KB_STOP_TOKENS:
+                    _append_rule(compact_stem_map, ck, rule)
 
-            for tok in set(bw):
-                if len(tok) >= 3 and tok not in _KB_STOP_TOKENS:
-                    bucket = token_inv.setdefault(tok, [])
-                    if not any(x["src"] == src for x in bucket):
-                        bucket.append(entry)
+            if is_src:
+                for tok in set(st):
+                    if len(tok) >= 4 and tok not in _KB_STOP_TOKENS:
+                        t_bucket = raw_token_inv.get(tok)
+                        if t_bucket is None:
+                            raw_token_inv[tok] = [entry]
+                        elif len(t_bucket) <= max_rare_token_df:
+                            if not any(x["src"] == src for x in t_bucket):
+                                t_bucket.append(entry)
+
+    rare_token_inv = {
+        tok: tuple(bucket)
+        for tok, bucket in raw_token_inv.items()
+        if 1 <= len(bucket) <= max_rare_token_df
+    }
 
     return {
-        "exact_ngram_map": exact_ngram_map,
-        "stem_ngram_map": stem_ngram_map,
-        "first_stem_lengths": first_stem_lengths,
-        "compact_stem_map": compact_stem_map,
-        "symbol_cjk_terms": symbol_cjk_terms,
-        "token_inv": token_inv,
+        "exact_ngram_map": {k: tuple(v) for k, v in exact_ngram_map.items()},
+        "stem_ngram_map": {k: tuple(v) for k, v in stem_ngram_map.items()},
+        "first_stem_lengths": {k: frozenset(v) for k, v in first_stem_lengths.items()},
+        "compact_stem_map": {k: tuple(v) for k, v in compact_stem_map.items()},
+        "symbol_cjk_terms": tuple(symbol_cjk_terms),
+        "rare_token_inv": rare_token_inv,
     }
 
 
-def _match_terms_in_text(
-    text: str, matcher: dict[str, Any]
-) -> list[tuple[dict[str, Any], list[str]]]:
+def _match_terms_in_text(text: str, matcher: dict[str, Any]) -> list[TermHit]:
     if not text or not text.strip():
         return []
 
-    exact_ngram_map: dict[tuple[str, ...], tuple[dict[str, Any], str]] = matcher.get(
+    exact_ngram_map: dict[tuple[str, ...], tuple[SurfaceRule, ...]] = matcher.get(
         "exact_ngram_map", {}
     )
-    stem_ngram_map: dict[tuple[str, ...], tuple[dict[str, Any], str]] = matcher[
+    stem_ngram_map: dict[tuple[str, ...], tuple[SurfaceRule, ...]] = matcher[
         "stem_ngram_map"
     ]
-    first_stem_lengths: dict[str, set[int]] = matcher["first_stem_lengths"]
-    compact_stem_map: dict[str, tuple[dict[str, Any], str]] = matcher[
-        "compact_stem_map"
-    ]
+    first_stem_lengths: dict[str, frozenset[int]] = matcher["first_stem_lengths"]
+    compact_stem_map: dict[str, tuple[SurfaceRule, ...]] = matcher["compact_stem_map"]
     symbol_cjk_terms = matcher["symbol_cjk_terms"]
 
-    matched_by_src: dict[str, tuple[dict[str, Any], list[str]]] = {}
+    hits_by_sig: dict[tuple[str, str], TermHit] = {}
 
-    def _record(entry: dict[str, Any], surf: str, text_span: str = "") -> None:
-        key = entry["src"].lower()
-        if key not in matched_by_src:
-            matched_by_src[key] = (entry, [])
-        alias_list = matched_by_src[key][1]
-        src_low = entry["src"].lower()
-        for candidate in (surf, text_span):
-            c_str = candidate.strip()
+    def _record_channel(
+        rule: SurfaceRule,
+        token_idx: int,
+        via_compact_channel: bool = False,
+        span_text: str = "",
+    ) -> None:
+        sig = rule.sig
+        hit = hits_by_sig.get(sig)
+        if hit is None:
+            hit = TermHit(
+                entry=rule.entry,
+                src_matched=False,
+                matched_aliases=[],
+                first_token_idx=token_idx,
+            )
+            hits_by_sig[sig] = hit
+        elif token_idx < hit.first_token_idx:
+            hit.first_token_idx = token_idx
+
+        if not via_compact_channel and rule.is_canonical_src:
+            hit.src_matched = True
+        else:
+            alias_str = (
+                span_text.strip()
+                if (via_compact_channel and rule.is_canonical_src)
+                else rule.surface.strip()
+            )
             if (
-                c_str
-                and c_str.lower() != src_low
-                and not _is_inflection_of_src(c_str, entry["src"])
-                and c_str.lower() not in {a.lower() for a in alias_list}
+                alias_str
+                and alias_str.lower() != rule.entry["src"].lower()
+                and alias_str.lower() not in {a.lower() for a in hit.matched_aliases}
             ):
-                alias_list.append(c_str)
+                hit.matched_aliases.append(alias_str)
 
     text_lower = text.lower()
-    for s_low, pat, entry, surf in symbol_cjk_terms:
+    for s_low, pat, rule in symbol_cjk_terms:
         if s_low in text_lower:
             if pat is None or pat.search(text_lower):
-                _record(entry, surf)
+                _record_channel(rule, token_idx=0, via_compact_channel=False)
 
     folded = (
         unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
     )
     orig_words = _WORD_RE.findall(folded)
     if not orig_words:
-        return list(matched_by_src.values())
+        return sorted(hits_by_sig.values(), key=lambda h: h.first_token_idx)
 
     base_words: list[str] = []
     raw_words: list[str] = []
@@ -537,26 +587,34 @@ def _match_terms_in_text(
                 continue
             lens = first_stem_lengths.get(stems[i])
             if lens and k in lens and not any(covered[i : i + k]):
-                hit = exact_ngram_map.get(
+                bucket = exact_ngram_map.get(
                     tuple(base_words[i : i + k])
                 ) or stem_ngram_map.get(tuple(stems[i : i + k]))
-                if hit is not None:
-                    entry, surf = hit
+                if bucket:
                     for j in range(i, i + k):
                         covered[j] = True
-                    _record(entry, surf, " ".join(orig_words[i : i + k]))
+                    span = " ".join(orig_words[i : i + k])
+                    for rule in bucket:
+                        _record_channel(
+                            rule, i, via_compact_channel=False, span_text=span
+                        )
                     continue
 
             if k == 1 and not covered[i]:
-                c_hit = (
+                c_bucket = (
                     compact_stem_map.get(base_words[i])
                     or compact_stem_map.get(stems[i])
                     or compact_stem_map.get(raw_words[i])
                 )
-                if c_hit is not None:
-                    entry, surf = c_hit
+                if c_bucket:
                     covered[i] = True
-                    _record(entry, surf, orig_words[i])
+                    for rule in c_bucket:
+                        _record_channel(
+                            rule,
+                            i,
+                            via_compact_channel=True,
+                            span_text=orig_words[i],
+                        )
             elif (
                 2 <= k <= 3
                 and valid_comp[i]
@@ -565,16 +623,36 @@ def _match_terms_in_text(
                 and not any(covered[i : i + k])
             ):
                 span_bw = base_words[i : i + k]
-                c_hit = compact_stem_map.get(
+                c_bucket = compact_stem_map.get(
                     "".join(span_bw[:-1]) + stems[i + k - 1]
                 ) or compact_stem_map.get("".join(span_bw))
-                if c_hit is not None:
-                    entry, surf = c_hit
+                if c_bucket:
                     for j in range(i, i + k):
                         covered[j] = True
-                    _record(entry, surf, " ".join(orig_words[i : i + k]))
+                    span = " ".join(orig_words[i : i + k])
+                    for rule in c_bucket:
+                        _record_channel(
+                            rule, i, via_compact_channel=True, span_text=span
+                        )
 
-    return list(matched_by_src.values())
+    return sorted(hits_by_sig.values(), key=lambda h: h.first_token_idx)
+
+
+def format_term_hits_for_prompt(hits: list[TermHit]) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for hit in hits:
+        src = hit.entry["src"]
+        tgt = hit.entry["tgt"]
+        for line in (
+            *([f"{src}:{tgt}"] if hit.src_matched else []),
+            *(f"{al}:{tgt} ({src})" for al in hit.matched_aliases),
+        ):
+            k = line.lower()
+            if k not in seen:
+                seen.add(k)
+                lines.append(line)
+    return lines
 
 
 _KB_INDEX_LOCK = threading.Lock()
@@ -667,35 +745,26 @@ def _ensure_kb_matcher(kb_data: dict[str, Any]) -> dict[str, Any]:
     return matcher
 
 
-def _retrieve_kb_candidates_for_term(
-    term: dict[str, Any], kb_data: dict[str, Any], max_candidates: int = 6
-) -> list[dict[str, str]]:
-    if not kb_data or not kb_data.get("entries"):
+def _retrieve_rare_token_candidates(
+    text: str, kb_data: dict[str, Any], exclude_srcs: set[str]
+) -> list[dict[str, Any]]:
+    if not text or not kb_data or not kb_data.get("entries"):
         return []
     matcher = _ensure_kb_matcher(kb_data)
-    compact_map = matcher["compact_stem_map"]
-    token_inv = matcher["token_inv"]
-    surfaces = [str(term.get("src") or ""), *(term.get("aliases") or [])]
-    out: list[dict[str, str]] = []
-    seen: set[str] = set()
-
-    def _add(entry: dict[str, Any]) -> None:
-        sl = entry["src"].lower()
-        if sl not in seen and len(out) < max_candidates:
-            seen.add(sl)
-            out.append({"src": entry["src"], "tgt": entry["tgt"]})
-
-    for surf in surfaces:
-        bw, st, rw = _tokenize_surface(surf)
-        if not bw:
+    rare_inv = matcher.get("rare_token_inv", {})
+    if not rare_inv:
+        return []
+    _, stems, _ = _tokenize_surface(text)
+    out: list[dict[str, Any]] = []
+    seen = set(exclude_srcs)
+    for st in stems:
+        if len(st) < 4 or st in _KB_STOP_TOKENS:
             continue
-        for ck in ("".join(bw), "".join(rw), "".join(st)):
-            hit = compact_map.get(ck)
-            if hit is not None:
-                _add(hit[0])
-        for tok in bw:
-            for cand in token_inv.get(tok, ()):
-                _add(cand)
+        for entry in rare_inv.get(st, ()):
+            sl = entry["src"].lower()
+            if sl not in seen:
+                seen.add(sl)
+                out.append(entry)
     return out
 
 
@@ -703,23 +772,19 @@ def _scan_text_for_kb_terms(text: str, kb_data: dict[str, Any]) -> list[dict[str
     if not text or not kb_data or not kb_data.get("entries"):
         return []
     matcher = _ensure_kb_matcher(kb_data)
-    matches = _match_terms_in_text(text, matcher)
-    results: list[dict[str, Any]] = []
-    for entry, matched_aliases in matches:
-        merged_aliases = _normalize_aliases(
-            [*(entry.get("aliases") or []), *matched_aliases], entry["src"]
-        )
-        results.append(
-            {
-                "src": entry["src"],
-                "tgt": entry["tgt"],
-                "note": str(entry.get("note") or ""),
-                "aliases": merged_aliases,
-                "fix_source": bool(entry.get("fix_source", False)),
-                "source": str(entry.get("source") or "domain_kb"),
-            }
-        )
-    return results
+    hits = _match_terms_in_text(text, matcher)
+    return [
+        {
+            "src": hit.entry["src"],
+            "tgt": hit.entry["tgt"],
+            "note": str(hit.entry.get("note") or ""),
+            "aliases": list(hit.matched_aliases),
+            "src_matched": hit.src_matched,
+            "fix_source": bool(hit.entry.get("fix_source", False)),
+            "source": str(hit.entry.get("source") or "domain_kb"),
+        }
+        for hit in hits
+    ]
 
 
 def _weighted_char_len(text: str) -> int:
@@ -954,72 +1019,9 @@ def _merge_terminology_results(
                 else str(n_val).strip()
             )
             als = _normalize_aliases(item.get("aliases"), s)
-            _, st_s, _ = _tokenize_surface(s)
-            if (
-                kb_data
-                and s.lower() not in auth_by_lower
-                and (not st_s or tuple(st_s) not in auth_by_stem)
-            ):
-                sub_hits = _scan_text_for_kb_terms(s, kb_data)
-                if len(sub_hits) >= 2:
-                    for sh in sub_hits:
-                        _upsert_term(
-                            sh["src"],
-                            sh["tgt"],
-                            str(sh.get("note") or ""),
-                            sh.get("aliases") or [],
-                            bool(sh.get("fix_source", False)),
-                            source="task",
-                        )
-                    continue
             _upsert_term(s, t, n_str, als, source="task")
 
     return {"theme": combined_theme, "terms": list(merged_by_src.values())}
-
-
-def _consolidate_terms_with_llm(
-    merged: dict[str, Any],
-    chunk_results: list[tuple[int, dict[str, Any]]],
-    custom_terms_list: list[dict[str, Any]],
-    kb_data: dict[str, Any] | None = None,
-    full_text: str = "",
-) -> dict[str, Any]:
-    raw_terms = list(merged.get("terms") or [])
-    if kb_data and full_text:
-        seen = {
-            t["src"].lower() for t in raw_terms if isinstance(t, dict) and t.get("src")
-        }
-        for hit in _scan_text_for_kb_terms(full_text, kb_data):
-            if hit["src"].lower() not in seen:
-                raw_terms.append(hit)
-                seen.add(hit["src"].lower())
-
-    enriched_terms: list[dict[str, Any]] = []
-    for t in raw_terms:
-        item = dict(t)
-        if kb_data:
-            cands = _retrieve_kb_candidates_for_term(item, kb_data)
-            if cands:
-                item["kb_candidates"] = cands
-        enriched_terms.append(item)
-
-    prompt = get_consolidate_terms_prompt(
-        enriched_terms, theme=str(merged.get("theme") or "")
-    )
-    resp = ask_gpt(
-        prompt,
-        resp_type="json",
-        valid_def=_valid_summary,
-        log_title="consolidate_terms",
-    )
-    if isinstance(resp, dict) and isinstance(resp.get("terms"), list):
-        return _merge_terminology_results(
-            [(0, {"theme": merged.get("theme", ""), "terms": resp["terms"]})],
-            custom_terms_list,
-            kb_data=kb_data,
-            full_text=full_text,
-        )
-    return merged
 
 
 @check_file_exists("summarize")
@@ -1035,6 +1037,7 @@ def get_summary() -> None:
         return
 
     video_kb_terms = _scan_text_for_kb_terms(full_text, kb_data)
+    video_kb_srcs = {t["src"].lower() for t in video_kb_terms}
     total_chunks = len(text_chunks)
     max_workers = max(1, int(load_key_or("max_workers", 4) or 4))
 
@@ -1054,8 +1057,12 @@ def get_summary() -> None:
         for idx, chunk in enumerate(text_chunks):
             chunk_kb = _scan_text_for_kb_terms(chunk, kb_data)
             chunk_srcs = {t["src"].lower() for t in chunk_kb}
+            rare_cands = _retrieve_rare_token_candidates(
+                chunk, kb_data, chunk_srcs | video_kb_srcs
+            )
             context_kb = [
-                t for t in video_kb_terms if t["src"].lower() not in chunk_srcs
+                *(t for t in video_kb_terms if t["src"].lower() not in chunk_srcs),
+                *rare_cands,
             ]
             futures.append(
                 executor.submit(_extract_chunk_terms, idx, chunk, chunk_kb, context_kb)
@@ -1163,31 +1170,6 @@ def search_things_to_note_in_prompt(sentence: str) -> str | None:
     if not sentence or not sentence.strip():
         return None
     idx_data = _get_term_index()
-    matches = _match_terms_in_text(sentence, idx_data["matcher"])
-    if not matches:
-        return None
-
-    lines: list[str] = []
-    seen_lines: set[str] = set()
-
-    def _emit(line: str) -> None:
-        key = line.lower()
-        if key not in seen_lines:
-            seen_lines.add(key)
-            lines.append(line)
-
-    for entry, matched_aliases in matches:
-        src = entry["src"]
-        tgt = entry["tgt"]
-        all_aliases = _normalize_aliases(
-            [*(entry.get("aliases") or []), *matched_aliases], src
-        )
-        if all_aliases:
-            _emit(f"{src}:{tgt} aliases:{{{', '.join(all_aliases)}}}")
-        else:
-            _emit(f"{src}:{tgt}")
-        for al in matched_aliases:
-            if al.lower() != src.lower():
-                _emit(f"{al}:{tgt}")
-
+    hits = _match_terms_in_text(sentence, idx_data["matcher"])
+    lines = format_term_hits_for_prompt(hits)
     return "\n".join(lines) if lines else None

@@ -897,8 +897,8 @@ def _translate_lines(monkeypatch, replies, reflect=True):
 
 
 FAITH = {
-    "1": {"origin": "Hello.", "direct": "你好。"},
-    "2": {"origin": "Bye.", "direct": "再见。"},
+    "1": {"origin": "Hello.", "trans": "你好。"},
+    "2": {"origin": "Bye.", "trans": "再见。"},
 }
 
 

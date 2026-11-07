@@ -241,9 +241,9 @@ def test_search_things_to_note_matches_exact_stem_and_asr_fuzzy_variants_in_long
     with workspace_context(ws):
         prompt = summarize.search_things_to_note_in_prompt(chunk)
     assert prompt is not None
-    assert "Bungie:Bungie 工作室" in prompt
+    assert "Bungee:Bungie 工作室 (Bungie)" in prompt
     assert "shader pipeline:着色器管线" in prompt
-    assert "Raycasting:光线投射" in prompt
+    assert "raycastin:光线投射 (Raycasting)" in prompt
     assert "Destiny" not in prompt
 
 
@@ -524,7 +524,7 @@ def test_valid_translate_result_rejects_empty_strings_and_populates_missing_orig
     def fake_ask_gpt(prompt, **kwargs):
         if kwargs.get("log_title") == "translate_faithfulness":
             # LLM omitted "origin" key
-            return {"1": {"direct": "第一行直译"}, "2": {"direct": "第二行直译"}}
+            return {"1": {"trans": "第一行直译"}, "2": {"trans": "第二行直译"}}
         return {
             "1": {"reflect": "OK", "free": "第一行直译"},
             "2": {"reflect": "Adjusted phrasing", "free": "第二行润色"},
@@ -596,7 +596,7 @@ def test_translation_prompts_contain_asr_recovery_and_keep_if_flawless_in_englis
     )
 
     assert "### 术语库-词典" in faith_prompt
-    assert "Mandatory Terminology Consistency" in faith_prompt
+    assert "Strict Terminology Adherence" in faith_prompt
     assert "Principle of Necessary Enhancement (Keep-if-Flawless)" in express_prompt
     assert "Elite Linguistic Polisher & Guardian of Fidelity" in express_prompt
 
@@ -650,13 +650,13 @@ def test_symbol_terms_do_not_pollute_stem_ngram_map_and_aliases_appear_in_prompt
         assert "C++:C++ 语言" in sym_prompt
         assert "C#:" not in sym_prompt
 
-        # Alias match must surface the alias in Points to Note so LLM links 'cooper netties' -> 'Kubernetes'
+        # Alias match must surface the calibrated alias:tgt (src) line in Points to Note
         alias_prompt = summarize.search_things_to_note_in_prompt(
             "We deployed the cluster on cooper netties in production."
         )
         assert alias_prompt is not None
-        assert "Kubernetes:K8s 容器编排" in alias_prompt
-        assert "aliases:{cooper netties}" in alias_prompt
+        assert "cooper netties:K8s 容器编排 (Kubernetes)" in alias_prompt
+        assert "aliases:{" not in alias_prompt
 
 
 def test_merge_terminology_results_unifies_llm_variants_into_canonical_aliases():
@@ -788,11 +788,12 @@ def test_multiword_fuzzy_guards_and_longest_span_suppression(monkeypatch, tmp_pa
         assert "\nCompendium:汇编" not in f"\n{span_prompt}"
 
 
-def test_generic_kb_candidate_retrieval_and_llm_reduce_consolidation(
+def test_generic_kb_rare_token_candidate_retrieval_and_deterministic_merge(
     monkeypatch, tmp_path
 ):
-    """Schema-agnostic KB indexing extracts entries from nested JSON, fuzzy-matches ASR variants ('Multimoc', 'DFA')
-    to official KB entries ('Multimach CCX', 'D.F.A.'), scans direct KB hits, and preserves transcript surface forms in aliases."""
+    """Schema-agnostic KB indexing extracts entries from nested JSON, retrieves rare-token KB candidates
+    for partial/shorthand mentions ('Multimach'), scans dotted acronyms ('DFA' -> 'D.F.A.'), and merges
+    transcript surface forms into canonical aliases."""
     import core._4_1_summarize as summarize
 
     kb_json = tmp_path / "term-map.json"
@@ -818,31 +819,27 @@ def test_generic_kb_candidate_retrieval_and_llm_reduce_consolidation(
     )
     monkeypatch.setattr(summarize, "OPTIONAL_JSON_TERMS_PATH", str(kb_json))
     monkeypatch.setattr(summarize, "load_key_or", lambda k, d=None: "简体中文")
-    monkeypatch.setattr("core.prompts.get_source_language", lambda: "en")
-    monkeypatch.setattr("core.prompts.load_key", lambda k: "简体中文")
 
     kb_data = summarize._get_kb_index([])
-    cands_multi = summarize._retrieve_kb_candidates_for_term(
-        {"src": "Multimach", "aliases": ["Multimoc"]}, kb_data
+    rare_cands = summarize._retrieve_rare_token_candidates(
+        "Using Multimach in the Crucible.", kb_data, set()
     )
     assert any(
-        c["src"] == "Multimach CCX" and c["tgt"] == "多机系统CCX" for c in cands_multi
+        c["src"] == "Multimach CCX" and c["tgt"] == "多机系统CCX" for c in rare_cands
     )
 
-    cands_dfa = summarize._retrieve_kb_candidates_for_term({"src": "DFA"}, kb_data)
-    assert any(c["src"] == "D.F.A." and c["tgt"] == "死从天降" for c in cands_dfa)
-
-    # Direct KB scan finds "Hand Cannons" in transcript while skipping conversational stopword phrases "what if" and "all"
+    # Direct KB scan finds "Hand Cannons" and dotted acronym "DFA" -> "D.F.A." while skipping stopword phrases
     transcript = (
         "What if we compare all Hand Cannons against the Multimoc and DFA today?"
     )
     scanned = summarize._scan_text_for_kb_terms(transcript, kb_data)
-    scanned_srcs = {s["src"] for s in scanned}
-    assert "Hand Cannons" in scanned_srcs
-    assert "What If" not in scanned_srcs
-    assert "All" not in scanned_srcs
+    scanned_by_src = {s["src"]: s for s in scanned}
+    assert "Hand Cannons" in scanned_by_src
+    assert "D.F.A." in scanned_by_src
+    assert scanned_by_src["D.F.A."]["aliases"] == ["DFA"]
+    assert "What If" not in scanned_by_src
+    assert "All" not in scanned_by_src
 
-    # LLM Reduce consolidation adopts official KB translations and keeps original surface forms in aliases
     chunk_results = [
         (
             0,
@@ -850,50 +847,19 @@ def test_generic_kb_candidate_retrieval_and_llm_reduce_consolidation(
                 "theme": "Weapon comparison.",
                 "terms": [
                     {
-                        "src": "Multimach",
-                        "tgt": "多级机枪",
-                        "aliases": ["Multimoc"],
+                        "src": "Multimach CCX",
+                        "tgt": "多机系统CCX",
+                        "aliases": ["Multimach", "Multimoc"],
                         "note": "SMG",
                     },
-                    {"src": "DFA", "tgt": "DFA手炮", "note": "Hand cannon"},
                 ],
             },
         )
     ]
-    merged = summarize._merge_terminology_results(chunk_results, [])
-
-    def fake_consolidate_gpt(prompt, **kwargs):
-        assert "Multimach CCX" in prompt
-        assert "多机系统CCX" in prompt
-        assert "Hand Cannons" in prompt
-        return {
-            "terms": [
-                {
-                    "src": "Multimach CCX",
-                    "tgt": "多机系统CCX",
-                    "aliases": ["Multimach", "Multimoc"],
-                    "note": "Iron Banner SMG",
-                },
-                {
-                    "src": "D.F.A.",
-                    "tgt": "死从天降",
-                    "aliases": ["DFA"],
-                    "note": "Nightfall Hand Cannon",
-                },
-                {
-                    "src": "Hand Cannons",
-                    "tgt": "手炮",
-                    "aliases": [],
-                    "note": "Weapon archetype",
-                },
-            ]
-        }
-
-    monkeypatch.setattr(summarize, "ask_gpt", fake_consolidate_gpt)
-    consolidated = summarize._consolidate_terms_with_llm(
-        merged, chunk_results, [], kb_data=kb_data, full_text=transcript
+    merged = summarize._merge_terminology_results(
+        chunk_results, [], kb_data=kb_data, full_text=transcript
     )
-    by_src = {t["src"]: t for t in consolidated["terms"]}
+    by_src = {t["src"]: t for t in merged["terms"]}
     assert by_src["Multimach CCX"]["tgt"] == "多机系统CCX"
     assert "Multimach" in by_src["Multimach CCX"]["aliases"]
     assert "Multimoc" in by_src["Multimach CCX"]["aliases"]
@@ -901,9 +867,8 @@ def test_generic_kb_candidate_retrieval_and_llm_reduce_consolidation(
     assert "DFA" in by_src["D.F.A."]["aliases"]
     assert by_src["Hand Cannons"]["tgt"] == "手炮"
 
-    # Also verify _get_term_index() does not deadlock when OPTIONAL_JSON_TERMS_PATH exists
     ws = TaskWorkspace(tmp_path)
-    ws.save_terms(consolidated.get("theme", ""), consolidated["terms"])
+    ws.save_terms(merged.get("theme", ""), merged["terms"])
     monkeypatch.setattr(summarize, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
     monkeypatch.setattr(summarize, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
     with workspace_context(ws):
@@ -911,8 +876,8 @@ def test_generic_kb_candidate_retrieval_and_llm_reduce_consolidation(
             "Using Multimoc and DFA today."
         )
     assert note_prompt is not None
-    assert "多机系统CCX" in note_prompt
-    assert "死从天降" in note_prompt
+    assert "Multimoc:多机系统CCX (Multimach CCX)" in note_prompt
+    assert "DFA:死从天降 (D.F.A.)" in note_prompt
 
 
 def test_stitch_incomplete_clause_spans_merges_fronted_and_trailing_subordinate_clauses():
@@ -961,8 +926,8 @@ def test_translate_lines_replaces_ok_placeholder_in_free_with_direct(monkeypatch
     def fake_ask_gpt(prompt, **kwargs):
         if kwargs.get("log_title") == "translate_faithfulness":
             return {
-                "1": {"origin": "Hello world.", "direct": "你好，世界。"},
-                "2": {"origin": "Use Multimach CCX.", "direct": "使用多机系统CCX。"},
+                "1": {"origin": "Hello world.", "trans": "你好，世界。"},
+                "2": {"origin": "Use Multimach CCX.", "trans": "使用多机系统CCX。"},
             }
         return {
             "1": {
@@ -1044,7 +1009,6 @@ def test_prompts_are_domain_and_language_agnostic_and_merge_tiny_clauses_preserv
     """Prompts contain no hardcoded Chinese characters when target_language is non-Chinese,
     and _merge_tiny_clauses merges sentence-initial lead-ins while preserving mid-sentence
     parallel short clauses."""
-    import re
 
     import core._5_split_sub as s5
     import core.prompts as prompts
@@ -1057,15 +1021,12 @@ def test_prompts_are_domain_and_language_agnostic_and_merge_tiny_clauses_preserv
 
     shared = prompts.generate_shared_prompt(["Prev"], ["Next"], "Summary", "Notes")
     faith_prompt = prompts.get_prompt_faithfulness("Hello world.", shared)
-    consolidate_prompt = prompts.get_consolidate_terms_prompt(
-        [{"src": "API", "tgt": "API"}],
-        theme="Tech",
-        target_language="Español",
-    )
 
     assert "### 术语库-词典" in faith_prompt
-    assert "<<请逐行翻译为Español，确保忠实于原文，且仅输出翻译后结果>>" in faith_prompt
-    assert not re.search(r"[\u4e00-\u9fff]", consolidate_prompt)
+    assert (
+        "<<请一步到位翻译为精准、自然地道、符合口语字幕节奏的Español最终译文>>"
+        in faith_prompt
+    )
 
     # Sentence-initial lead-in ('但遗憾的是，' = 5 CJK chars, weighted 10.75) merges into following clause
     merged_lead = s5._merge_tiny_clauses(
@@ -1361,9 +1322,9 @@ def test_end_to_end_alias_matching_across_split_translate_and_sub_cues(
         ]
         note_prompt = s41.search_things_to_note_in_prompt(chunks[0])
         assert note_prompt is not None
-        assert "NATS:NATS aliases:{Gnats}" in note_prompt
-        assert "PyTorch:PyTorch aliases:{pie torch}" in note_prompt
-        assert "Kubernetes:Kubernetes aliases:{cooper netties}" in note_prompt
+        assert "Gnats:NATS (NATS)" in note_prompt
+        assert "pie torch:PyTorch (PyTorch)" in note_prompt
+        assert "cooper netties:Kubernetes (Kubernetes)" in note_prompt
 
         # 3. Step 5 _partition_word_span_for_cues partitions [0, 11) at exact word index 6 ("training,")
         words_loaded = ws.load_words()
@@ -1762,24 +1723,25 @@ def test_inflections_and_asr_aliases_match_search_without_source_replacement(
     }
     assert {"D.A.R.C.I.", "Gjallarhorn", "Glaive"} <= kb_scanned_srcs
 
-    # 3. search_things_to_note_in_prompt matches all canonical entries from inflected words and ASR aliases in src_line
+    # 3. search_things_to_note_in_prompt matches all canonical entries from inflected words and calibrated aliases in src_line
     with workspace_context(ws):
         note_prompt = s41.search_things_to_note_in_prompt(src_line)
     assert note_prompt is not None
-    for canonical, zh in (
-        ("Wolf", "群狼"),
-        ("Glaive", "偃月"),
-        ("Buff", "增益"),
-        ("Weaken", "削弱"),
-        ("Scorch", "灼烧"),
-        ("Jolt", "颠簸"),
-        ("Ager's Scepter", "阿格尔的权杖"),
-        ("Gjallarhorn", "加拉尔号角"),
-        ("Savathûn", "萨瓦图恩"),
-        ("Khvostov 7G-0X", "赫沃斯托夫 7G-0X"),
-        ("D.A.R.C.I.", "达尔西"),
+    for expected_line in (
+        "Wolf:群狼",
+        "Glaive:偃月",
+        "Buff:增益",
+        "Weaken:削弱",
+        "Scorch:灼烧",
+        "Jolt:颠簸",
+        "Ager's Scepter:阿格尔的权杖",
+        "gally:加拉尔号角 (Gjallarhorn)",
+        "sabathun:萨瓦图恩 (Savathûn)",
+        "Khvostov 7G-0X:赫沃斯托夫 7G-0X",
+        "Kavostov:赫沃斯托夫 7G-0X (Khvostov 7G-0X)",
+        ":达尔西 (D.A.R.C.I.)",
     ):
-        assert f"{canonical}:{zh}" in note_prompt
+        assert expected_line in note_prompt
     assert ":点燃" in note_prompt and (
         "Ignite:" in note_prompt or "Ignition:" in note_prompt
     )
@@ -1865,13 +1827,31 @@ def test_rerun_idempotency_compound_shorthand_retrieval_and_punctuation_cleanup(
             {
                 "src": "Cuirass of the Falling Star",
                 "tgt": "陨星胸甲",
-                "aliases": ["Curious"],
+                "aliases": ["Curus", "Curious"],
                 "source": "task",
             },
             {
                 "src": "One Thousand Voices",
                 "tgt": "千语",
                 "aliases": ["1K"],
+                "source": "task",
+            },
+            {
+                "src": "Fireteam Ops",
+                "tgt": "火力战队行动",
+                "aliases": ["ops"],
+                "source": "task",
+            },
+            {
+                "src": "Arena Ops",
+                "tgt": "竞技场行动",
+                "aliases": ["ops"],
+                "source": "task",
+            },
+            {
+                "src": "Solo Ops",
+                "tgt": "单人行动",
+                "aliases": ["ops"],
                 "source": "task",
             },
         ],
@@ -1883,20 +1863,47 @@ def test_rerun_idempotency_compound_shorthand_retrieval_and_punctuation_cleanup(
 
     with workspace_context(ws):
         prompt = s41.search_things_to_note_in_prompt(
-            "Using Cloud Strike, gearshift, Curious, and 1K on this boss."
+            "Using Cloud Strike, gearshift, Curious, and 1K in ops on this boss."
         )
     assert prompt is not None
     for expected in (
-        "Cloudstrike:雷云风暴",
-        "Cloud Strike:雷云风暴",
-        "Gear Shift:换挡",
-        "gearshift:换挡",
-        "Cuirass of the Falling Star:陨星胸甲",
-        "Curious:陨星胸甲",
-        "One Thousand Voices:千语",
-        "1K:千语",
+        "Cloud Strike:雷云风暴 (Cloudstrike)",
+        "gearshift:换挡 (Gear Shift)",
+        "Curious:陨星胸甲 (Cuirass of the Falling Star)",
+        "1K:千语 (One Thousand Voices)",
+        "ops:火力战队行动 (Fireteam Ops)",
+        "ops:竞技场行动 (Arena Ops)",
+        "ops:单人行动 (Solo Ops)",
     ):
         assert expected in prompt
+    assert "Curus" not in prompt
+    assert "aliases:{" not in prompt
+
+    from core.prompts import get_summary_prompt
+
+    summary_prompt = get_summary_prompt(
+        "Curious is great.",
+        custom_terms_json={
+            "terms": [
+                {
+                    "src": "Cuirass of the Falling Star",
+                    "tgt": "陨星胸甲",
+                    "aliases": ["Curious"],
+                    "src_matched": False,
+                }
+            ]
+        },
+        previously_extracted_terms=[
+            {
+                "src": "Cuirass of the Falling Star",
+                "tgt": "陨星胸甲",
+                "aliases": ["Curious"],
+                "src_matched": False,
+            }
+        ],
+    )
+    assert "Curious:陨星胸甲 (Cuirass of the Falling Star)" in summary_prompt
+    assert "Cuirass of the Falling Star:陨星胸甲" in summary_prompt
 
     # 3. Punctuation cleanup & dunhao splitting
     dirty = "“冰影泰坦”——输出机制：依靠冰晶、碎裂伤害；以及「高额爆发」！"

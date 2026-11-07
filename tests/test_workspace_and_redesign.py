@@ -913,10 +913,7 @@ def test_sentence_initial_fix_source_and_global_glossary_cache_invalidation(
         assert utts[0]["src"] == "Gnats streams messages."
         assert utts[0]["src_raw"] == "Gnats streams messages"
         note_prompt = _4_1_summarize.search_things_to_note_in_prompt(chunks[0])
-        assert (
-            note_prompt is not None
-            and "NATS:NATS消息系统 aliases:{Gnats}" in note_prompt
-        )
+        assert note_prompt is not None and "Gnats:NATS消息系统 (NATS)" in note_prompt
 
         _5_split_sub.split_for_sub_main()
         stamps = _6_gen_sub.get_sentence_timestamps(
@@ -1321,7 +1318,9 @@ def test_review_fixes_large_dict_fix_source_paused_invalidate_domain_mtime_and_h
         note_prompt = _4_1_summarize.search_things_to_note_in_prompt(
             "We deploy on kube today."
         )
-        assert note_prompt is not None and "Kubernetes:K8s容器编排" in note_prompt
+        assert (
+            note_prompt is not None and "kube:K8s容器编排 (Kubernetes)" in note_prompt
+        )
 
     # Finding 2: Calling POST /api/tasks/{id}/invalidate when runner is paused at review_terminology
     def _paused_step():
