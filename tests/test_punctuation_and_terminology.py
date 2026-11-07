@@ -1956,3 +1956,106 @@ def test_rerun_idempotency_compound_shorthand_retrieval_and_punctuation_cleanup(
         assert "Second Chance" not in hit_map
         assert "Shards of Galanor" in hit_map
         assert "Aggregate Charge" in hit_map
+
+
+def test_sync_subtitles_from_srt_updates_db_and_bilingual_srts(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Editing src.srt / trans.srt externally and syncing updates SQLite utterances/sub_cues and bilingual SRTs."""
+    from fastapi.testclient import TestClient
+
+    import api
+    from core import _6_gen_sub as s6
+    from core.workspace import TaskWorkspace, workspace_context
+
+    monkeypatch.setattr("core.workspace.OUTPUT_ROOT", tmp_path)
+    monkeypatch.setattr(api, "OUTPUT", tmp_path)
+    ws = TaskWorkspace(tmp_path / "sync_srt_task")
+    ws.save_manifest({"task_id": "sync_srt_task", "title": "Sync SRT"})
+    ws.save_utterances(
+        [
+            {
+                "id": "u_0000",
+                "index": 0,
+                "start": 0.0,
+                "end": 2.5,
+                "word_span": [0, 4],
+                "src": "Old source line one.",
+                "src_punct": "Old source line one.",
+                "tgt": "旧译文第一行",
+                "tts_text": "旧译文第一行",
+                "sub_cues": [
+                    {
+                        "src": "Old source line one.",
+                        "tgt": "旧译文第一行",
+                        "trans": "旧译文第一行",
+                        "word_span": [0, 4],
+                        "start": 0.0,
+                        "end": 2.5,
+                    }
+                ],
+            },
+            {
+                "id": "u_0001",
+                "index": 1,
+                "start": 2.5,
+                "end": 6.0,
+                "word_span": [4, 10],
+                "src": "First half, second half.",
+                "src_punct": "First half, second half.",
+                "tgt": "前半句，后半句",
+                "tts_text": "前半句，后半句",
+                "sub_cues": [
+                    {
+                        "src": "First half,",
+                        "tgt": "前半句",
+                        "trans": "前半句",
+                        "word_span": [4, 7],
+                        "start": 2.5,
+                        "end": 4.0,
+                    },
+                    {
+                        "src": "second half.",
+                        "tgt": "后半句",
+                        "trans": "后半句",
+                        "word_span": [7, 10],
+                        "start": 4.0,
+                        "end": 6.0,
+                    },
+                ],
+            },
+        ]
+    )
+
+    (ws.root / "src.srt").write_text(
+        "1\n00:00:00,000 --> 00:00:02,500\nEdited source line one.\n\n"
+        "2\n00:00:02,500 --> 00:00:04,200\nEdited first half,\n\n"
+        "3\n00:00:04,200 --> 00:00:06,000\nsecond half.\n",
+        encoding="utf-8",
+    )
+    (ws.root / "trans.srt").write_text(
+        "1\n00:00:00,000 --> 00:00:02,500\n校对后译文第一行\n\n"
+        "2\n00:00:02,500 --> 00:00:04,200\n校对前半句\n\n"
+        "3\n00:00:04,200 --> 00:00:06,000\n校对后半句\n",
+        encoding="utf-8",
+    )
+
+    client = TestClient(api.app)
+    res = client.post("/api/tasks/sync_srt_task/subtitles/sync")
+    assert res.status_code == 200
+    assert res.json() == {"cues": 3, "utterances": 2}
+
+    utts = ws.load_utterances()
+    assert len(utts) == 2
+    assert utts[0]["src"] == "Edited source line one."
+    assert utts[0]["tgt"] == "校对后译文第一行"
+    assert utts[0]["sub_cues"][0]["tgt"] == "校对后译文第一行"
+    assert utts[1]["sub_cues"][0]["src"] == "Edited first half,"
+    assert utts[1]["sub_cues"][0]["tgt"] == "校对前半句"
+    assert utts[1]["sub_cues"][0]["end"] == 4.2
+    assert utts[1]["sub_cues"][1]["tgt"] == "校对后半句"
+    assert "校对后译文第一行" in (ws.root / "src_trans.srt").read_text(encoding="utf-8")
+    assert "校对后半句" in (ws.root / "trans_src.srt").read_text(encoding="utf-8")
+
+    with workspace_context(ws):
+        assert s6.sync_subtitles_from_srt_if_newer() is False

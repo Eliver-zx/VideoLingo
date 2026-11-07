@@ -114,6 +114,10 @@
       paneSubtitle?.classList.toggle('hidden', isTerms || isLog);
       paneTerms?.classList.toggle('hidden', !isTerms);
       consoleDock?.classList.toggle('hidden', !isLog);
+      const syncSrtBtn = document.getElementById('btn-sync-subtitles-from-srt');
+      if (syncSrtBtn) {
+        syncSrtBtn.classList.toggle('hidden', activeBatchId !== 'all');
+      }
       if (isTerms) {
         autoResizeThemeTextarea(document.getElementById('terms-theme-input'));
       }
@@ -1245,6 +1249,25 @@
     }
 
     document.getElementById('subtitle-stream-search').addEventListener('input', renderStreamTable);
+
+    document.getElementById('btn-sync-subtitles-from-srt')?.addEventListener('click', async () => {
+      const task = REAL_TASKS.find(x => x.id === activeTaskId);
+      if (!task) return;
+      if (isBackendConnected && task.fromBackend) {
+        try {
+          setAutosaveStatus('running', '同步 SRT…');
+          const res = await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/subtitles/sync`, {
+            method: 'POST',
+          });
+          await loadBackendTaskDetail(activeTaskId);
+          setAutosaveStatus('completed', `已同步 ${res.cues || 0} 轴`);
+          appendLog('llm', 'SUBS', `已从本地 SRT 文件同步更新数据库 (${res.cues || 0} 轴)。`, false);
+        } catch (err) {
+          setAutosaveStatus('error', '同步失败');
+          reportActionError('SUBS', err);
+        }
+      }
+    });
 
     document.getElementById('btn-save-utterances-and-continue')?.addEventListener('click', async () => {
       const task = REAL_TASKS.find(x => x.id === activeTaskId);

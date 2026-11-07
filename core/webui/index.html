@@ -172,6 +172,9 @@
               <div class="row" style="gap:8px;">
                 <input id="subtitle-stream-search" type="text" placeholder="搜索字幕或术语…" style="inline-size:210px;">
                 <span class="field-hint mono" id="stream-row-counter">共 0 轴</span>
+                <button type="button" class="xs" id="btn-sync-subtitles-from-srt" style="inline-size:26px; padding:0;" title="从本地 src.srt / trans.srt 刷新同步数据库" aria-label="从 SRT 刷新同步数据库">
+                  <svg class="icon" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                </button>
                 <button type="button" class="primary xs hidden" id="btn-save-utterances-and-continue" title="确认字幕并继续后续流程">继续任务 →</button>
               </div>
             </div>

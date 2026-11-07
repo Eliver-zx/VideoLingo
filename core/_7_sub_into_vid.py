@@ -94,6 +94,10 @@ def merge_subtitles_to_video():
         )
         raise FileNotFoundError("Source or translation SRT file not found.")
 
+    from core._6_gen_sub import sync_subtitles_from_srt_if_newer
+
+    sync_subtitles_from_srt_if_newer()
+
     meta = probe_media_metadata(video_file)
     TARGET_WIDTH = int(meta.get("display_width") or meta.get("width") or 0)
     TARGET_HEIGHT = int(meta.get("display_height") or meta.get("height") or 0)

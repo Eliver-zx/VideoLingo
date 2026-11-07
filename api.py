@@ -1131,6 +1131,23 @@ def update_task_utterances(task_id: str, request: UtterancesUpdateRequest):
     return {"saved": len(normalized_utts)}
 
 
+@app.post("/api/tasks/{task_id}/subtitles/sync")
+def sync_task_subtitles_from_srt(task_id: str):
+    ws = _resolve_workspace(task_id)
+    manifest = ws.load_manifest()
+    overrides = dict(manifest.get("config_override") or {})
+    from core._6_gen_sub import sync_subtitles_from_srt
+
+    try:
+        with workspace_context(ws), task_config_context(overrides):
+            result = sync_subtitles_from_srt()
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return result
+
+
 @app.delete("/api/tasks/{task_id}")
 def delete_task(task_id: str):
     ws = _resolve_workspace(task_id)
