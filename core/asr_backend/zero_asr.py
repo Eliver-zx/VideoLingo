@@ -71,6 +71,7 @@ def transcribe_audio_zero(
     check_cancel()
     api_key = configured_credentials()
     language = str(load_key_or("whisper.language", "en") or "en").strip()
+    model = str(load_key_or("whisper.gladia_model", "solaria-3") or "solaria-3").strip()
 
     audio_bytes = audio_slice_wav(vocal_audio_path, start, end, sample_rate=SAMPLE_RATE)
     offset = float(start) if start is not None else 0.0
@@ -102,6 +103,7 @@ def transcribe_audio_zero(
     headers["Content-Type"] = "application/json"
     payload: Dict[str, Any] = {
         "audio_url": audio_url,
+        "model": model,
         "diarization": False,
     }
     if language and language.lower() != "auto":

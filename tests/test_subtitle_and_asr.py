@@ -270,6 +270,68 @@ def test_gladia_zero_response_conversion():
     assert transcription_cache.valid_result(res)
 
 
+def test_gladia_zero_transcribe_payload_defaults(monkeypatch):
+    captured = {}
+
+    def fake_post(url, *args, **kwargs):
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                if "upload" in url:
+                    return {"audio_url": "https://example.com/audio.wav"}
+                return {"result_url": "https://example.com/result"}
+
+            @property
+            def text(self):
+                return ""
+
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return FakeResp()
+
+    def fake_get(url, *args, **kwargs):
+        class FakeResp:
+            status_code = 200
+
+            def json(self):
+                return {
+                    "status": "done",
+                    "result": {
+                        "transcription": {
+                            "languages": ["en"],
+                            "utterances": [
+                                {
+                                    "start": 0.0,
+                                    "end": 1.0,
+                                    "text": "hi",
+                                    "words": [{"word": "hi", "start": 0.0, "end": 1.0}],
+                                }
+                            ],
+                        }
+                    },
+                }
+
+            @property
+            def text(self):
+                return ""
+
+        return FakeResp()
+
+    monkeypatch.setattr(zero_asr, "configured_credentials", lambda: "test-gladia-key")
+    monkeypatch.setattr(
+        zero_asr,
+        "audio_slice_wav",
+        lambda *args, **kwargs: b"RIFF....WAVEfmt ....data....",
+    )
+    monkeypatch.setattr(zero_asr.requests, "post", fake_post)
+    monkeypatch.setattr(zero_asr.requests, "get", fake_get)
+
+    res = zero_asr.transcribe_audio_zero("raw.mp3", "vocal.wav")
+    assert res["language"] == "en"
+    assert captured["kwargs"]["json"]["model"] == "solaria-3"
+
+
 def test_replicate_response_normalization():
     raw = {
         "detected_language": "ja",
@@ -304,6 +366,12 @@ def test_cloud_asr_cache_keys_and_credential_checks(tmp_path, monkeypatch):
     k_zero = transcription_cache.cache_key(
         str(media), {"runtime": "zero", "language": "en"}, False
     )
+    k_zero_s1 = transcription_cache.cache_key(
+        str(media),
+        {"runtime": "zero", "gladia_model": "solaria-1", "language": "en"},
+        False,
+    )
+    assert k_zero != k_zero_s1
     k_mimo1 = transcription_cache.cache_key(
         str(media),
         {"runtime": "mimo", "mimo_model": "mimo-v2.5-asr", "language": "en"},

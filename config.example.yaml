@@ -63,6 +63,7 @@ whisper:
   assemblyai_model: 'universal'
   # Gladia Whisper Zero ASR settings
   whisperzero_api_key: ''
+  gladia_model: 'solaria-3'
   # Replicate ASR settings (for replicate_parakeet and replicate_whisper)
   replicate_api_key: ''
 

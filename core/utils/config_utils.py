@@ -67,6 +67,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "assemblyai_lang": "en",
         "assemblyai_model": "universal",
         "whisperzero_api_key": "",
+        "gladia_model": "solaria-3",
         "replicate_api_key": "",
     },
     "burn_subtitles": True,

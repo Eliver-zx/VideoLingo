@@ -76,6 +76,8 @@ def cache_key(media_file, whisper, demucs):
             cloud_model = whisper.get("deepgram_model", "nova-3")
         elif runtime_lower == "assembly":
             cloud_model = f"{whisper.get('assemblyai_model', 'universal')}:{whisper.get('assemblyai_lang', whisper.get('language'))}"
+        elif runtime_lower == "zero":
+            cloud_model = whisper.get("gladia_model", "solaria-3")
         elif runtime_lower == "elevenlabs":
             cloud_model = whisper.get("model", "scribe_v1")
         extra_pkg: dict[str, object] = {}
