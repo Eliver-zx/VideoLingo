@@ -35,12 +35,23 @@ from core.workspace import get_active_workspace
 split_sentence = _default_split_sentence
 get_align_prompt = _default_get_align_prompt
 
-_LEADING_PUNCT_RE = re.compile(r"^[\s，。、！!？?：:；;）)】\]》>…—\-·]+")
-_BOOK_MARK_TABLE = str.maketrans({"《": "“", "》": "”", "〈": "‘", "〉": "’"})
+_LEADING_PUNCT_RE = re.compile(
+    r"^[\s，。、！!？?：:；;）)】\]》>…—\-·“”‘’\"'「」『』]+"
+)
+_QUOTE_BOOK_MARK_TABLE = str.maketrans({c: None for c in "《》〈〉“”‘’「」『』"})
 
 
 def _normalize_book_marks(text: str) -> str:
-    return str(text).translate(_BOOK_MARK_TABLE)
+    s = str(text).translate(_QUOTE_BOOK_MARK_TABLE)
+    if re.search(r"[\u4e00-\u9fff]", s):
+        s = s.replace('"', "")
+        s = re.sub(r"(?:——+|—+|--+|[：；;])+", "，", s)
+        s = re.sub(r"(?<!\d):(?!\d)", "，", s)
+        s = re.sub(r"，+", "，", s)
+        s = re.sub(r"，([。？！、])", r"\1", s)
+        s = re.sub(r"([，。？！、])，", r"\1", s)
+        s = re.sub(r"^，+|，+$", "", s)
+    return s
 
 
 _CLAUSE_PUNCT = set(",;:，、；：—")
@@ -316,7 +327,7 @@ def align_source_by_ratio(
     return src_parts, tr_parts, tr_remerged
 
 
-_CLAUSE_SPLIT_RE = re.compile(r"(?<=[，,；;：:。！？!?—])")
+_CLAUSE_SPLIT_RE = re.compile(r"(?<=[，,、；;：:。！？!?])|(?<=——)|(?<!—)(?<=—)(?!—)")
 
 
 def _partition_clauses_dp(clauses: list[str], k: int) -> list[str]:
@@ -392,6 +403,46 @@ def _merge_tiny_clauses(
     return merged
 
 
+_CJK_SYNTACTIC_SPLIT_RE = re.compile(
+    r"(?:(?<=适用于)|(?<=取决于)|(?<=相当于)|(?<=得益于)|(?<=来自于)|(?<=是由于)|(?<=是因为)|(?<=指的是)|(?<=意味着)|(?<=的时候)|(?<=的情况下)|(?<=的同时)|(?<=之后)|(?<=之前)|(?<=的)|(?=而且)|(?=并且)|(?=同时)|(?=以及)|(?=或者)|(?=从而)|(?=因此)|(?=所以)|(?=因为)|(?=如果)|(?=所[\u4e00-\u9fff]{1,2}(?:的)?))"
+)
+
+
+def _subsplit_overlong_cjk_clause(
+    clause: str, max_sub_length: float, target_sub_multiplier: float
+) -> List[str]:
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", clause))
+    if cjk_count == 0 or (
+        calc_len(clause) * target_sub_multiplier <= max_sub_length and cjk_count <= 25
+    ):
+        return [clause]
+    max_single_w = min(float(max_sub_length), max(50.0, float(max_sub_length) * 0.76))
+    n = len(clause)
+    low_b = max(4, int(n * 0.25))
+    high_b = min(n - 4, int(n * 0.75))
+    mid = n // 2
+    best_idx = -1
+    best_dist = n
+    for m in _CJK_SYNTACTIC_SPLIT_RE.finditer(clause):
+        idx = m.start()
+        if not (low_b <= idx <= high_b):
+            continue
+        left, right = clause[:idx].strip(), clause[idx:].strip()
+        if (
+            calc_len(left) >= 12.25
+            and calc_len(right) >= 12.25
+            and calc_len(left) * target_sub_multiplier <= max_single_w
+            and calc_len(right) * target_sub_multiplier <= max_single_w
+        ):
+            dist = abs(idx - mid)
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = idx
+    if best_idx != -1:
+        return [clause[:best_idx].strip(), clause[best_idx:].strip()]
+    return [clause]
+
+
 def _try_local_clause_split(
     src_line: str,
     tr_line: str,
@@ -404,12 +455,20 @@ def _try_local_clause_split(
     tr_norm = _normalize_book_marks(tr_line)
     tr_clean = _LEADING_PUNCT_RE.sub("", tr_norm).strip() or tr_norm.strip()
     raw_clauses = [c.strip() for c in _CLAUSE_SPLIT_RE.split(tr_clean) if c.strip()]
+    if len(raw_clauses) >= 2:
+        expanded: List[str] = []
+        for rc in raw_clauses:
+            expanded.extend(
+                _subsplit_overlong_cjk_clause(rc, max_sub_length, target_sub_multiplier)
+            )
+        raw_clauses = expanded
     max_clause_w = max_sub_length / max(0.1, target_sub_multiplier)
+    lead_merge_cap = min(max_clause_w, 35.0)
     clauses = _merge_tiny_clauses(
         raw_clauses,
         min_weighted_len=7.5,
         lead_in_weighted_len=13.0,
-        max_merged_weighted_len=max_clause_w,
+        max_merged_weighted_len=lead_merge_cap,
     )
     if len(clauses) < 2:
         return None
@@ -417,13 +476,10 @@ def _try_local_clause_split(
         return None
 
     tr_w = calc_len(tr_clean) * target_sub_multiplier
-    src_w = calc_len(str(src_line))
-    # Target-language-driven k with comfortable reading cadence (~22 CJK chars per cue
-    # when splitting long sentences, while never exceeding max_sub_length).
-    comfortable_target_w = min(max_sub_length, max(48.0, max_sub_length * 0.72))
+    comfortable_target_w = min(max_sub_length, max(38.0, max_sub_length * 0.60))
     needed_k = max(
         math.ceil(tr_w / max(1.0, max_sub_length)),
-        math.ceil(tr_w / comfortable_target_w) if src_w > max_sub_length else 1,
+        math.ceil(tr_w / comfortable_target_w),
         2,
     )
     needed_k = min(needed_k, len(clauses))
@@ -437,7 +493,7 @@ def _try_local_clause_split(
         ):
             continue
         s_parts, t_parts, remerged = align_source_by_ratio(
-            str(src_line), str(tr_line), "\n".join(cand_groups), word_gaps=word_gaps
+            str(src_line), tr_norm, "\n".join(cand_groups), word_gaps=word_gaps
         )
         if len(s_parts) == len(cand_groups) and all(
             calc_len(tp) * target_sub_multiplier <= max_sub_length for tp in t_parts
@@ -584,12 +640,20 @@ def split_align_subs(
     src_work: list[str | list[str]] = list(src_lines)
     tr_work: list[str | list[str]] = list(tr_lines)
 
+    comfortable_w = max(38.0, float(MAX_SUB_LENGTH) * 0.60)
     to_split = []
     for i, (src, tr) in enumerate(zip(src_lines, tr_lines)):
         src, tr = str(src), str(tr)
+        tr_norm_i = _normalize_book_marks(tr)
+        has_multi_clauses = (
+            calc_len(tr_norm_i) * float(TARGET_SUB_MULTIPLIER) > comfortable_w
+            and len([c.strip() for c in _CLAUSE_SPLIT_RE.split(tr_norm_i) if c.strip()])
+            >= 2
+        )
         if (
             calc_len(src) > MAX_SUB_LENGTH
             or calc_len(tr) * TARGET_SUB_MULTIPLIER > MAX_SUB_LENGTH
+            or has_multi_clauses
         ):
             to_split.append(i)
 
@@ -617,20 +681,19 @@ def split_align_subs(
                 tr_norm = _normalize_book_marks(tr_lines[i])
                 tr_clean = _LEADING_PUNCT_RE.sub("", tr_norm).strip() or tr_norm.strip()
                 tr_w = calc_len(tr_clean) * float(TARGET_SUB_MULTIPLIER)
-                # When the translation already fits comfortably on a single subtitle line
-                # (<= MAX_SUB_LENGTH) and no single internal clause exceeds MAX_SUB_LENGTH,
-                # keep it intact rather than chopping a single clause in half just because
-                # the English source line had conversational filler words.
                 raw_clauses_i = [
                     c.strip() for c in _CLAUSE_SPLIT_RE.split(tr_clean) if c.strip()
                 ]
-                if tr_w <= float(MAX_SUB_LENGTH) and all(
-                    calc_len(c) * float(TARGET_SUB_MULTIPLIER) <= float(MAX_SUB_LENGTH)
+                single_line_limit = min(
+                    float(MAX_SUB_LENGTH), max(45.0, float(MAX_SUB_LENGTH) * 0.72)
+                )
+                if tr_w <= single_line_limit and all(
+                    calc_len(c) * float(TARGET_SUB_MULTIPLIER) <= single_line_limit
                     for c in raw_clauses_i
                 ):
                     continue
                 needed_k = max(
-                    math.ceil(tr_w / max(1.0, float(MAX_SUB_LENGTH))),
+                    math.ceil(tr_w / max(1.0, single_line_limit)),
                     2,
                 )
                 llm_pending.append((i, tr_clean, needed_k))

@@ -71,20 +71,30 @@ def _levenshtein_fast(a: str, b: str) -> int:
     return prev[-1]
 
 
-_BOOK_MARK_TABLE = str.maketrans({"《": "“", "》": "”", "〈": "‘", "〉": "’"})
+_QUOTE_BOOK_MARK_TABLE = str.maketrans({c: None for c in "《》〈〉“”‘’「」『』"})
+
+
+def _strip_quotes_and_dashes(text: str) -> str:
+    s = str(text).translate(_QUOTE_BOOK_MARK_TABLE)
+    if re.search(r"[\u4e00-\u9fff]", s):
+        s = s.replace('"', "")
+    s = re.sub(r"\s*(?:——|—|--)\s*", "，", s)
+    s = re.sub(r"[：；]", "，", s)
+    return s
 
 
 def format_subtitle_text(x):
-    """Format subtitle text: remove spaces between CJK and Latin/digits, convert book title marks to quotes, and replace CJK clause punctuation with spaces."""
+    """Format subtitle text: remove spaces between CJK and Latin/digits, strip quotes/dashes/colons, and replace CJK clause punctuation with spaces."""
     if pd.isna(x):
         return ""
-    text = str(x).translate(_BOOK_MARK_TABLE)
+    text = _strip_quotes_and_dashes(str(x))
     digit_pattern = r"[\d\uff10-\uff19]"
     text = re.sub(r"([\u4e00-\u9fff])\s+(" + digit_pattern + r")", r"\1\2", text)
     text = re.sub(r"(" + digit_pattern + r")\s+([\u4e00-\u9fff])", r"\1\2", text)
     text = re.sub(r"([\u4e00-\u9fff])\s+([a-zA-Z])", r"\1\2", text)
     text = re.sub(r"([a-zA-Z])\s+([\u4e00-\u9fff])", r"\1\2", text)
-    text = re.sub(r"[，。、？！：；]", " ", text)
+    text = re.sub(r"[，。、？！：；—]+", " ", text)
+    text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 
@@ -434,7 +444,7 @@ def gen_source_subtitles():
 def clean_translation(x):
     if pd.isna(x):
         return ""
-    return str(x).translate(_BOOK_MARK_TABLE).strip("。，、？！：；").strip()
+    return _strip_quotes_and_dashes(str(x)).strip("。，、？！：；—").strip()
 
 
 def align_timestamp_main():

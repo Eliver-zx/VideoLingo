@@ -292,7 +292,7 @@ def test_subtitle_style_filters_use_src_and_trans_srt_only(tmp_path: Path):
     assert "trans.srt" in filters
     assert "bi.ass" not in filters
     assert (
-        r"subtitles=E\:/RSM/python/VideoLingo/output/trans.srt:force_style="
+        r"subtitles=E\\:/RSM/python/VideoLingo/output/trans.srt:force_style="
         in win_filters
     )
 
@@ -473,7 +473,6 @@ def test_fastapi_webui_tasks_terms_and_utterances_endpoints(
         'id="task-terms-counter"',
         'id="task-terms-search"',
         'id="btn-add-task-term"',
-        'id="btn-batch-fix-on"',
         'id="btn-batch-promote-on"',
         'id="btn-rerun-term-extract"',
         'id="btn-save-terms-only"',
@@ -764,8 +763,8 @@ def test_multi_task_isolation_fix_source_and_inline_tts_text_flow(
 
     with workspace_context(ws_a):
         chunks = _4_2_translate.split_chunks_by_chars()
-        assert chunks == ["We use PyTorch."]
-        assert ws_a.load_utterances()[0]["src"] == "We use PyTorch."
+        assert chunks == ["We use pie torch."]
+        assert ws_a.load_utterances()[0]["src"] == "We use pie torch."
 
     # Edit src, tgt, and tts_text via FastAPI
     client = TestClient(api.app)
@@ -907,16 +906,21 @@ def test_sentence_initial_fix_source_and_global_glossary_cache_invalidation(
         fp_after = _4_2_translate._translation_cache_fingerprint()
         assert fp_after != fp_before
 
-        # split_chunks_by_chars must apply global glossary fix_source even when task terms are empty
+        # split_chunks_by_chars preserves original sentence while search_things_to_note_in_prompt matches alias
         chunks = _4_2_translate.split_chunks_by_chars()
-        assert chunks == ["NATS streams messages."]
+        assert chunks == ["Gnats streams messages."]
         utts = ws.load_utterances()
-        assert utts[0]["src"] == "NATS streams messages."
+        assert utts[0]["src"] == "Gnats streams messages."
         assert utts[0]["src_raw"] == "Gnats streams messages"
+        note_prompt = _4_1_summarize.search_things_to_note_in_prompt(chunks[0])
+        assert (
+            note_prompt is not None
+            and "NATS:NATS消息系统 aliases:{Gnats}" in note_prompt
+        )
 
         _5_split_sub.split_for_sub_main()
         stamps = _6_gen_sub.get_sentence_timestamps(
-            df_words, pd.DataFrame({"Source": ["NATS streams messages."]})
+            df_words, pd.DataFrame({"Source": ["Gnats streams messages."]})
         )
         assert stamps == [(1.25, 2.95)]
 
@@ -1194,7 +1198,7 @@ def test_review_fixes_large_dict_fix_source_paused_invalidate_domain_mtime_and_h
     """
     import io
     import time
-    from core import _4_1_summarize, _4_2_translate
+    from core import _4_1_summarize
 
     output_root = tmp_path / "output"
     output_root.mkdir()
@@ -1270,9 +1274,8 @@ def test_review_fixes_large_dict_fix_source_paused_invalidate_domain_mtime_and_h
         config_utils.task_config_context({"glossary_domain": "excel_dom"}),
     ):
         custom = _4_1_summarize.load_custom_terms()
-        # BigTerm0 has fix_source=True inside >500 dict.json, so load_custom_terms() must include it!
-        assert any(t["src"] == "BigTerm0" and t["fix_source"] is True for t in custom)
-        # BigTerm1 has fix_source=False inside >500 dict.json, so it stays in KB index only
+        # >500 entries in dict.json stay in KB index only
+        assert not any(t["src"] == "BigTerm0" for t in custom)
         assert not any(t["src"] == "BigTerm1" for t in custom)
         kb_idx = _4_1_summarize._get_kb_index(custom)
         assert kb_idx["entries"]["kubernetes"]["fix_source"] is True
@@ -1315,12 +1318,10 @@ def test_review_fixes_large_dict_fix_source_paused_invalidate_domain_mtime_and_h
         idx_data = _4_1_summarize._get_term_index()
         k8s_entry = next(e for e in idx_data["terms"] if e["src"] == "Kubernetes")
         assert k8s_entry["tgt"] == "K8s容器编排"
-        assert (
-            _4_2_translate.apply_fix_source_terms(
-                "We deploy on kube today.", idx_data["terms"]
-            )
-            == "We deploy on Kubernetes today."
+        note_prompt = _4_1_summarize.search_things_to_note_in_prompt(
+            "We deploy on kube today."
         )
+        assert note_prompt is not None and "Kubernetes:K8s容器编排" in note_prompt
 
     # Finding 2: Calling POST /api/tasks/{id}/invalidate when runner is paused at review_terminology
     def _paused_step():

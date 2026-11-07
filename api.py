@@ -1007,62 +1007,121 @@ def get_task_utterances(task_id: str):
 def update_task_utterances(task_id: str, request: UtterancesUpdateRequest):
     ws = _resolve_workspace(task_id)
     existing_utts = ws.load_utterances()
-    normalized_utts = []
-    for idx, u in enumerate(request.utterances):
-        item = dict(u)
-        orig_u = existing_utts[idx] if idx < len(existing_utts) else {}
-        if "src_punct" not in item and orig_u.get("src_punct"):
-            item["src_punct"] = orig_u["src_punct"]
-        src = str(item.get("src") or "").strip()
-        tgt = str(item.get("tgt") or "").strip()
-        tts_text = str(item.get("tts_text") or tgt).strip()
-        item["src"] = src
-        if src != str(orig_u.get("src") or "").strip() or not item.get("src_punct"):
-            item["src_punct"] = src
-        item["tgt"] = tgt
-        item["tts_text"] = tts_text
-        cues = item.get("sub_cues")
-        default_cue = {
-            "src": src,
-            "tgt": tgt,
-            "trans": tgt,
-            "word_span": list(item.get("word_span") or [0, 0]),
-            "start": float(item.get("start") or 0.0),
-            "end": float(item.get("end") or 0.0),
-        }
-        if isinstance(cues, list) and len(cues) == 1:
-            c0 = dict(cues[0]) if isinstance(cues[0], dict) else {}
-            item["sub_cues"] = [
-                {**default_cue, **c0, "src": src, "tgt": tgt, "trans": tgt}
-            ]
-        elif isinstance(cues, list) and len(cues) > 1:
-            prev_src = " ".join(
-                str(c.get("src") or "").strip() for c in cues if c.get("src")
-            ).strip()
-            prev_tgt = " ".join(
-                str(c.get("tgt", c.get("trans", c.get("text", ""))) or "").strip()
-                for c in cues
-                if c.get("tgt") or c.get("trans") or c.get("text")
-            ).strip()
-            if src != prev_src or tgt != prev_tgt:
-                item["sub_cues"] = [default_cue]
-        normalized_utts.append(item)
-    ws.save_utterances(normalized_utts)
-    ws.delete_kv("sub_split_cfg", "sub_split_rev")
-    if ws.has_dub_tasks():
-        ws.invalidate_from_stage("dub_tts")
-    is_task_active = runner.active_task_id == ws.task_id and runner.is_active
-    if (
-        normalized_utts
-        and not is_task_active
-        and ws.has_words()
-        and (ws.src_srt_path.is_file() or ws.trans_srt_path.is_file())
-    ):
-        from core._6_gen_sub import align_timestamp_main
+    words = ws.load_words() if ws.has_words() else []
+    manifest = ws.load_manifest()
+    overrides = dict(manifest.get("config_override") or {})
 
-        manifest = ws.load_manifest()
-        overrides = dict(manifest.get("config_override") or {})
-        with workspace_context(ws), task_config_context(overrides):
+    def _build_split_cues(
+        item_dict: dict[str, Any], s_parts: list[str], t_parts: list[str]
+    ) -> list[dict[str, Any]]:
+        if words:
+            from core._5_split_sub import _partition_word_span_for_cues
+
+            span = item_dict.get("word_span") or [0, len(words)]
+            w_a = int(span[0]) if len(span) >= 2 else 0
+            w_b = int(span[1]) if len(span) >= 2 else len(words)
+            part_cues = _partition_word_span_for_cues(w_a, w_b, s_parts, t_parts, words)
+            if part_cues:
+                return [{**c, "trans": str(c.get("tgt") or "")} for c in part_cues]
+        return [
+            {
+                "src": sp,
+                "tgt": tp,
+                "trans": tp,
+                "word_span": list(item_dict.get("word_span") or [0, 0]),
+                "start": float(item_dict.get("start") or 0.0),
+                "end": float(item_dict.get("end") or 0.0),
+            }
+            for sp, tp in zip(s_parts, t_parts)
+        ]
+
+    normalized_utts = []
+    with workspace_context(ws), task_config_context(overrides):
+        for idx, u in enumerate(request.utterances):
+            item = dict(u)
+            orig_u = existing_utts[idx] if idx < len(existing_utts) else {}
+            if "src_punct" not in item and orig_u.get("src_punct"):
+                item["src_punct"] = orig_u["src_punct"]
+            src = str(item.get("src") or "").strip()
+            tgt = str(item.get("tgt") or "").strip()
+            tts_text = str(item.get("tts_text") or tgt).strip()
+            item["src"] = src
+            if src != str(orig_u.get("src") or "").strip() or not item.get("src_punct"):
+                item["src_punct"] = src
+            item["tgt"] = tgt
+            item["tts_text"] = tts_text
+            cues = item.get("sub_cues")
+            default_cue = {
+                "src": src,
+                "tgt": tgt,
+                "trans": tgt,
+                "word_span": list(item.get("word_span") or [0, 0]),
+                "start": float(item.get("start") or 0.0),
+                "end": float(item.get("end") or 0.0),
+            }
+            if isinstance(cues, list) and len(cues) == 1:
+                c0 = dict(cues[0]) if isinstance(cues[0], dict) else {}
+                prev_s = str(c0.get("src") or "").strip()
+                prev_t = str(c0.get("tgt", c0.get("trans", "")) or "").strip()
+                if (src != prev_s or tgt != prev_t) and tgt:
+                    from core._5_split_sub import _try_local_clause_split
+
+                    sub_cfg = load_key("subtitle")
+                    local_split = _try_local_clause_split(
+                        src,
+                        tgt,
+                        float(sub_cfg["max_length"]),
+                        float(sub_cfg["target_multiplier"]),
+                    )
+                    if local_split is not None:
+                        s_parts, t_parts, _ = local_split
+                        item["sub_cues"] = _build_split_cues(item, s_parts, t_parts)
+                    else:
+                        item["sub_cues"] = [
+                            {**default_cue, **c0, "src": src, "tgt": tgt, "trans": tgt}
+                        ]
+                else:
+                    item["sub_cues"] = [
+                        {**default_cue, **c0, "src": src, "tgt": tgt, "trans": tgt}
+                    ]
+            elif isinstance(cues, list) and len(cues) > 1:
+                prev_src = " ".join(
+                    str(c.get("src") or "").strip() for c in cues if c.get("src")
+                ).strip()
+                prev_tgt = " ".join(
+                    str(c.get("tgt", c.get("trans", c.get("text", ""))) or "").strip()
+                    for c in cues
+                    if c.get("tgt") or c.get("trans") or c.get("text")
+                ).strip()
+                if src != prev_src or tgt != prev_tgt:
+                    from core._5_split_sub import _try_local_clause_split
+
+                    sub_cfg = load_key("subtitle")
+                    local_split = _try_local_clause_split(
+                        src,
+                        tgt,
+                        float(sub_cfg["max_length"]),
+                        float(sub_cfg["target_multiplier"]),
+                    )
+                    if local_split is not None:
+                        s_parts, t_parts, _ = local_split
+                        item["sub_cues"] = _build_split_cues(item, s_parts, t_parts)
+                    else:
+                        item["sub_cues"] = [default_cue]
+            normalized_utts.append(item)
+        ws.save_utterances(normalized_utts)
+        ws.delete_kv("sub_split_cfg", "sub_split_rev")
+        if ws.has_dub_tasks():
+            ws.invalidate_from_stage("dub_tts")
+        is_task_active = runner.active_task_id == ws.task_id and runner.is_active
+        if (
+            normalized_utts
+            and not is_task_active
+            and ws.has_words()
+            and (ws.src_srt_path.is_file() or ws.trans_srt_path.is_file())
+        ):
+            from core._6_gen_sub import align_timestamp_main
+
             try:
                 align_timestamp_main()
             except Exception as exc:

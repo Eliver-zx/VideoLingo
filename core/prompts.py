@@ -107,6 +107,17 @@ Note: Start your answer with ```json and end with ```, do not add any other text
 
 ## ================================================================
 # @ _4_1_summarize.py
+def _format_term_prompt_line(term: dict) -> str:
+    src = str(term.get("src") or "").strip()
+    tgt = str(term.get("tgt") or "").strip()
+    if not src:
+        return ""
+    aliases = [str(a).strip() for a in (term.get("aliases") or []) if str(a).strip()]
+    if aliases:
+        return f"{src}:{tgt} aliases:{{{', '.join(aliases)}}}"
+    return f"{src}:{tgt}"
+
+
 def get_summary_prompt(
     source_content, custom_terms_json=None, previously_extracted_terms=None
 ):
@@ -122,19 +133,9 @@ def get_summary_prompt(
         for term in custom_terms_json["terms"]:
             if not isinstance(term, dict):
                 continue
-            src = str(term.get("src") or "").strip()
-            if not src:
-                continue
-            tgt = str(term.get("tgt") or "").strip()
-            note = str(term.get("note") or "").strip()
-            aliases = term.get("aliases") or []
-            alias_str = (
-                f" [aliases: {', '.join(str(a) for a in aliases if str(a).strip())}]"
-                if aliases
-                else ""
-            )
-            note_str = f" ({note})" if note else ""
-            terms_list.append(f"- {src}{alias_str}: {tgt}{note_str}")
+            line = _format_term_prompt_line(term)
+            if line:
+                terms_list.append(line)
 
     terms_note = "\n".join(terms_list) if terms_list else "None"
 
@@ -147,16 +148,16 @@ def get_summary_prompt(
         )
         if isinstance(prev_terms, list) and prev_terms:
             prev_lines = [
-                f"- {str(t.get('src') or '').strip()}: {str(t.get('tgt') or '').strip()}"
-                + (f" ({str(t.get('note') or '').strip()})" if t.get("note") else "")
+                _format_term_prompt_line(t)
                 for t in prev_terms
                 if isinstance(t, dict) and str(t.get("src") or "").strip()
             ]
+            prev_lines = [line for line in prev_lines if line]
             if prev_lines:
                 existing_terms_note = (
                     "\n# existing_terms_note\n"
-                    "### Previously Extracted Terms\n"
-                    "Please refer to these terms to maintain consistency across chunks and avoid duplicate entries:\n"
+                    "### Full-Video Detected Terms\n"
+                    "Full canonical terms detected across the video (use these to resolve shorthands, abbreviations, or ASR misspellings in the current chunk):\n"
                     + "\n".join(prev_lines)
                 )
 
@@ -166,14 +167,15 @@ def get_summary_prompt(
 
 ## 2. 核心任务
 1. **主题总结 (`theme`)**：用两句话精炼概括当前文本块的核心主题与讨论要点。
-2. **权威术语核对与别名提取**：下方 `# terms_note` 是当前文本块中预先匹配出的权威参考术语列表。
-   - 检查原文 `<text>` 中是否实际使用了这些术语及其 **ASR 语音/拼写讹误**（如因发音相近被语音转文字打错的词）。若有，将标准术语填入 `src`，标准译名填入 `tgt`，并将原文中出现的具体 ASR 错词/同音词填入 `aliases` 数组中。
+2. **权威术语核对与简称/错词关联**：
+   - `# terms_note` 是当前文本块中已精确匹配出的权威参考术语；`# existing_terms_note` 是整部视频其他段落中出现的完整权威术语。
+   - 检查原文 `<text>` 中是否使用了 `# terms_note` 或 `# existing_terms_note` 中某条完整术语的 **口语简称、首字母缩写或 ASR 语音/拼写讹误**（例如全片出现过完整术语 `Cuirass of the Falling Star`、`Shards of Galanor`、`Heart of Inmost Light`、`One Thousand Voices`、`Star-Eater Scales`、`Spirit of Verity`，而当前 `<text>` 中简称为 `Cuirass`/`Curious`、`Shards`、`HOIL`/`Hoyle`、`1K`、`Star-Eater`、`Verity`）。若有，请将该完整权威术语填入 `src`，官方译名填入 `tgt`，并将当前 `<text>` 中实际出现的简称或 ASR 错词原样填入 `aliases` 数组！
    - 若 `# terms_note` 中的某条一词多义词（如 `Super`, `adds`, `build`）在当前 `<text>` 中仅作为普通日常副词/动词使用（如 `"super complicated"`, `"want to add"`），请忽略该词，不要将其输出到 `terms`。
-   - **绝对严禁**：严禁将名词单复数（如 shotgun/shotguns）、名词所有格（`'s`）、动词时态变化（`-ed`, `-ing`）或包含该词的其他独立词组（如把 `"build score"` 当成 `"build"` 的别名）填入 `aliases`！`aliases` **仅限指代同一实体的真正 ASR 拼写/同音识别错误或常用简称**。
-3. **提取新术语**：提取原文 `<text>` 中未在下方列出但属于专有名词、扩展包/副本/活动名、核心系统与界面模块、武器、技能、游戏/业务机制、地名、人名、领域行话的新术语，并给出准确的 {tgt_lang} 译名。
-   - **优先提取完整复合专有名词**（如 `Seasonal Hub`、`Vanguard Alerts`、`Player Stakes`、`Order System`、`Returner's Gift`），不要拆成孤立的单个普通词。
+   - **绝对严禁**：严禁将名词单复数（如 shotgun/shotguns）、名词所有格（`'s`）、动词时态变化（`-ed`, `-ing`）或包含该词的其他独立词组（如把 `"build score"` 当成 `"build"` 的别名、把 `"surge matching"` 当成 `"Surge"` 的别名）填入 `aliases`！`aliases` **仅限指代同一实体的口语简称、缩写或 ASR 拼写/同音识别错误**。
+3. **提取新术语**：提取原文 `<text>` 中未在下方列出但属于专有名词、扩展包/副本/活动名、核心系统与界面模块、武器、护甲、技能、游戏/业务机制、地名、人名、首领名、领域行话的新术语，并给出准确的 {tgt_lang} 译名。
+   - **优先提取完整复合专有名词**（如 `Seasonal Hub`、`Vanguard Alerts`、`Player Stakes`、`Order System`、`Returner's Gift`），不要拆成孤立的单个普通词。若原文同时使用了该复合专有名词的单字/双字简称，将简称放入 `aliases`。
    - 常用通用词汇（如 system, player, video, update, missions, activities 等字面直译无歧义词）严禁提取。
-   - `tgt` 必须为干净无括号、无句号的中文译名，解释说明放入 `note`。
+   - `tgt` 必须为干净无括号、无句号、无引号的译名。
 
 # terms_note
 {terms_note}
@@ -192,8 +194,7 @@ def get_summary_prompt(
     {{
       "src": "canonical {src_lang} term",
       "tgt": "{tgt_lang} 翻译",
-      "aliases": ["原文中出现的 ASR 语音/拼写讹误（非语法变形，无则留空数组 []）"],
-      "note": "简要上下文或术语解释"
+      "aliases": ["原文中出现的 ASR 语音/拼写讹误或简称（无则留空数组 []）"]
     }}
   ]
 }}
@@ -209,7 +210,14 @@ def get_consolidate_terms_prompt(
 ):
     src_lang = get_source_language()
     tgt_lang = target_language or load_key("target_language")
-    raw_json = json.dumps(raw_terms, ensure_ascii=False, indent=2)
+    if raw_terms:
+        raw_json = (
+            "[\n"
+            + ",\n".join(json.dumps(item, ensure_ascii=False) for item in raw_terms)
+            + "\n]"
+        )
+    else:
+        raw_json = "[]"
     return f"""
 ## Role
 You are a terminology consolidation and official localization specialist for **{src_lang}** to **{tgt_lang}** video translation.
@@ -231,7 +239,7 @@ Consolidate, deduplicate, and refine this list into a unified, accurate glossary
      - **Discard** the entry if `context_snippet` shows it is just an ordinary conversational phrase or number that coincidentally shares a name with a glossary entry (e.g., `"it's cool"` in `"because it's cool"`, `"second chance"` in `"give this a second chance"`, `"plus one"` in `"10 plus one"`).
 3. **Cross-Chunk ASR Variant & Shorthand Unification**:
    - Merge duplicate entries that refer to the same entity under different ASR phonetic spellings, abbreviations, or inflections into a single entry, combining all transcript surface forms into `aliases` and using one consistent `{tgt_lang}` `tgt`.
-   - Keep `tgt` as a **clean subtitle-ready term** with zero parenthetical explanations (put any explanations in `note`).
+   - Keep `tgt` as a **clean subtitle-ready term** with zero parenthetical explanations or quotation marks.
    - If an entry accidentally glues two distinct terms together (e.g., a modifier + an entity name), separate them into their respective canonical entries.
 4. **Preserve Domain Coverage & Prune Generic Noise**:
    - Keep all genuine domain terms, proper nouns, specialized items, acronyms, and technical jargon across all chunks.
@@ -249,8 +257,7 @@ Consolidate, deduplicate, and refine this list into a unified, accurate glossary
     {{
       "src": "canonical {src_lang} term",
       "tgt": "accurate unified {tgt_lang} translation",
-      "aliases": ["exact transcript surface form or ASR variant (if any)"],
-      "note": "concise context note"
+      "aliases": ["exact transcript surface form or ASR variant (if any)"]
     }}
   ]
 }}
@@ -336,18 +343,20 @@ Translate the provided {SRC_LANGUAGE} text lines (from video context) into {TARG
 ## Translation Guidelines:
 1. **Line-by-Line Translation**: Translate each line independently while maintaining semantic continuity from adjacent context lines.
 2. **Faithful Rendition**: Accurately convey the original semantics, tone (formal, informal, enthusiastic, serious), and subtle nuances.
-3. **Natural Flow and Cognitive Alignment**:
-   - The translation must align with {TARGET_LANGUAGE}'s patterns of thought, reading habits, and spoken rhythm.
-   - Natural clause punctuation: You may naturally add Chinese commas (，) between clauses to improve readability and break up stiff, robotic machine-translation run-on sentences.
-   - Disfluency removal: Remove meaningless spoken filler words (`uh`, `um`, `you know`, `like`), producing clean, professional subtitles.
+3. **Natural Flow, Spoken Cadence, and Clause Unpacking**:
+   - The translation must align with {TARGET_LANGUAGE}'s patterns of thought, reading habits, and spoken subtitle rhythm.
+   - **Unpack long modifiers**: Break up English post-nominal clauses (`that ...`, `which ...`, `with ...`, `in ...`) and stacked modifiers into sequential short clauses separated by commas (，). Never stack long `的` chains or long `在……上/中` wrappers into a single 25+ character run-on clause.
+   - **Breathing room (clause length ceiling)**: Insert natural Chinese commas (，) at topic-comment or breath boundaries so each clause stays concise (10–16 Chinese characters, never exceeding 18 characters without a comma pause).
+   - Disfluency removal: Remove meaningless spoken filler words (`uh`, `um`, `you know`, `like`), producing clean, punchy subtitles.
 4. **Mandatory Terminology Consistency**:
-   - Strictly adhere to the official Chinese translations in `### 术语库-词典`.
+   - Strictly adhere to the official translations in `### 术语库-词典` (formatted as `src:tgt` or `src:tgt aliases:{{...}}`). Whenever the source text contains either `src` or any surface form listed in `aliases`, you **MUST** use the exact `tgt`.
    - **Inflection Rule**: When a term appears in the original text in plural form, possessive (`'s`), or verb inflections (`-ed`, `-ing`), you **MUST** use the canonical official translation from `### 术语库-词典` corresponding to its base term, integrating it accurately and grammatically into the sentence. It is strictly forbidden to invent alternative translations or translate it literally.
 5. **Proper Noun Handling**:
    - Preserve unlisted proper nouns (people, places, brands, model numbers) in their original form unless a standard recognized {TARGET_LANGUAGE} equivalent exists.
-6. **No Additions, Parentheses, or Book Title Marks**:
+6. **Strict Subtitle Punctuation & No Annotations**:
+   - **Allowed punctuation ONLY**: comma (，), period (。), question mark (？), enumeration comma (、), and exclamation mark (！).
+   - **Forbidden punctuation**: NEVER output dashes (`——`, `—`, `--`), colons (`：`, `:`), semicolons (`；`, `;`), quotation marks (`“”`, `‘’`, `""`, `''`, `「」`, `『』`), book title marks (`《》`, `〈〉`), or parenthetical notes. Use a comma (，) instead of dashes, colons, or semicolons, and write all term, skill, and work names as plain text without quotes.
    - Do NOT add annotations, explanations, or source terms in parentheses (e.g., translate "Still Hunt" to "静谧狩猎", NEVER "静谧狩猎 (Still Hunt)").
-   - Do NOT use book title marks (`《》` or `〈〉`) in subtitles; use quotation marks (`“”`) or plain text for game/work titles instead.
 
 ## Reference Examples:
 * Original: "Hey guys, welcome back to the channel!" -> Translation: "大家好，欢迎回到频道！" (Informal, direct, aligns with spoken language habits, natural punctuation)
@@ -412,15 +421,15 @@ You will produce a 'free' translation that meets these exacting standards, stric
    - The 'free' translation MUST preserve the full meaning, intent, tone, and nuances of the 'origin' text. No aspect of the original meaning shall be compromised for the sake of fluency or stylistic preference.
 3. **Elevate to Expert-Level Naturalness & Idiomaticity**:
    - Align with {TARGET_LANGUAGE} cognitive sequencing, logical flow, and natural discourse structuring.
-   - Ensure effortless reading flow and authentic auditory cadence (the natural rhythm of spoken {TARGET_LANGUAGE}).
+   - Unpack long post-nominal modifiers and prepositional chains into short, breathable sequential clauses separated by commas (，), keeping each clause concise (10–16 Chinese characters, never exceeding 18 characters without a comma pause).
    - Remove spoken hesitation fillers (`uh`, `um`, `you know`) and awkward translationese or stacked literal calques.
-   - Natural clause punctuation: You may naturally add Chinese commas (，) between clauses to improve readability and sentence rhythm.
 4. **Mandatory Terminology & Proper Noun Preservation**:
-   - **Strict Terminology Enforcement**: Strictly enforce the provided glossary and dictionary in `### 术语库-词典`. Every glossary translation correctly used in 'direct' MUST remain intact in 'free' — never abbreviate, paraphrase, or alter official terms during polishing. When terms appear with inflections (plurals, `'s`, `-ed`, `-ing`), maintain their standard canonical translation.
+   - **Strict Terminology Enforcement**: Strictly enforce the provided glossary and dictionary in `### 术语库-词典` (formatted as `src:tgt` or `src:tgt aliases:{{...}}`). Every glossary translation MUST remain intact in 'free' — never abbreviate, paraphrase, or alter official terms during polishing. When terms appear with inflections (plurals, `'s`, `-ed`, `-ing`), maintain their standard canonical translation.
    - **Proper Nouns**: Ensure proper nouns (not in glossary) remain intact or in their standard {TARGET_LANGUAGE} form.
-5. **No Additions / Annotations / Book Title Marks**:
+5. **Strict Subtitle Punctuation & No Annotations**:
+   - **Allowed punctuation ONLY**: comma (，), period (。), question mark (？), enumeration comma (、), and exclamation mark (！).
+   - **Forbidden punctuation**: NEVER output dashes (`——`, `—`, `--`), colons (`：`, `:`), semicolons (`；`, `;`), quotation marks (`“”`, `‘’`, `""`, `''`, `「」`, `『』`), book title marks (`《》`, `〈〉`), or parenthetical notes. Use a comma (，) instead of dashes, colons, or semicolons, and write all term, skill, and work names as plain text without quotes.
    - Do NOT add comments, explanations, or alternative translations in parentheses in the 'free' translation field. Never append original source terms in parentheses (e.g., "静谧狩猎", NOT "静谧狩猎 (Still Hunt)").
-   - Do NOT use book title marks (`《》` or `〈〉`) in subtitles; use quotation marks (`“”`) or plain text for game/work titles instead.
 6. **Principle of Necessary Enhancement (Keep-if-Flawless)**:
    - If the 'direct' translation already meets the highest standards of fidelity, naturalness, and terminology adherence, state `"OK"` or `"Direct translation (verified) is flawless and meets all expert criteria."` in `"reflect"` and copy the direct translation into `"free"`. Do not make cosmetic changes for personal preference.
    - If changes were made, briefly explain what was enhanced in `"reflect"` (e.g., "Elevated to idiomatic flow", "Corrected terminology", "Adjusted clause structure").

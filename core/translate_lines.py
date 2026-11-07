@@ -1,3 +1,5 @@
+import re
+
 from core.prompts import (
     generate_shared_prompt,
     get_prompt_faithfulness,
@@ -7,11 +9,20 @@ from core.task_runner import StopTask
 from core.utils import ask_gpt, check_cancel, load_key, log_event
 
 
-_BOOK_MARK_TABLE = str.maketrans({"《": "“", "》": "”", "〈": "‘", "〉": "’"})
+_QUOTE_BOOK_MARK_TABLE = str.maketrans({c: None for c in "《》〈〉“”‘’「」『』"})
 
 
 def _normalize_book_marks(text: str) -> str:
-    return str(text).translate(_BOOK_MARK_TABLE)
+    s = str(text).translate(_QUOTE_BOOK_MARK_TABLE)
+    if re.search(r"[\u4e00-\u9fff]", s):
+        s = s.replace('"', "")
+        s = re.sub(r"(?:——+|—+|--+|[：；;])+", "，", s)
+        s = re.sub(r"(?<!\d):(?!\d)", "，", s)
+        s = re.sub(r"，+", "，", s)
+        s = re.sub(r"，([。？！、])", r"\1", s)
+        s = re.sub(r"([，。？！、])，", r"\1", s)
+        s = re.sub(r"^，+|，+$", "", s)
+    return s
 
 
 class TranslateResultTuple(tuple):

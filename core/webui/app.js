@@ -1487,9 +1487,6 @@
           <td><input type="text" class="cell-input" value="${escapeAttr(t.note)}" placeholder="选填备注" data-term-field="note" data-idx="${idx}"></td>
           <td>
             <div class="term-actions">
-              <button type="button" class="term-icon-btn ${t.fix_source ? 'is-fix-on' : ''}" data-term-fix="${idx}" aria-pressed="${Boolean(t.fix_source)}" title="修正原文：将该词的语音误识别变体修正回原文字幕" aria-label="修正原文">
-                <svg class="icon" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-              </button>
               <button type="button" class="term-icon-btn ${t.promote ? 'is-promote-on' : ''}" data-term-promote="${idx}" aria-pressed="${Boolean(t.promote)}" title="存入词表：将该词条归档保存到领域词表" aria-label="存入词表">
                 <svg class="icon" viewBox="0 0 24 24"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/></svg>
               </button>
@@ -1534,18 +1531,6 @@
         });
       });
 
-      tbody.querySelectorAll('[data-term-fix]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const rIdx = Number(btn.getAttribute('data-term-fix'));
-          const next = !REAL_TASK_TERMS[rIdx].fix_source;
-          REAL_TASK_TERMS[rIdx].fix_source = next;
-          btn.classList.toggle('is-fix-on', next);
-          btn.setAttribute('aria-pressed', String(next));
-          isEditingTerms = true;
-          setAutosaveStatus('paused', '术语未保存');
-        });
-      });
-
       tbody.querySelectorAll('[data-term-promote]').forEach(btn => {
         btn.addEventListener('click', () => {
           const rIdx = Number(btn.getAttribute('data-term-promote'));
@@ -1576,14 +1561,6 @@
     });
 
     document.getElementById('task-terms-search').addEventListener('input', renderTaskTerms);
-
-    document.getElementById('btn-batch-fix-on').addEventListener('click', () => {
-      const allOn = REAL_TASK_TERMS.every(t => t.fix_source);
-      REAL_TASK_TERMS.forEach(t => { t.fix_source = !allOn; });
-      isEditingTerms = true;
-      setAutosaveStatus('paused', '术语未保存');
-      renderTaskTerms();
-    });
 
     document.getElementById('btn-batch-promote-on').addEventListener('click', () => {
       const allOn = REAL_TASK_TERMS.every(t => t.promote);

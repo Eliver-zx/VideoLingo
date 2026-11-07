@@ -181,11 +181,13 @@ def get_subtitle_filters(video, source_srt, translation_srt):
 
 
 def escape_ffmpeg_filter_path(path: str | Path) -> str:
-    """Escape a filesystem path for safe embedding inside an FFmpeg `-vf ass=...` or `subtitles=...` filter."""
+    """Escape a filesystem path for FFmpeg's two-stage filtergraph and option parser."""
     s = str(path).replace("\\", "/")
     s = (
-        s.replace(":", r"\:")
-        .replace("'", r"\'")
+        s.replace(":", r"\\:")
+        .replace("'", r"\\\'")
+        .replace(",", r"\,")
+        .replace(";", r"\;")
         .replace("[", r"\[")
         .replace("]", r"\]")
     )

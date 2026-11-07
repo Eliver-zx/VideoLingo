@@ -1,16 +1,12 @@
 import concurrent.futures
 import hashlib
 import json
-import re
 import time
 import pandas as pd
 from core.concurrency import ContextThreadPoolExecutor
 from core.translate_lines import translate_lines
 from core._4_1_summarize import (
-    _KB_CONVERSATIONAL_STOPWORDS,
-    _KB_STOP_TOKENS,
     _get_term_index,
-    _is_grammatical_inflection_of,
     search_things_to_note_in_prompt,
 )
 from core._6_gen_sub import align_timestamp
@@ -25,66 +21,6 @@ from core.utils import (
 from core.workspace import get_active_workspace
 
 
-def _cand_regex_str(cand: str) -> str:
-    if re.match(r"^[\w\s\.\-]+$", cand, flags=re.ASCII):
-        toks = re.findall(r"\w+", cand, flags=re.ASCII)
-        if len(toks) >= 2:
-            sep = r"(?:[\s,\-–—]+|\s*\.\s*)+"
-            trail_dot = r"\.?" if cand.endswith(".") else ""
-            return rf"(?<!\w){sep.join(re.escape(t) for t in toks)}{trail_dot}(?!\w)"
-        return rf"(?<!\w){re.escape(cand)}(?!\w)"
-    return re.escape(cand)
-
-
-def apply_fix_source_terms(text: str, terms: list[dict]) -> str:
-    """Rewrite ASR alias variants into canonical ``src`` when ``fix_source`` is enabled on a term."""
-    if not text or not terms:
-        return text
-    canonical_lows = {
-        str(e.get("src") or "").strip().lower()
-        for e in terms
-        if isinstance(e, dict) and str(e.get("src") or "").strip()
-    }
-    out = text
-    for entry in terms:
-        if not isinstance(entry, dict):
-            continue
-        is_task_alias = (
-            bool(entry.get("aliases"))
-            and str(entry.get("source") or "task") == "task"
-            and entry.get("fix_source") is not False
-        )
-        if not (entry.get("fix_source") or is_task_alias):
-            continue
-        canonical = str(entry.get("src") or "").strip()
-        if not canonical:
-            continue
-        raw_aliases = entry.get("aliases") or []
-        candidates: list[str] = []
-        for a in raw_aliases:
-            a_str = str(a).strip()
-            if not a_str:
-                continue
-            a_low = a_str.lower()
-            if (
-                a_low != canonical.lower()
-                and a_low not in canonical_lows
-                and a_low not in _KB_STOP_TOKENS
-                and a_low not in _KB_CONVERSATIONAL_STOPWORDS
-                and not _is_grammatical_inflection_of(a_str, canonical)
-            ):
-                candidates.append(a_str)
-        if not candidates and (raw_aliases or not entry.get("fix_source")):
-            continue
-        all_targets = sorted({*candidates, canonical}, key=len, reverse=True)
-        pattern = re.compile(
-            "|".join(f"(?:{_cand_regex_str(c)})" for c in all_targets if c),
-            flags=re.IGNORECASE,
-        )
-        out = pattern.sub(canonical, out)
-    return out
-
-
 # Function to split text into chunks
 def split_chunks_by_chars(chunk_size: int | None = None, max_i: int = 20):
     """Split text into chunks based on character count, return a list of multi-line text chunks"""
@@ -96,33 +32,6 @@ def split_chunks_by_chars(chunk_size: int | None = None, max_i: int = 20):
 
     if not sentences:
         return []
-
-    terms = _get_term_index().get("terms", [])
-    has_fix = any(
-        isinstance(t, dict)
-        and (
-            t.get("fix_source")
-            or (t.get("aliases") and str(t.get("source") or "task") == "task")
-        )
-        for t in terms
-    )
-    has_prev_punct = any(isinstance(u, dict) and u.get("src_punct") for u in utts)
-    if has_fix or has_prev_punct:
-        base_sentences = [
-            str(u.get("src_punct") or u.get("src") or "").strip()
-            for u in utts
-            if str(u.get("src") or "").strip()
-        ]
-        new_sentences = [apply_fix_source_terms(s, terms) for s in base_sentences]
-        if new_sentences != sentences or (has_fix and not has_prev_punct):
-            orig_sentences = list(sentences)
-            sentences = new_sentences
-            if utts and len(utts) == len(sentences):
-                for idx, u in enumerate(utts):
-                    u.setdefault("src_raw", orig_sentences[idx])
-                    u.setdefault("src_punct", base_sentences[idx])
-                    u["src"] = sentences[idx]
-                ws.save_utterances(utts, mark_translated=False)
 
     chunks = []
     chunk = ""

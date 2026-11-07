@@ -207,6 +207,7 @@ def test_search_things_to_note_matches_exact_stem_and_asr_fuzzy_variants_in_long
             "src": ["Bungie", "Raycasting"],
             "tgt": ["Bungie 工作室", "光线投射"],
             "note": ["游戏开发商", "渲染技术"],
+            "aliases": ["Bungee", "raycastin"],
         }
     ).to_excel(custom_xlsx, index=False)
 
@@ -240,10 +241,10 @@ def test_search_things_to_note_matches_exact_stem_and_asr_fuzzy_variants_in_long
     with workspace_context(ws):
         prompt = summarize.search_things_to_note_in_prompt(chunk)
     assert prompt is not None
-    assert '"Bungie": "Bungie 工作室"' in prompt
-    assert '"shader pipeline": "着色器管线"' in prompt
-    assert '"Raycasting": "光线投射"' in prompt
-    assert '"Destiny"' not in prompt
+    assert "Bungie:Bungie 工作室" in prompt
+    assert "shader pipeline:着色器管线" in prompt
+    assert "Raycasting:光线投射" in prompt
+    assert "Destiny" not in prompt
 
 
 def test_short_terms_and_lookalikes_do_not_trigger_false_positives(
@@ -293,16 +294,14 @@ def test_term_index_cache_invalidates_when_terminology_json_is_edited(
     ws.save_terms("t", [{"src": "OpenGL", "tgt": "旧译名", "note": "n1"}])
     with workspace_context(ws):
         first_prompt = summarize.search_things_to_note_in_prompt("We use OpenGL here.")
-        assert first_prompt is not None and '"OpenGL": "旧译名"' in first_prompt
+        assert first_prompt is not None and "OpenGL:旧译名" in first_prompt
 
         # Simulate user editing task terms with updated mtime
         ws.save_terms("t", [{"src": "OpenGL", "tgt": "新译名_已修改", "note": "n2"}])
         ws.set_terms_mtime(ws.get_terms_mtime() + 2.0)
 
         second_prompt = summarize.search_things_to_note_in_prompt("We use OpenGL here.")
-        assert (
-            second_prompt is not None and '"OpenGL": "新译名_已修改"' in second_prompt
-        )
+        assert second_prompt is not None and "OpenGL:新译名_已修改" in second_prompt
 
 
 def test_get_summary_merges_chunks_and_custom_terms_consistently(monkeypatch, tmp_path):
@@ -369,8 +368,8 @@ def test_get_summary_merges_chunks_and_custom_terms_consistently(monkeypatch, tm
             "We render with Vulkan and Nanite in real time."
         )
     assert note_prompt is not None
-    assert '"Vulkan": "Vulkan 接口"' in note_prompt
-    assert '"Nanite": "Nanite 虚拟微多边形"' in note_prompt
+    assert "Vulkan:Vulkan 接口" in note_prompt
+    assert "Nanite:Nanite 虚拟微多边形" in note_prompt
 
 
 # ------------------------------------------------------------------
@@ -647,18 +646,17 @@ def test_symbol_terms_do_not_pollute_stem_ngram_map_and_aliases_appear_in_prompt
             "We migrated the backend from .NET to C++ yesterday."
         )
         assert sym_prompt is not None
-        assert '".NET"' in sym_prompt
-        assert '"C++"' in sym_prompt
-        assert '"C#"' not in sym_prompt
+        assert ".NET:.NET 框架" in sym_prompt
+        assert "C++:C++ 语言" in sym_prompt
+        assert "C#:" not in sym_prompt
 
         # Alias match must surface the alias in Points to Note so LLM links 'cooper netties' -> 'Kubernetes'
         alias_prompt = summarize.search_things_to_note_in_prompt(
             "We deployed the cluster on cooper netties in production."
         )
         assert alias_prompt is not None
-        assert '"Kubernetes"' in alias_prompt
-        assert "cooper netties" in alias_prompt
-        assert "also transcribed as" in alias_prompt
+        assert "Kubernetes:K8s 容器编排" in alias_prompt
+        assert "aliases:{cooper netties}" in alias_prompt
 
 
 def test_merge_terminology_results_unifies_llm_variants_into_canonical_aliases():
@@ -786,8 +784,8 @@ def test_multiword_fuzzy_guards_and_longest_span_suppression(monkeypatch, tmp_pa
             "You can check the Destiny 2 Data Compendium for exact numbers."
         )
         assert span_prompt is not None
-        assert '"Data Compendium": "数据汇编"' in span_prompt
-        assert '"Compendium": "汇编"' not in span_prompt
+        assert "Data Compendium:数据汇编" in span_prompt
+        assert "\nCompendium:汇编" not in f"\n{span_prompt}"
 
 
 def test_generic_kb_candidate_retrieval_and_llm_reduce_consolidation(
@@ -1278,18 +1276,23 @@ def test_review_edge_cases_word_gaps_partial_batch_and_standalone_punct(
     assert len(captured_gaps[0][0]) == 15
 
 
-def test_end_to_end_alias_replacement_across_split_translate_and_sub_cues(
+def test_end_to_end_alias_matching_across_split_translate_and_sub_cues(
     monkeypatch, tmp_path
 ):
-    """Verify multi-word alias protection in Step 3, punctuation-tolerant & reversible
-    fix_source replacement in Step 4.2, and token-aligned cue partitioning & timestamps in Step 5 & 6."""
+    """Verify multi-word alias protection in Step 3, alias-based terminology injection in Step 4.2
+    without mutating source text, and token-aligned cue partitioning & timestamps in Step 5 & 6."""
     import core._3_1_split_nlp as s31
+    import core._4_1_summarize as s41
     import core._4_2_translate as s42
     import core._5_split_sub as s5
     import core._6_gen_sub as s6
 
     ws = TaskWorkspace(tmp_path / "alias_ws")
     ws.ensure_dirs()
+    monkeypatch.setattr(s41, "GLOBAL_GLOSSARY_PATH", str(tmp_path / "no_global.csv"))
+    monkeypatch.setattr(s41, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
+    monkeypatch.setattr(s41, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
+    monkeypatch.setattr(s41, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json"))
 
     # 1. Step 3 protects multi-word aliases from mid-alias splits and projects LLM alias rewrites onto the end word
     raw_words = [
@@ -1312,21 +1315,18 @@ def test_end_to_end_alias_replacement_across_split_translate_and_sub_cues(
             "tgt": "NATS",
             "aliases": ["Gnats"],
             "note": "",
-            "fix_source": True,
         },
         {
             "src": "PyTorch",
             "tgt": "PyTorch",
             "aliases": ["pie torch"],
             "note": "",
-            "fix_source": True,
         },
         {
             "src": "Kubernetes",
             "tgt": "Kubernetes",
             "aliases": ["cooper netties"],
             "note": "",
-            "fix_source": True,
         },
     ]
     ws.save_terms("Infra", terms)
@@ -1354,40 +1354,25 @@ def test_end_to_end_alias_replacement_across_split_translate_and_sub_cues(
             == "Gnats runs pie torch for training, and we deploy cooper netties."
         )
 
-        # 2. Step 4.2 replaces punctuation-separated aliases ("pie, torch") and supports toggling fix_source off
-        assert (
-            s42.apply_fix_source_terms("We use pie, torch and cooper-netties.", terms)
-            == "We use PyTorch and Kubernetes."
-        )
-        monkeypatch.setattr(s42, "_get_term_index", lambda: {"terms": terms})
+        # 2. Step 4.2 preserves original sentence text and injects canonical terms via alias matching
         chunks = s42.split_chunks_by_chars()
-        assert chunks == ["NATS runs PyTorch for training, and we deploy Kubernetes."]
-        assert (
-            ws.load_utterances()[0]["src_raw"]
-            == "Gnats runs pie torch for training and we deploy cooper netties"
-        )
-
-        # Toggling fix_source=False restores the punctuated pre-replacement sentence from src_punct
-        terms_off = [{**t, "fix_source": False} for t in terms]
-        monkeypatch.setattr(s42, "_get_term_index", lambda: {"terms": terms_off})
-        chunks_off = s42.split_chunks_by_chars()
-        assert chunks_off == [
+        assert chunks == [
             "Gnats runs pie torch for training, and we deploy cooper netties."
         ]
-
-        # Re-enable fix_source=True for Step 5 & Step 6
-        monkeypatch.setattr(s42, "_get_term_index", lambda: {"terms": terms})
-        s42.split_chunks_by_chars()
+        note_prompt = s41.search_things_to_note_in_prompt(chunks[0])
+        assert note_prompt is not None
+        assert "NATS:NATS aliases:{Gnats}" in note_prompt
+        assert "PyTorch:PyTorch aliases:{pie torch}" in note_prompt
+        assert "Kubernetes:Kubernetes aliases:{cooper netties}" in note_prompt
 
         # 3. Step 5 _partition_word_span_for_cues partitions [0, 11) at exact word index 6 ("training,")
-        # despite 2-to-1 alias replacements ("pie torch" -> "PyTorch", "cooper netties" -> "Kubernetes")
         words_loaded = ws.load_words()
         cues = s5._partition_word_span_for_cues(
             0,
             11,
             [
-                "NATS runs PyTorch for training,",
-                "and we deploy Kubernetes.",
+                "Gnats runs pie torch for training,",
+                "and we deploy cooper netties.",
             ],
             ["NATS使用PyTorch训练，", "并且我们部署Kubernetes。"],
             words_loaded,
@@ -1400,15 +1385,15 @@ def test_end_to_end_alias_replacement_across_split_translate_and_sub_cues(
         utts_with_cues[0]["sub_cues"] = cues
         ws.save_utterances(utts_with_cues)
 
-        # 4. Step 6 get_sentence_timestamps resolves sub_cues timestamps even on partial df_words & changed initial char
+        # 4. Step 6 get_sentence_timestamps resolves sub_cues timestamps directly from word_span
         df_words_full = pd.DataFrame(words_loaded)
         stamps = s6.get_sentence_timestamps(
             df_words_full,
             pd.DataFrame(
                 {
                     "Source": [
-                        "NATS runs PyTorch for training,",
-                        "and we deploy Kubernetes.",
+                        "Gnats runs pie torch for training,",
+                        "and we deploy cooper netties.",
                     ]
                 }
             ),
@@ -1586,14 +1571,94 @@ def test_review_regressions_code_switched_thai_decimals_and_src_punct_preservati
     assert saved_u["tgt"] == "NATS运行非常快！"
     assert saved_u["src_punct"] == "Gnats runs fast."
 
+    # 7. PUT /api/tasks/{task_id}/utterances with local clause split populates word_span on sub_cues and realigns .srt
+    ws_split = TaskWorkspace(out_root / "t_local_split")
+    ws_split.ensure_dirs()
+    ws_split.save_words(
+        [
+            {"idx": 0, "text": "Destiny", "start": 0.0, "end": 0.4},
+            {"idx": 1, "text": "2", "start": 0.4, "end": 0.6},
+            {"idx": 2, "text": "is", "start": 0.6, "end": 0.8},
+            {"idx": 3, "text": "an", "start": 0.8, "end": 1.0},
+            {"idx": 4, "text": "intimidating", "start": 1.0, "end": 1.6},
+            {"idx": 5, "text": "game,", "start": 1.6, "end": 2.0},
+            {"idx": 6, "text": "and", "start": 2.1, "end": 2.3},
+            {"idx": 7, "text": "there", "start": 2.3, "end": 2.5},
+            {"idx": 8, "text": "is", "start": 2.5, "end": 2.7},
+            {"idx": 9, "text": "a", "start": 2.7, "end": 2.8},
+            {"idx": 10, "text": "lot", "start": 2.8, "end": 3.1},
+            {"idx": 11, "text": "to", "start": 3.1, "end": 3.3},
+            {"idx": 12, "text": "learn.", "start": 3.3, "end": 3.9},
+        ]
+    )
+    ws_split.src_srt_path.write_text(
+        "1\n00:00:00,000 --> 00:00:03,900\nDestiny 2 is an intimidating game, and there is a lot to learn.\n\n",
+        encoding="utf-8",
+    )
+    ws_split.save_utterances(
+        [
+            {
+                "id": 0,
+                "word_span": [0, 13],
+                "start": 0.0,
+                "end": 3.9,
+                "src": "Destiny 2 is an intimidating game, and there is a lot to learn.",
+                "tgt": "旧短译文。",
+                "sub_cues": [
+                    {
+                        "src": "Destiny 2 is an intimidating game, and there is a lot to learn.",
+                        "tgt": "旧短译文。",
+                        "trans": "旧短译文。",
+                        "word_span": [0, 13],
+                        "start": 0.0,
+                        "end": 3.9,
+                    }
+                ],
+            }
+        ]
+    )
+    res_split = client.put(
+        "/api/tasks/t_local_split/utterances",
+        json={
+            "utterances": [
+                {
+                    "id": 0,
+                    "word_span": [0, 13],
+                    "start": 0.0,
+                    "end": 3.9,
+                    "src": "Destiny 2 is a very intimidating game, and there is so much to learn.",
+                    "tgt": "命运2确实是一款让人望而生畏的入门游戏，而且游戏里有很多东西需要学习。",
+                    "sub_cues": [
+                        {
+                            "src": "Destiny 2 is an intimidating game, and there is a lot to learn.",
+                            "tgt": "旧短译文。",
+                            "trans": "旧短译文。",
+                            "word_span": [0, 13],
+                            "start": 0.0,
+                            "end": 3.9,
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+    assert res_split.status_code == 200
+    saved_split_u = ws_split.load_utterances()[0]
+    assert len(saved_split_u["sub_cues"]) == 2
+    assert all(
+        isinstance(c.get("word_span"), list) and len(c["word_span"]) == 2
+        for c in saved_split_u["sub_cues"]
+    )
+    assert saved_split_u["sub_cues"][0]["start"] == 0.0
+    assert saved_split_u["sub_cues"][1]["end"] == 3.9
 
-def test_inflections_match_search_without_source_replacement_while_asr_aliases_replace(
+
+def test_inflections_and_asr_aliases_match_search_without_source_replacement(
     monkeypatch, tmp_path
 ):
-    """Singular/plural, possessives ('s), and -ed/-ing inflections match search_things_to_note_in_prompt
-    without being stored in aliases or replacing source text, while ASR phonetic aliases replace source text."""
+    """Singular/plural, possessives ('s), -ed/-ing inflections, and ASR phonetic aliases all match
+    search_things_to_note_in_prompt without mutating source text."""
     import core._4_1_summarize as s41
-    import core._4_2_translate as s42
 
     ws = TaskWorkspace(tmp_path / "inflection_ws")
     ws.ensure_dirs()
@@ -1681,54 +1746,13 @@ def test_inflections_match_search_without_source_replacement_while_asr_aliases_r
         },
     ]
     ws.save_terms("Destiny 2", terms)
-    loaded_terms = ws.load_terms()["terms"]
 
-    # 2. apply_fix_source_terms (both in-memory and after ws.load_terms round-trip) replaces ASR aliases
-    # without duplicating substring aliases ('Khvostov 7G-0X'), touching stopwords ('Well'), or replacing inflections
     src_line = (
         "Well, the Wolves and glaives are buffed, weakened, scorched, jolted, and igniting "
         "while using Agers Scepter, Kavostov, Khvostov 7G-0X, DARCI, and gally against sabathun."
     )
-    expected_fixed = (
-        "Well, the Wolves and glaives are buffed, weakened, scorched, jolted, and igniting "
-        "while using Agers Scepter, Khvostov 7G-0X, Khvostov 7G-0X, DARCI, and Gjallarhorn against Savathûn."
-    )
-    assert s42.apply_fix_source_terms(src_line, terms) == expected_fixed
-    assert s42.apply_fix_source_terms(src_line, loaded_terms) == expected_fixed
 
-    # 3. _merge_terminology_results does not promote fix_source=False custom shorthands unless new ASR aliases exist
-    merged_custom = s41._merge_terminology_results(
-        [
-            (
-                0,
-                {
-                    "theme": "Raid",
-                    "terms": [
-                        {"src": "Well of Radiance", "tgt": "光焰之井", "note": ""}
-                    ],
-                },
-            )
-        ],
-        [
-            {
-                "src": "Well of Radiance",
-                "tgt": "光焰之井",
-                "aliases": ["Well", "Rad Well"],
-                "fix_source": False,
-            }
-        ],
-    )
-    assert merged_custom["terms"][0]["fix_source"] is False
-    assert (
-        s42.apply_fix_source_terms("Stand in the Rad Well now.", merged_custom["terms"])
-        == "Stand in the Rad Well now."
-    )
-    ws_custom = TaskWorkspace(tmp_path / "custom_fix_false_ws")
-    ws_custom.ensure_dirs()
-    ws_custom.save_terms("Raid", merged_custom["terms"])
-    assert ws_custom.load_terms()["terms"][0]["fix_source"] is False
-
-    # 4. _get_kb_index + _scan_text_for_kb_terms matches dotted acronyms ('DARCI' -> 'D.A.R.C.I.') and KB aliases ('gally')
+    # 2. _get_kb_index + _scan_text_for_kb_terms matches dotted acronyms ('DARCI' -> 'D.A.R.C.I.') and KB aliases ('gally')
     kb_idx = s41._get_kb_index(terms)
     kb_scanned_srcs = {
         h["src"]
@@ -1738,9 +1762,9 @@ def test_inflections_match_search_without_source_replacement_while_asr_aliases_r
     }
     assert {"D.A.R.C.I.", "Gjallarhorn", "Glaive"} <= kb_scanned_srcs
 
-    # 5. search_things_to_note_in_prompt matches all canonical entries from the inflected words in the chunk
+    # 3. search_things_to_note_in_prompt matches all canonical entries from inflected words and ASR aliases in src_line
     with workspace_context(ws):
-        note_prompt = s41.search_things_to_note_in_prompt(expected_fixed)
+        note_prompt = s41.search_things_to_note_in_prompt(src_line)
     assert note_prompt is not None
     for canonical, zh in (
         ("Wolf", "群狼"),
@@ -1755,28 +1779,31 @@ def test_inflections_match_search_without_source_replacement_while_asr_aliases_r
         ("Khvostov 7G-0X", "赫沃斯托夫 7G-0X"),
         ("D.A.R.C.I.", "达尔西"),
     ):
-        assert f'"{canonical}"' in note_prompt and f'"{zh}"' in note_prompt
-    assert '"点燃"' in note_prompt and (
-        '"Ignite"' in note_prompt or '"Ignition"' in note_prompt
+        assert f"{canonical}:{zh}" in note_prompt
+    assert ":点燃" in note_prompt and (
+        "Ignite:" in note_prompt or "Ignition:" in note_prompt
     )
 
 
 def test_book_marks_replaced_with_quotes_and_clause_stitching_guard():
-    """Verify book title marks are replaced with quotation marks without half-stripping, and complete sentences before 'While X, Y.' are not comma-stitched."""
+    """Verify book title marks and quotes are stripped cleanly, dashes/colons normalize to commas, and complete sentences before 'While X, Y.' are not comma-stitched."""
     import core._3_1_split_nlp as s31
     import core._5_split_sub as s5
     import core._6_gen_sub as s6
 
-    # 1. Book title marks replaced by quotes and never half-stripped by _LEADING_PUNCT_RE
+    # 1. Book title marks and quotes stripped cleanly
     src_line = " Destiny 2 can definitely be an intimidating game to get into, and there is a lot that the game never tells you."
     tr_line = "《命运2》确实是一款让人望而生畏的入门游戏，而且游戏里有很多东西从来不会告诉你。"
     res = s5._try_local_clause_split(src_line, tr_line, 60, 1.5)
     assert res is not None
     split_src, split_tr, _ = res
     assert len(split_tr) == 2
-    assert split_tr[0].startswith("“命运2”")
+    assert split_tr[0].startswith("命运2")
     assert "《" not in "".join(split_tr) and "》" not in "".join(split_tr)
-    assert s6.clean_translation("《命运2》回归玩家〈指南〉") == "“命运2”回归玩家‘指南’"
+    assert (
+        s6.clean_translation("《命运2》回归玩家〈指南〉“测试”")
+        == "命运2回归玩家指南测试"
+    )
 
     # 2. _stitch_incomplete_clause_spans does not stitch a complete sentence with a following "While X, Y." two-clause sentence
     words = [
@@ -1806,3 +1833,107 @@ def test_book_marks_replaced_with_quotes_and_clause_stitching_guard():
     stitched = s31._stitch_incomplete_clause_spans(spans, words, punct, gaps)
     assert stitched == [(0, 9), (10, 18)]
     assert punct[9] == "."
+
+
+def test_rerun_idempotency_compound_shorthand_retrieval_and_punctuation_cleanup(
+    monkeypatch, tmp_path
+):
+    """Verify Stage 03 re-run preserves aliases against src_punct, compound/shorthand/fuzzy terms
+    match in search_things_to_note_in_prompt, and dashes/colons/quotes are normalized while dunhao splits long clauses."""
+    import core._4_1_summarize as s41
+    import core._5_split_sub as s5
+    import core._6_gen_sub as s6
+    import core.translate_lines as tl
+
+    # 1. Compound split/join and alias injection as both canonical src:tgt and direct alias:tgt
+    ws = TaskWorkspace(tmp_path)
+    ws.save_terms(
+        "Destiny 2 DPS",
+        [
+            {
+                "src": "Cloudstrike",
+                "tgt": "雷云风暴",
+                "aliases": [],
+                "source": "domain_kb",
+            },
+            {
+                "src": "Gear Shift",
+                "tgt": "换挡",
+                "aliases": [],
+                "source": "domain_kb",
+            },
+            {
+                "src": "Cuirass of the Falling Star",
+                "tgt": "陨星胸甲",
+                "aliases": ["Curious"],
+                "source": "task",
+            },
+            {
+                "src": "One Thousand Voices",
+                "tgt": "千语",
+                "aliases": ["1K"],
+                "source": "task",
+            },
+        ],
+    )
+    monkeypatch.setattr(s41, "GLOBAL_GLOSSARY_PATH", str(tmp_path / "no_g.csv"))
+    monkeypatch.setattr(s41, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
+    monkeypatch.setattr(s41, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
+    monkeypatch.setattr(s41, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json"))
+
+    with workspace_context(ws):
+        prompt = s41.search_things_to_note_in_prompt(
+            "Using Cloud Strike, gearshift, Curious, and 1K on this boss."
+        )
+    assert prompt is not None
+    for expected in (
+        "Cloudstrike:雷云风暴",
+        "Cloud Strike:雷云风暴",
+        "Gear Shift:换挡",
+        "gearshift:换挡",
+        "Cuirass of the Falling Star:陨星胸甲",
+        "Curious:陨星胸甲",
+        "One Thousand Voices:千语",
+        "1K:千语",
+    ):
+        assert expected in prompt
+
+    # 3. Punctuation cleanup & dunhao splitting
+    dirty = "“冰影泰坦”——输出机制：依靠冰晶、碎裂伤害；以及「高额爆发」！"
+    cleaned_tl = tl._normalize_book_marks(dirty)
+    cleaned_s6 = s6.clean_translation(dirty)
+    for bad in ("“", "”", "——", "—", "：", "；", "「", "」"):
+        assert bad not in cleaned_tl
+        assert bad not in cleaned_s6
+    assert "、" in cleaned_tl
+
+    long_dunhao = "我们在实战里主要依靠神圣裁决、牵引器火炮、虚空猎人的暗影箭以及光焰之井来提供全队辅助增益。"
+    split_res = s5._try_local_clause_split(
+        "We rely on Divinity, Tractor Cannon, Tether, and Well of Radiance for team buffs.",
+        long_dunhao,
+        75,
+        1.2,
+    )
+    assert split_res is not None
+    _, tr_parts, _ = split_res
+    assert len(tr_parts) >= 2
+
+    # 4. Unseen 2-word KB terms ("Raiden Flux", "Second Chance") must NOT trigger on half-word matches ("raiden", "Second")
+    with workspace_context(ws):
+        kb_data = s41._get_kb_index(
+            [
+                {"src": "Raiden Flux", "tgt": "雷电通流"},
+                {"src": "Second Chance", "tgt": "第二次机会"},
+                {"src": "Shards of Galanor", "tgt": "加拉诺碎片"},
+                {"src": "Aggregate Charge", "tgt": "聚合充能"},
+            ]
+        )
+        hits = s41._scan_text_for_kb_terms(
+            "Second, against most raiden dungeon bosses, we used Shards of Galanor and Aggregate Charge first.",
+            kb_data,
+        )
+        hit_map = {h["src"]: h for h in hits}
+        assert "Raiden Flux" not in hit_map
+        assert "Second Chance" not in hit_map
+        assert "Shards of Galanor" in hit_map
+        assert "Aggregate Charge" in hit_map

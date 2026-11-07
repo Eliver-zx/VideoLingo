@@ -131,10 +131,16 @@ def merge_subtitles_to_video():
         label="VIDEO",
     )
     start_time = time.time()
-    process = subprocess.Popen(ffmpeg_cmd)
+    process = subprocess.Popen(
+        ffmpeg_cmd,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
 
     try:
-        process.wait()
+        _, stderr_text = process.communicate()
         if process.returncode == 0:
             elapsed = time.time() - start_time
             get_active_workspace().notify_artifact_update(
@@ -148,10 +154,15 @@ def merge_subtitles_to_video():
                 label="VIDEO",
             )
         else:
-            raise subprocess.CalledProcessError(process.returncode, ffmpeg_cmd)
+            err_tail = (stderr_text or "").strip()[-800:]
+            raise subprocess.CalledProcessError(
+                process.returncode, ffmpeg_cmd, stderr=err_tail
+            )
     except Exception as e:
+        detail = getattr(e, "stderr", "") or ""
+        msg = f"字幕视频压制失败: {e}" + (f" | {detail}" if detail else "")
         log_event(
-            f"字幕视频压制失败: {e}",
+            msg,
             tag="warn",
             label="VIDEO",
             level="error",
