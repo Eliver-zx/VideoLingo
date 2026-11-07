@@ -114,6 +114,15 @@ def _is_inflection_of_src(alias_str: str, src_str: str) -> bool:
     return bool(src_stems and src_stems == al_stems)
 
 
+def _is_superphrase_of_src(alias_str: str, src_str: str) -> bool:
+    _, src_stems, _ = _tokenize_surface(src_str)
+    _, al_stems, _ = _tokenize_surface(alias_str)
+    n_src, n_al = len(src_stems), len(al_stems)
+    if not n_src or n_al <= n_src:
+        return False
+    return any(al_stems[i : i + n_src] == src_stems for i in range(n_al - n_src + 1))
+
+
 def _normalize_aliases(raw_aliases: Any, src_str: str = "") -> list[str]:
     if not raw_aliases:
         return []
@@ -133,7 +142,9 @@ def _normalize_aliases(raw_aliases: Any, src_str: str = "") -> list[str]:
     for p in parts:
         if p.lower() == src_low or p in seen:
             continue
-        if src_str and _is_inflection_of_src(p, src_str):
+        if src_str and (
+            _is_inflection_of_src(p, src_str) or _is_superphrase_of_src(p, src_str)
+        ):
             continue
         seen.add(p)
         out.append(p)
@@ -914,7 +925,20 @@ def _merge_terminology_results(
             if st:
                 auth_by_stem.setdefault(tuple(st), entry)
             for al in entry.get("aliases") or []:
-                auth_by_lower.setdefault(str(al).lower(), entry)
+                al_str = str(al).strip()
+                if not al_str:
+                    continue
+                auth_by_lower.setdefault(al_str.lower(), entry)
+                _, al_st, _ = _tokenize_surface(al_str)
+                if al_st:
+                    auth_by_stem.setdefault(tuple(al_st), entry)
+
+    scanned_aliases_by_src: dict[str, list[str]] = {}
+    if kb_data and full_text:
+        for scanned in _scan_text_for_kb_terms(full_text, kb_data):
+            scanned_aliases_by_src[scanned["src"].lower()] = list(
+                scanned.get("aliases") or []
+            )
 
     merged_by_src: dict[str, dict[str, Any]] = {}
     stem_to_src_key: dict[tuple[str, ...], str] = {}
@@ -947,7 +971,12 @@ def _merge_terminology_results(
             if not note:
                 note = str(auth.get("note") or "")
             fix_source = bool(auth.get("fix_source", False)) or fix_source
-            extra_aliases = [*(auth.get("aliases") or []), *extra_aliases]
+            auth_aliases = (
+                scanned_aliases_by_src.get(s.lower(), [])
+                if (kb_data and full_text and auth.get("source") != "custom")
+                else (auth.get("aliases") or [])
+            )
+            extra_aliases = [*auth_aliases, *extra_aliases]
             _, st, _ = _tokenize_surface(s)
             st_tup = tuple(st) if st else ()
 
@@ -991,17 +1020,6 @@ def _merge_terminology_results(
                 bool(ct.get("fix_source", False)),
                 source="custom",
                 overwrite_tgt=True,
-            )
-
-    if kb_data and full_text:
-        for scanned in _scan_text_for_kb_terms(full_text, kb_data):
-            _upsert_term(
-                scanned["src"],
-                scanned["tgt"],
-                str(scanned.get("note") or ""),
-                scanned.get("aliases") or [],
-                bool(scanned.get("fix_source", False)),
-                source="task",
             )
 
     for _, res in ordered_chunks:

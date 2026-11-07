@@ -85,6 +85,12 @@ BREAK_MARKS = ",;:，、；：。！？!?"
 
 def pick_split(response_data):
     """The split the model chose, with [br] tags; the other one if the choice is unusable."""
+    if not isinstance(response_data, dict):
+        return None
+    direct_split = BR_TAG.sub("[br]", str(response_data.get("split", "")))
+    direct_parts = direct_split.split("[br]")
+    if len(direct_parts) > 1 and all(part.strip() for part in direct_parts):
+        return direct_split
     choice = re.search(r"[12]", str(response_data.get("choice", "")))
     order = [choice.group()] if choice else []
     for number in order + [n for n in ("1", "2") if n not in order]:

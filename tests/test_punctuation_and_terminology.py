@@ -598,7 +598,7 @@ def test_translation_prompts_contain_asr_recovery_and_keep_if_flawless_in_englis
     assert "### 术语库-词典" in faith_prompt
     assert "Strict Terminology Adherence" in faith_prompt
     assert "Principle of Necessary Enhancement (Keep-if-Flawless)" in express_prompt
-    assert "Elite Linguistic Polisher & Guardian of Fidelity" in express_prompt
+    assert "Senior Subtitle Quality Auditor & Polisher" in express_prompt
 
 
 def test_symbol_terms_do_not_pollute_stem_ngram_map_and_aliases_appear_in_prompt(
@@ -811,6 +811,7 @@ def test_generic_kb_rare_token_candidate_retrieval_and_deterministic_merge(
                     "misc": {
                         "What If": "假若",
                         "All": "所有",
+                        "Story": "剧情",
                     },
                 },
             }
@@ -829,14 +830,13 @@ def test_generic_kb_rare_token_candidate_retrieval_and_deterministic_merge(
     )
 
     # Direct KB scan finds "Hand Cannons" and dotted acronym "DFA" -> "D.F.A." while skipping stopword phrases
-    transcript = (
-        "What if we compare all Hand Cannons against the Multimoc and DFA today?"
-    )
+    transcript = "What if we compare all Hand Cannons against the Multimoc and DFA in the story today?"
     scanned = summarize._scan_text_for_kb_terms(transcript, kb_data)
     scanned_by_src = {s["src"]: s for s in scanned}
     assert "Hand Cannons" in scanned_by_src
     assert "D.F.A." in scanned_by_src
     assert scanned_by_src["D.F.A."]["aliases"] == ["DFA"]
+    assert "Story" in scanned_by_src
     assert "What If" not in scanned_by_src
     assert "All" not in scanned_by_src
 
@@ -852,6 +852,16 @@ def test_generic_kb_rare_token_candidate_retrieval_and_deterministic_merge(
                         "aliases": ["Multimach", "Multimoc"],
                         "note": "SMG",
                     },
+                    {
+                        "src": "D.F.A.",
+                        "tgt": "死从天降",
+                        "aliases": [],
+                    },
+                    {
+                        "src": "Hand Cannons",
+                        "tgt": "手炮",
+                        "aliases": ["all Hand Cannons"],
+                    },
                 ],
             },
         )
@@ -866,6 +876,8 @@ def test_generic_kb_rare_token_candidate_retrieval_and_deterministic_merge(
     assert by_src["D.F.A."]["tgt"] == "死从天降"
     assert "DFA" in by_src["D.F.A."]["aliases"]
     assert by_src["Hand Cannons"]["tgt"] == "手炮"
+    assert by_src["Hand Cannons"]["aliases"] == []
+    assert "Story" not in by_src
 
     ws = TaskWorkspace(tmp_path)
     ws.save_terms(merged.get("theme", ""), merged["terms"])
