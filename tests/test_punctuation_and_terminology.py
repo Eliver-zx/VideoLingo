@@ -2059,3 +2059,200 @@ def test_sync_subtitles_from_srt_updates_db_and_bilingual_srts(
 
     with workspace_context(ws):
         assert s6.sync_subtitles_from_srt_if_newer() is False
+
+
+def test_targeted_asr_candidate_retrieval_em_dash_and_domain_dict_filtering(
+    monkeypatch, tmp_path
+):
+    import core._4_1_summarize as s41
+    import core.translate_lines as tl
+    import core.workspace as ws_mod
+
+    glossary_dir = tmp_path / "glossary"
+    d2_dir = glossary_dir / "destiny2"
+    d2_dir.mkdir(parents=True)
+    (d2_dir / "terms.csv").write_text(
+        "src,tgt,aliases,note,fix_source\n"
+        "Arc Compounding,电弧复利,,神器模组,false\n"
+        "Star-Eater Scales,化星者之鳞,starless,猎人异域腿甲,false\n",
+        encoding="utf-8",
+    )
+    big_dict = {f"SyntheticWeapon{i}": f"合成武器{i}" for i in range(505)}
+    big_dict.update(
+        {
+            "Cull's Shadow": "库尔之影",
+            "Praedyth": "普莱蒂斯",
+            "Praedyth's Revenge": "普莱蒂斯的复仇",
+            "Hezen Vengeance": "赫즌复仇",
+            "Temporal Clause": "时间子句",
+            "Thread of Ascent": "飞升丝线",
+            "Surge Protector": "电涌保护器",
+            "Set Bonus: Sage Protector": "套装加成：圣贤保护者",
+            "The Queenbreaker": "弑君者",
+            "Mask of Bakris": "巴克里斯面具",
+            "Books of Sorrow": "悲伤之书",
+            "Geodetic HSm": "测地线HSm",
+            "Witherhoard": "枯骨鳞片",
+            "Lucent Blade": "光明之刃",
+            "Winterbite": "寒冬之咬",
+            "Triton Vice": "海神之恶",
+            "Reprisal": "报复",
+            "Impetus": "冲动",
+            "Keep": "保留",
+            "Mind": "心智",
+            "Long": "漫长",
+        }
+    )
+    (d2_dir / "dict.json").write_text(
+        json.dumps(big_dict, ensure_ascii=False), encoding="utf-8"
+    )
+
+    monkeypatch.setattr(ws_mod, "GLOSSARY_DIR", glossary_dir)
+    monkeypatch.setattr(s41, "GLOBAL_GLOSSARY_PATH", str(tmp_path / "no_global.csv"))
+    monkeypatch.setattr(s41, "CUSTOM_TERMS_PATH", str(tmp_path / "no.xlsx"))
+    monkeypatch.setattr(s41, "OPTIONAL_CSV_TERMS_PATH", str(tmp_path / "no.csv"))
+    monkeypatch.setattr(s41, "OPTIONAL_JSON_TERMS_PATH", str(tmp_path / "no.json"))
+    monkeypatch.setattr(
+        s41,
+        "load_key_or",
+        lambda k, d=None: "destiny2" if k == "glossary_domain" else d,
+    )
+
+    custom_terms = s41.load_custom_terms()
+    kb_data = s41._get_kb_index(custom_terms)
+
+    # 1. Em-dash, slash, colon subterm ("Sage Protector"), and "The "-stripped alias ("Queenbreaker")
+    scanned = s41._scan_text_for_kb_terms(
+        "Doing so by any means—Arc compounding, Sage Protector, or Queenbreaker—boosts damage.",
+        kb_data,
+    )
+    scanned_srcs = {t["src"] for t in scanned}
+    assert "Arc Compounding" in scanned_srcs
+    assert "Sage Protector" in scanned_srcs
+    assert "The Queenbreaker" in scanned_srcs
+
+    # 2. Targeted 3-channel + UnifiedNgramKBIndex ASR candidate retrieval recalls phrase/split/OOV corruptions
+    #    while guarding 1-word OOV sub-token matches ("Bacchus" != "Books of Sorrow", "Hazem" != "Geodetic HSm")
+    asr_chunk = (
+        "Keep in mind for a long time we used cold shadow, pray death's revenge, "
+        "praydith's revenge, hesin vengeance, Hazem, Bacchus, witherhorn, temporal claws, threat of ascent, and sage protector."
+    )
+    cands = s41._retrieve_rare_token_candidates(asr_chunk, kb_data, set())
+    cand_by_src = {c["src"]: c for c in cands}
+    for expected_src in (
+        "Cull's Shadow",
+        "Praedyth's Revenge",
+        "Hezen Vengeance",
+        "Mask of Bakris",
+        "Witherhoard",
+        "Temporal Clause",
+        "Thread of Ascent",
+        "Surge Protector",
+    ):
+        assert expected_src in cand_by_src, (
+            f"Missing {expected_src} from {list(cand_by_src)}"
+        )
+    assert "cold shadow" in [a.lower() for a in cand_by_src["Cull's Shadow"]["aliases"]]
+    assert "temporal claws" in [
+        a.lower() for a in cand_by_src["Temporal Clause"]["aliases"]
+    ]
+    assert "bacchus" in [a.lower() for a in cand_by_src["Mask of Bakris"]["aliases"]]
+    for noise_word in (
+        "Keep",
+        "Mind",
+        "Long",
+        "Reprisal",
+        "Impetus",
+        "Books of Sorrow",
+        "Geodetic HSm",
+    ):
+        assert noise_word not in cand_by_src
+
+    # 3. _merge_terminology_results (with Pass 2 disambiguation) grounds Pass-1 & un-echoed pre-filter spans
+    monkeypatch.setattr(
+        s41,
+        "ask_gpt",
+        lambda prompt, **kw: {
+            "decisions": [
+                {"span": "Lucien Blades", "canonical_src": "Lucent Blade"},
+                {"span": "witherhorn", "canonical_src": "Witherhoard"},
+                {"span": "pray death", "canonical_src": "Praedyth"},
+            ]
+        },
+    )
+    merged = s41._merge_terminology_results(
+        [
+            (
+                0,
+                {
+                    "theme": "DPS testing",
+                    "terms": [
+                        {"src": "temporal claws", "tgt": "时间利爪"},
+                        {"src": "Cull's Shadow", "tgt": "库尔之影"},
+                        {"src": "Lucien Blades", "tgt": "卢西安之刃"},
+                        {"src": "Praedyth's Revenge", "tgt": "普莱蒂斯的复仇"},
+                    ],
+                },
+            )
+        ],
+        custom_terms,
+        kb_data=kb_data,
+        full_text=asr_chunk + "\nWe also tested Lucien Blades.",
+        run_llm_disambiguation=True,
+    )
+    merged_by_src = {t["src"]: t for t in merged["terms"]}
+    assert "Temporal Clause" in merged_by_src
+    assert merged_by_src["Temporal Clause"]["tgt"] == "时间子句"
+    assert "temporal claws" in [
+        a.lower() for a in merged_by_src["Temporal Clause"]["aliases"]
+    ]
+    assert "cold shadow" in [
+        a.lower() for a in merged_by_src["Cull's Shadow"]["aliases"]
+    ]
+    assert "Lucent Blade" in merged_by_src
+    assert "lucien blades" in [
+        a.lower() for a in merged_by_src["Lucent Blade"]["aliases"]
+    ]
+    assert "Witherhoard" in merged_by_src
+    assert "witherhorn" in [a.lower() for a in merged_by_src["Witherhoard"]["aliases"]]
+    assert "pray death revenge" in [
+        a.lower() for a in merged_by_src["Praedyth's Revenge"]["aliases"]
+    ]
+
+    # 4. _get_term_index filters out unconfirmed single-word common English domain_dict entries when task_terms exist
+    ws = TaskWorkspace(tmp_path / "task_ws")
+    ws.save_terms("DPS testing", merged["terms"])
+    with workspace_context(ws):
+        prompt_reprisal = s41.search_things_to_note_in_prompt(
+            "The reprisal and impetus of cold shadow with Winterbite and Triton Vice on a starless setup."
+        )
+    assert prompt_reprisal is not None
+    assert "Reprisal:" not in prompt_reprisal
+    assert "Impetus:" not in prompt_reprisal
+    assert "cold shadow:库尔之影 (Cull's Shadow)" in prompt_reprisal
+    assert "Winterbite:寒冬之咬" in prompt_reprisal
+    assert "Triton Vice:海神之恶" in prompt_reprisal
+    assert (
+        "starless:化星者之鳞 (Star-Eater Scales) [without Star-Eater Scales; 猎人异域腿甲]"
+        in prompt_reprisal
+    )
+
+    # 5. valid_translate_result rejects leaked lowercase English source words in CJK translations
+    err_res = tl.valid_translate_result(
+        {"1": {"trans": "等我们 inevitably 讲到弩的输出循环时"}},
+        ["1"],
+        ["trans"],
+        origin_lines=["When we inevitably talk about crossbow rotations."],
+        allowed_en_text="",
+    )
+    assert err_res["status"] == "error"
+    assert "inevitably" in err_res["message"]
+
+    ok_res = tl.valid_translate_result(
+        {"1": {"trans": "等我们讲到 Vulkan 的 DPS 输出循环时"}},
+        ["1"],
+        ["trans"],
+        origin_lines=["When we inevitably talk about Vulkan DPS rotations."],
+        allowed_en_text="Vulkan:Vulkan 接口",
+    )
+    assert ok_res["status"] == "success"

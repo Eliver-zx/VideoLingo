@@ -177,20 +177,21 @@ def get_summary_prompt(
 ## Task Description:
 Analyze the provided {src_lang} ASR video transcript chunk (`<text>`) for {tgt_lang} subtitle localization:
 1. Summarize the core topic and discussion points of `<text>` in two concise sentences (`theme`).
-2. Extract **all genuine domain terms present in `<text>`** into `terms`, using `<chunk_candidate_terms>` and `<video_reference_terms>` to guarantee accurate official translations and canonical forms. Prioritize **zero omission of real domain terms first**, and **zero false-positive noise second**.
+2. Extract **all genuine domain terms, spoken shorthands, and ASR-corrupted entity spans present in `<text>`** into `terms`, using `<chunk_candidate_terms>` and `<video_reference_terms>` to guarantee accurate official translations and canonical forms. Prioritize **zero omission of real domain terms first**, and **zero false-positive noise second**.
 
 ## Terminology Extraction Rules:
-1. **Priority 1 — Zero Omission of Real Domain Terms (Confirm Candidates & Extract Unlisted Terms)**:
+1. **Priority 1 — Confirm Genuine Candidates**:
    - `<chunk_candidate_terms>` lists domain glossary entries pre-scanned from `<text>` (formatted as `src:tgt` or `alias:tgt (canonical_src)`); `<video_reference_terms>` lists canonical domain terms detected across the full video (`src:tgt`).
-   - **Keep every genuine candidate hit**: Whenever `<text>` refers to a candidate term's domain concept—even if lowercase in ASR, or expressed via a spoken shorthand, acronym, or ASR phonetic/spelling error—you **MUST** extract it into `terms` using the exact canonical `src` (when formatted as `alias:tgt (canonical_src)`, always put `canonical_src` into `src` and `alias` into `aliases`) and official `tgt` from the reference list.
-   - **Extract unlisted domain terms**: Extract any other domain-specific proper nouns, named entities (expansions, modes, UI modules, locations, bosses, organizations, works), equipment/abilities/perks/mechanics, or technical acronyms (`DPS`, `DoT`, `PvP`, `PvE`) in `<text>` not yet in the reference lists. Prefer complete compound proper nouns over isolated generic words.
-2. **Priority 2 — Zero False Positives (Reject Coincidental Everyday Words & Generic Fillers)**:
+   - Whenever `<text>` refers to a candidate term's domain concept—even if lowercase in ASR, or expressed via a spoken shorthand, acronym, or ASR phonetic/spelling error—you **MUST** extract it into `terms` using the exact canonical `src` (when formatted as `alias:tgt (canonical_src)`, always put `canonical_src` into `src` and `alias` into `aliases`) and official `tgt` from the reference list.
+2. **Priority 2 — Actively Detect Unlisted Domain Entities & Phonetic ASR Mishearings from Sentence Syntax**:
+   - Spoken ASR transcripts frequently mishear proper nouns, equipment, perks/traits, abilities, bosses, UI modules, or mechanics into phonetically similar words, split compounds, or ordinary words that make no grammatical sense in an entity/modifier slot.
+   - Whenever any word or phrase in `<text>` occupies a domain entity slot or is a spoken shorthand / phonetic mishearing not covered by `<chunk_candidate_terms>`:
+     - Put the reconstructed canonical {src_lang} term in `src` (if you recognize the true canonical name from domain context, write the canonical name in `src`; if unsure, write the transcript phrase in `src`).
+     - Put **every exact raw ASR spelling or shorthand appearing in `<text>`** inside `aliases`.
+3. **Priority 3 — Reject Coincidental Everyday Words & Keep `aliases` Clean**:
    - **Reject coincidental everyday homophones**: Text scanning may match candidate entries whose words appear in `<text>` purely as ordinary everyday expressions rather than the domain entity (e.g., `"from the title"` meaning video title, `"as well as"` / `"pretty well"`, `"adds 120 DPS"` / `"want to add"` as a verb, `"for the same purpose"`, `"the number of"`, `"in general"`, `"the other half"`, `"double your..."`, `"super complicated"`, `"by process of elimination"`, `"meeting certain conditions"`). If a candidate entry is NOT used in its domain-specific sense in `<text>`, **DO NOT extract it**.
    - **No generic everyday words**: Do NOT extract ordinary common nouns/verbs (`mission`, `story`, `system`, `player`, `video`, `update`, `activity`, `strategy`, `option`, `test`, `phase`, `screen`) whose literal translation is already natural and unambiguous.
-3. **Strict `aliases` & `tgt` Hygiene**:
-   - `aliases` is ONLY for the exact **spoken shorthand, acronym, or ASR transcription error** that replaces `src` in `<text>` (leave `aliases: []` if `<text>` uses the canonical `src` or normal inflections).
-   - **Never include surrounding sentence words in `aliases`**: Only the shorthand or ASR variant itself belongs in `aliases`—never attach adjacent modifiers or nouns from the surrounding phrase.
-   - **Never put grammatical inflections in `aliases`**: Do NOT put plurals (`-s`/`-es`), possessives (`'s`), or verb tenses (`-ed`/`-ing`) into `aliases`.
+   - `aliases` is ONLY for the exact **spoken shorthand, acronym, or ASR transcription error** that replaces `src` in `<text>` (leave `aliases: []` if `<text>` uses the canonical `src` or normal inflections; never include surrounding sentence modifiers or normal plural/possessive/verb inflections).
    - `tgt` must be a clean, final {tgt_lang} translation without parentheses, explanations, quotes, or punctuation.
 
 ## Injected Domain Glossary Candidates:
@@ -219,6 +220,27 @@ Return ONLY the following JSON object:
 ```
 """.strip()
     return summary_prompt
+
+
+def get_kb_disambiguation_prompt(payload: dict) -> str:
+    return f"""
+## Role: Domain Glossary Grounding Specialist
+
+For each extracted ASR span and its sentence context below, select the matching canonical `src` from `kb_candidates` if and only if the sentence genuinely refers to that glossary item (accounting for ASR phonetic mishearings or spoken shorthands). If none of `kb_candidates` is the intended term in that sentence, output `"NONE"`.
+
+## Input Items:
+```json
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+```
+
+## Output Format:
+Return ONLY a JSON object mapping each item number (`"1"`, `"2"`, ...) to the exact chosen canonical `"src"` string from `kb_candidates` or `"NONE"`:
+```json
+{{
+  "1": "Chosen Canonical Src or NONE"
+}}
+```
+""".strip()
 
 
 ## ================================================================
@@ -296,12 +318,14 @@ Translate the provided {SRC_LANGUAGE} video transcript lines into final, broadca
 2. **Native Spoken Flow & Clause Unpacking (Single-Pass Polish)**:
    - Organize clauses according to natural {TARGET_LANGUAGE} spoken word order and narrative flow rather than mirroring {SRC_LANGUAGE} syntax.
    - **Unpack long modifiers**: Break up post-nominal clauses (`that ...`, `which ...`, `with ...`, `where ...`) and stacked modifiers into sequential short clauses separated by commas (，). Avoid long `的` chains or clunky `在……上/中` wrappers.
+   - **Modifier & equipment roll order**: When stacked attributes, perks, or traits precede an equipment or entity noun (e.g., `[Perk A] [Perk B] [Weapon Name]`), connect the attributes as modifiers of the head noun in natural {TARGET_LANGUAGE} order rather than outputting a flat, disconnected list of nouns.
    - **Subtitle breathing room**: Insert natural commas (，) at topic-comment or breath boundaries so each clause stays concise (10–16 Chinese characters, never exceeding 18 characters without a comma pause).
    - Strip meaningless spoken fillers (`uh`, `um`, `you know`, `like`) for crisp, punchy subtitles.
 3. **Strict Terminology Adherence & Contextual Sense Disambiguation**:
-   - Strictly use the official translations in `### 术语库-词典` (formatted as `src:tgt` or `alias:tgt (canonical_src)`) whenever the source line refers to that domain entity, including across plurals, possessives (`'s`), or verb inflections (`-ed`, `-ing`).
+   - Strictly use the official translations in `### 术语库-词典` (formatted as `src:tgt`, `alias:tgt (canonical_src)`, or with `[note]`) whenever the source line refers to that domain entity, including across plurals, possessives (`'s`), or verb inflections (`-ed`, `-ing`).
    - **Sense check**: If a word in `### 术语库-词典` is used in the sentence purely as an everyday general expression (e.g., `"the number of"` meaning quantity, `"break ground"` meaning make progress, `"recent success"` meaning achievement), translate its natural everyday meaning instead of forcing a glossary term.
-   - **No untranslated common words**: Never leave ordinary {SRC_LANGUAGE} words (such as `past`, `boss`, `update`, `patch`, `test`) untranslated in {TARGET_LANGUAGE} sentences; only standard acronyms/abbreviations (`DPS`, `PvE`, `PvP`, `DoT`) or model numbers may remain in Latin letters.
+   - **Contextual ASR homophone recovery**: Spoken ASR transcripts frequently contain phonetic mishearings, split compounds, truncated suffixes, or portmanteaus (such as `-less` meaning "without", homophones conflicting with sentence grammar, or corrupted proper nouns). Infer the speaker's intended meaning from surrounding context and `### 术语库-词典` rather than translating corrupted literal words verbatim.
+   - **No untranslated common words**: Never leave ordinary {SRC_LANGUAGE} words (such as `past`, `boss`, `update`, `patch`, `test`, `inevitably`) untranslated in {TARGET_LANGUAGE} sentences; only standard acronyms/abbreviations (`DPS`, `PvE`, `PvP`, `DoT`) or model numbers may remain in Latin letters.
 4. **Strict Subtitle Punctuation & Zero Annotations**:
    - **Allowed punctuation ONLY**: comma (，), period (。), question mark (？), enumeration comma (、), and exclamation mark (！).
    - **Forbidden punctuation**: NEVER output dashes (`——`, `—`, `--`), colons (`：`, `:`), semicolons (`；`, `;`), quotation marks (`“”`, `‘’`, `""`, `''`, `「」`, `『』`), book title marks (`《》`, `〈〉`), or parenthetical notes. Use a comma (，) instead of dashes, colons, or semicolons, and write all term, skill, and work names as plain text without quotes.

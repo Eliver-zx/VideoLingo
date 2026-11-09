@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import lru_cache
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -14,7 +15,7 @@ from nltk.stem import SnowballStemmer
 import pandas as pd
 
 from core.concurrency import ContextThreadPoolExecutor
-from core.prompts import get_summary_prompt
+from core.prompts import get_kb_disambiguation_prompt, get_summary_prompt
 from core.utils import (
     ask_gpt,
     check_cancel,
@@ -40,6 +41,7 @@ SUMMARY_CHUNK_WEIGHTED_CHARS = 8000
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
 _WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z0-9]+)*")
+_UNICODE_SEP_RE = re.compile(r"[\u2010-\u2015\u2212\u2044/]+")
 _SIGNIFICANT_SYMBOL_RE = re.compile(r"(^\.[A-Za-z0-9]+|[+#@$%&])")
 _STEMMER = SnowballStemmer("english")
 
@@ -52,6 +54,28 @@ _KB_STOP_TOKENS: frozenset[str] = frozenset(
         "where which while who will with would you your"
     ).split()
 )
+
+_EXTRA_COMMON_WORDS: frozenset[str] = frozenset(
+    (
+        "ll ve re dont doesnt didnt cant wont isnt arent wasnt werent "
+        "hasnt havent hadnt wouldnt couldnt shouldnt mightnt mustnt "
+        "gonna wanna gotta kinda sorta yall im ive id youll youve youd "
+        "hell hes hed shell shes shed well weve wed theyll theyve theyd "
+        "thats whats whos wheres whens whys hows lets "
+        "dps pve pvp dot aoe ads rng hud ui ux "
+        "reprisal impetus doubt call end story clash control rumble "
+        "supremacy mayhem breakthrough countdown survival elimination "
+        "salvage momentum rift doubles inevitability inevitably"
+    ).split()
+)
+
+
+def _fold_ascii(text: str) -> str:
+    return (
+        unicodedata.normalize("NFKD", _UNICODE_SEP_RE.sub(" ", text))
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
 
 
 @lru_cache(maxsize=65536)
@@ -67,13 +91,150 @@ def _stem_word(word: str) -> str:
     return st
 
 
-def _tokenize_surface(text: str) -> tuple[list[str], list[str], list[str]]:
-    folded = (
-        unicodedata.normalize("NFKD", text)
-        .encode("ascii", "ignore")
-        .decode("ascii")
-        .lower()
+@lru_cache(maxsize=1)
+def _load_common_english_words() -> frozenset[str]:
+    words: set[str] = set(_EXTRA_COMMON_WORDS)
+    for dict_path in ("/usr/share/dict/words", "/usr/dict/words"):
+        p = Path(dict_path)
+        if p.is_file():
+            try:
+                for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    w = line.strip()
+                    if len(w) >= 3 and w.islower() and w.isalpha():
+                        words.add(w)
+            except OSError:
+                pass
+            break
+    return frozenset(words)
+
+
+@lru_cache(maxsize=65536)
+def _is_standard_english(word: str) -> bool:
+    w = word.lower()
+    if len(w) <= 2 or w in _KB_STOP_TOKENS:
+        return True
+    common = _load_common_english_words()
+    if w in common or _stem_word(w) in common:
+        return True
+    for suf in (
+        "s",
+        "es",
+        "ed",
+        "ing",
+        "er",
+        "ers",
+        "est",
+        "ly",
+        "ness",
+        "ment",
+        "able",
+        "ible",
+    ):
+        if w.endswith(suf) and len(w) - len(suf) >= 3:
+            base = w[: -len(suf)]
+            if base in common or (base + "e") in common:
+                return True
+            if len(base) >= 4 and base[-1] == base[-2] and base[:-1] in common:
+                return True
+            if base.endswith("i") and (base[:-1] + "y") in common:
+                return True
+    return False
+
+
+def _levenshtein_fast(s1: str, s2: str) -> int:
+    if s1 == s2:
+        return 0
+    if len(s1) < len(s2):
+        s1, s2 = s2, s1
+    if not s2:
+        return len(s1)
+    prev = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1, 1):
+        cur = [i]
+        for j, c2 in enumerate(s2, 1):
+            ins = cur[j - 1] + 1
+            dele = prev[j] + 1
+            sub = prev[j - 1] + (c1 != c2)
+            cur.append(
+                ins if ins < dele and ins < sub else (dele if dele < sub else sub)
+            )
+        prev = cur
+    return prev[-1]
+
+
+@lru_cache(maxsize=65536)
+def _phonetic_skeleton(word: str) -> str:
+    s = re.sub(r"[^a-z0-9]", "", word.lower())
+    if not s:
+        return ""
+    s = re.sub(r"^[aeiouy]+", "a", s)
+    s = re.sub(r"c(?=[eiy])", "s", s)
+    s = (
+        s.replace("ph", "f")
+        .replace("gh", "g")
+        .replace("kn", "n")
+        .replace("wr", "r")
+        .replace("wh", "w")
+        .replace("ck", "k")
+        .replace("dg", "j")
+        .replace("tch", "ch")
+        .replace("sh", "s")
+        .replace("th", "t")
+        .replace("qu", "kw")
     )
+    s = (
+        s.replace("c", "k")
+        .replace("q", "k")
+        .replace("x", "ks")
+        .replace("z", "s")
+        .replace("v", "f")
+    )
+    first = s[0]
+    rest = re.sub(r"[aeiouyhw]", "", s[1:])
+    raw = first + rest
+    dedup: list[str] = []
+    for ch in raw:
+        if not dedup or dedup[-1] != ch:
+            dedup.append(ch)
+    return "".join(dedup)
+
+
+def _char_sim(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    return 1.0 - _levenshtein_fast(a, b) / max(len(a), len(b))
+
+
+def _word_sim(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    if a == b or _stem_word(a) == _stem_word(b):
+        return 1.0
+    c_sim = _char_sim(a, b)
+    pa, pb = _phonetic_skeleton(a), _phonetic_skeleton(b)
+    p_sim = _char_sim(pa, pb) if (len(pa) >= 2 and len(pb) >= 2) else 0.0
+    if (
+        len(pa) >= 3
+        and len(pb) >= 3
+        and pa[0] == pb[0]
+        and not _is_standard_english(a)
+        and not _is_standard_english(b)
+    ):
+        da = pa[0] + re.sub(r"(.)\1+", r"\1", pa[1:].replace("d", "t"))
+        db = pb[0] + re.sub(r"(.)\1+", r"\1", pb[1:].replace("d", "t"))
+        p_sim = max(p_sim, _char_sim(da, db) * 0.96)
+    p_weighted = (
+        p_sim * 0.94
+        if (len(pa) >= 2 and len(pb) >= 2 and pa[0] == pb[0])
+        else p_sim * 0.80
+    )
+    return max(c_sim, p_weighted, 0.55 * c_sim + 0.45 * p_sim)
+
+
+def _tokenize_surface(text: str) -> tuple[list[str], list[str], list[str]]:
+    folded = _fold_ascii(text).lower()
     words = _WORD_RE.findall(folded)
     base_words: list[str] = []
     raw_words: list[str] = []
@@ -85,6 +246,40 @@ def _tokenize_surface(text: str) -> tuple[list[str], list[str], list[str]]:
             raw_words.append(rw)
     stems = [_stem_word(w) for w in base_words]
     return base_words, stems, raw_words
+
+
+def _span_sim(
+    query: str,
+    target_bw: tuple[str, ...],
+    target_st: tuple[str, ...],
+    target_join: str,
+    stem_df: dict[str, int],
+) -> float:
+    q_bw, q_st, _ = _tokenize_surface(query)
+    if not q_bw or not target_bw:
+        return 0.0
+    if tuple(q_bw) == target_bw or tuple(q_st) == target_st:
+        return 1.0
+    q_join = "".join(q_bw)
+    j_sim = _word_sim(q_join, target_join)
+    if len(q_bw) == 1 and len(target_bw) >= 2:
+        t_sims = [
+            _word_sim(q_bw[0], tw)
+            for tw, ts in zip(target_bw, target_st)
+            if len(tw) >= 5
+            and ts not in _KB_STOP_TOKENS
+            and not _is_standard_english(tw)
+            and stem_df.get(ts, 99) <= 3
+        ]
+        best_tok = max(t_sims) if t_sims else 0.0
+        return max(j_sim, best_tok * 0.94)
+    if len(q_bw) != len(target_bw):
+        return j_sim * 0.92
+    tok_sims = [_word_sim(qw, tw) for qw, tw in zip(q_bw, target_bw)]
+    if min(tok_sims) < 0.55:
+        return j_sim * 0.85
+    avg_tok = sum(tok_sims) / len(tok_sims)
+    return max(avg_tok, j_sim * 0.95)
 
 
 def _tokenize_and_normalize(text: str) -> tuple[list[str], list[str]]:
@@ -183,7 +378,7 @@ def _extract_generic_kb_pairs(
         )
         if isinstance(src_val, str) and isinstance(tgt_val, str):
             s = src_val.strip()
-            t = tgt_val.strip()
+            t = re.sub(r"\s*\n\s*", "", tgt_val).strip()
             if s and t and s.lower() != t.lower():
                 key = s.lower()
                 if key not in out:
@@ -199,7 +394,7 @@ def _extract_generic_kb_pairs(
         for k, v in node.items():
             if isinstance(v, str):
                 s = str(k).strip()
-                t = v.strip()
+                t = re.sub(r"\s*\n\s*", "", v).strip()
                 if (
                     s
                     and t
@@ -226,6 +421,201 @@ def _extract_generic_kb_pairs(
                 _extract_generic_kb_pairs(
                     item, out, tgt_lang_hint, source_tag=source_tag
                 )
+
+
+def _normalize_kb_entries(
+    kb_entries: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for k, entry in kb_entries.items():
+        clean_tgt = re.sub(r"\s*\n\s*", "", str(entry.get("tgt") or "")).strip()
+        als = list(entry.get("aliases") or [])
+        src = str(entry.get("src") or "").strip()
+        if "-" in src:
+            for part in src.split():
+                if (
+                    "-" in part[1:-1]
+                    and part[0].isalnum()
+                    and len(part) >= 6
+                    and part.lower() != src.lower()
+                ):
+                    if part.lower() not in {a.lower() for a in als}:
+                        als.append(part)
+        if src.lower().startswith("the "):
+            no_the = src[4:].strip()
+            words = src.split()
+            if no_the and (
+                len(words) >= 3
+                or (
+                    len(words) == 2
+                    and len(no_the) >= 6
+                    and not _is_standard_english(no_the.lower())
+                )
+            ):
+                if no_the.lower() not in {a.lower() for a in als}:
+                    als.append(no_the)
+        out[k] = {
+            **entry,
+            "src": src,
+            "tgt": clean_tgt,
+            "aliases": _normalize_aliases(als, src),
+        }
+
+    for k, entry in list(out.items()):
+        src = entry["src"]
+        tgt = entry["tgt"]
+        if ":" in src and ("：" in tgt or ":" in tgt):
+            s_parts = [p.strip() for p in src.split(":") if p.strip()]
+            t_parts = [p.strip() for p in re.split(r"[：:]", tgt) if p.strip()]
+            if len(s_parts) == 2 and len(t_parts) == 2:
+                _, tail_s = s_parts
+                pfx_t, tail_t = t_parts
+                bw, _, _ = _tokenize_surface(tail_s)
+                content_bw = [w for w in bw if w not in _KB_STOP_TOKENS]
+                if len(content_bw) >= 2 or (
+                    len(content_bw) == 1 and not _is_standard_english(content_bw[0])
+                ):
+                    tk = tail_s.lower()
+                    if tk not in out:
+                        out[tk] = {
+                            "src": tail_s,
+                            "tgt": tail_t,
+                            "note": pfx_t,
+                            "aliases": [],
+                            "fix_source": False,
+                            "source": entry.get("source", "domain_dict"),
+                        }
+    return out
+
+
+def _char_phonetic_ngrams(text: str) -> list[str]:
+    bw, _, _ = _tokenize_surface(text)
+    if not bw:
+        return []
+    joined = "".join(bw)
+    skel = "".join(_phonetic_skeleton(w) for w in bw)
+    grams: list[str] = []
+    padded = f"^{joined}$"
+    for n in (2, 3):
+        for i in range(len(padded) - n + 1):
+            grams.append(f"c:{padded[i : i + n]}")
+    if skel:
+        ps = f"^{skel}$"
+        for n in range(2, min(4, len(ps) + 1)):
+            for i in range(len(ps) - n + 1):
+                grams.append(f"p:{ps[i : i + n]}")
+        for w in bw:
+            pw = _phonetic_skeleton(w)
+            if len(pw) >= 2:
+                grams.append(f"pw:{pw}")
+                grams.append(f"p2:{pw[:2]}")
+    return grams
+
+
+class UnifiedNgramKBIndex:
+    """Indexes canonical surfaces, curated aliases, and unique proper-noun head tokens (df <= 3)."""
+
+    def __init__(self, entries: list[dict[str, Any]]) -> None:
+        self.surfaces: list[tuple[str, dict[str, Any], float]] = []
+        tok_df: dict[str, int] = {}
+        tokenized_entries: list[tuple[dict[str, Any], list[str]]] = []
+
+        for entry in entries:
+            src = str(entry.get("src") or "").strip()
+            if not src:
+                continue
+            bw, _, _ = _tokenize_surface(src)
+            tokenized_entries.append((entry, bw))
+            for w in set(bw):
+                if len(w) >= 4 and w not in _KB_STOP_TOKENS:
+                    tok_df[w] = tok_df.get(w, 0) + 1
+
+        for entry, bw in tokenized_entries:
+            src = entry["src"]
+            penalty = 0.92 if ("(" in src or ":" in src) else 1.0
+            self.surfaces.append((src, entry, penalty))
+            for al in entry.get("aliases") or []:
+                al_s = str(al).strip()
+                if al_s:
+                    self.surfaces.append((al_s, entry, penalty * 0.98))
+            if len(bw) >= 2 and "(" not in src and ":" not in src:
+                for w in bw:
+                    if (
+                        len(w) >= 5
+                        and w not in _KB_STOP_TOKENS
+                        and tok_df.get(w, 99) <= 3
+                        and not _is_standard_english(w)
+                    ):
+                        self.surfaces.append((w, entry, 0.94))
+
+        df: dict[str, int] = {}
+        raw_grams_per_surf: list[list[str]] = []
+        for surf_text, _, _ in self.surfaces:
+            g = _char_phonetic_ngrams(surf_text)
+            raw_grams_per_surf.append(g)
+            for tok in set(g):
+                df[tok] = df.get(tok, 0) + 1
+
+        n_docs = max(1, len(self.surfaces))
+        self.idf = {
+            tok: math.log(1.0 + n_docs / (1.0 + freq)) for tok, freq in df.items()
+        }
+        self.surf_norms: list[float] = []
+        self.inv: dict[str, list[tuple[int, float]]] = {}
+
+        for surf_id, g_list in enumerate(raw_grams_per_surf):
+            if not g_list:
+                self.surf_norms.append(0.0)
+                continue
+            tf: dict[str, int] = {}
+            for tok in g_list:
+                tf[tok] = tf.get(tok, 0) + 1
+            vec = {
+                tok: (1.0 + math.log(cnt)) * self.idf[tok] for tok, cnt in tf.items()
+            }
+            norm = math.sqrt(sum(v * v for v in vec.values()))
+            self.surf_norms.append(norm)
+            for tok, w in vec.items():
+                self.inv.setdefault(tok, []).append((surf_id, w))
+
+    def query(
+        self, span: str, top_k: int = 3, min_score: float = 0.45
+    ) -> list[tuple[float, dict[str, Any]]]:
+        g_list = _char_phonetic_ngrams(span)
+        if not g_list:
+            return []
+        tf: dict[str, int] = {}
+        for tok in g_list:
+            tf[tok] = tf.get(tok, 0) + 1
+        q_vec = {
+            tok: (1.0 + math.log(cnt)) * self.idf.get(tok, 1.0)
+            for tok, cnt in tf.items()
+        }
+        q_norm = math.sqrt(sum(v * v for v in q_vec.values()))
+        if q_norm == 0.0:
+            return []
+
+        dots: dict[int, float] = {}
+        for tok, qw in q_vec.items():
+            for surf_id, dw in self.inv.get(tok, ()):
+                dots[surf_id] = dots.get(surf_id, 0.0) + qw * dw
+
+        best_by_src: dict[str, tuple[float, dict[str, Any]]] = {}
+        for surf_id, dot in dots.items():
+            d_norm = self.surf_norms[surf_id]
+            if d_norm <= 0.0:
+                continue
+            _, entry, penalty = self.surfaces[surf_id]
+            sc = (dot / (q_norm * d_norm)) * penalty
+            if sc < min_score:
+                continue
+            sl = entry["src"].lower()
+            prev = best_by_src.get(sl)
+            if prev is None or sc > prev[0]:
+                best_by_src[sl] = (sc, entry)
+
+        scored = sorted(best_by_src.values(), key=lambda x: x[0], reverse=True)
+        return scored[:top_k]
 
 
 def _should_load_domain_glossary() -> bool:
@@ -440,6 +830,8 @@ def _build_term_matcher(
     compact_stem_map: dict[str, list[SurfaceRule]] = {}
     symbol_cjk_terms: list[tuple[str, re.Pattern[str] | None, SurfaceRule]] = []
     raw_token_inv: dict[str, list[dict[str, Any]]] = {}
+    stem_df: dict[str, int] = {}
+    src_records: list[tuple[dict[str, Any], tuple[str, ...], tuple[str, ...], str]] = []
 
     for entry in entries:
         src = str(entry.get("src") or "").strip()
@@ -449,6 +841,7 @@ def _build_term_matcher(
         sig = (src.lower(), tgt.lower())
         aliases = _normalize_aliases(entry.get("aliases"), src)
         surface_specs = [(src, True), *((al, False) for al in aliases)]
+        seen_st_for_df: set[str] = set()
 
         for surf_str, is_src in surface_specs:
             s_clean = surf_str.strip()
@@ -489,8 +882,16 @@ def _build_term_matcher(
                 if len(ck) >= 3 and ck not in _KB_STOP_TOKENS:
                     _append_rule(compact_stem_map, ck, rule)
 
-            if is_src:
+            if is_src or len(joined_bw) >= 4:
+                src_records.append((entry, tuple(bw), tuple(st), joined_bw))
                 for tok in set(st):
+                    if (
+                        len(tok) >= 3
+                        and tok not in _KB_STOP_TOKENS
+                        and tok not in seen_st_for_df
+                    ):
+                        seen_st_for_df.add(tok)
+                        stem_df[tok] = stem_df.get(tok, 0) + 1
                     if len(tok) >= 4 and tok not in _KB_STOP_TOKENS:
                         t_bucket = raw_token_inv.get(tok)
                         if t_bucket is None:
@@ -505,6 +906,28 @@ def _build_term_matcher(
         if 1 <= len(bucket) <= max_rare_token_df
     }
 
+    anchor_inv: dict[
+        str, list[tuple[dict[str, Any], tuple[str, ...], tuple[str, ...], str]]
+    ] = {}
+    for entry, bw_tup, st_tup, joined_bw in src_records:
+        if len(bw_tup) < 2:
+            continue
+        content_stems = [
+            s for s in set(st_tup) if len(s) >= 3 and s not in _KB_STOP_TOKENS
+        ]
+        if len(content_stems) < 2:
+            continue
+        for s in content_stems:
+            if stem_df.get(s, 0) <= 25:
+                anchor_inv.setdefault(s, []).append((entry, bw_tup, st_tup, joined_bw))
+
+    rare_by_p0: dict[str, list[tuple[str, tuple[dict[str, Any], ...]]]] = {}
+    for rt, entries_tup in rare_token_inv.items():
+        if len(rt) >= 6 and not _is_standard_english(rt):
+            p_rt = _phonetic_skeleton(rt)
+            if p_rt:
+                rare_by_p0.setdefault(p_rt[0], []).append((rt, entries_tup))
+
     return {
         "exact_ngram_map": {k: tuple(v) for k, v in exact_ngram_map.items()},
         "stem_ngram_map": {k: tuple(v) for k, v in stem_ngram_map.items()},
@@ -512,6 +935,10 @@ def _build_term_matcher(
         "compact_stem_map": {k: tuple(v) for k, v in compact_stem_map.items()},
         "symbol_cjk_terms": tuple(symbol_cjk_terms),
         "rare_token_inv": rare_token_inv,
+        "stem_df": stem_df,
+        "anchor_inv": {k: tuple(v) for k, v in anchor_inv.items()},
+        "rare_by_p0": {k: tuple(v) for k, v in rare_by_p0.items()},
+        "surface_records": tuple(src_records),
     }
 
 
@@ -571,9 +998,7 @@ def _match_terms_in_text(text: str, matcher: dict[str, Any]) -> list[TermHit]:
             if pat is None or pat.search(text_lower):
                 _record_channel(rule, token_idx=0, via_compact_channel=False)
 
-    folded = (
-        unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
-    )
+    folded = _fold_ascii(text)
     orig_words = _WORD_RE.findall(folded)
     if not orig_words:
         return sorted(hits_by_sig.values(), key=lambda h: h.first_token_idx)
@@ -655,10 +1080,20 @@ def format_term_hits_for_prompt(hits: list[TermHit]) -> list[str]:
     for hit in hits:
         src = hit.entry["src"]
         tgt = hit.entry["tgt"]
-        for line in (
-            *([f"{src}:{tgt}"] if hit.src_matched else []),
-            *(f"{al}:{tgt} ({src})" for al in hit.matched_aliases),
-        ):
+        note = str(hit.entry.get("note") or "").strip()
+        note_suffix = f" [{note}]" if note else ""
+        src_lines = [f"{src}:{tgt}{note_suffix}"] if hit.src_matched else []
+        alias_lines: list[str] = []
+        for al in hit.matched_aliases:
+            al_note = note_suffix
+            if (
+                al.lower().endswith("less")
+                and not src.lower().endswith("less")
+                and "without" not in note.lower()
+            ):
+                al_note = f" [without {src}; {note}]" if note else f" [without {src}]"
+            alias_lines.append(f"{al}:{tgt} ({src}){al_note}")
+        for line in (*src_lines, *alias_lines):
             k = line.lower()
             if k not in seen:
                 seen.add(k)
@@ -740,8 +1175,15 @@ def _get_kb_index(custom_terms_list: list[dict[str, Any]]) -> dict[str, Any]:
                     label="TERMS",
                 )
 
-        matcher = _build_term_matcher(list(kb_entries.values()))
-        data = {"entries": kb_entries, "matcher": matcher}
+        kb_entries = _normalize_kb_entries(kb_entries)
+        entries_list = list(kb_entries.values())
+        matcher = _build_term_matcher(entries_list)
+        ngram_index = UnifiedNgramKBIndex(entries_list)
+        data = {
+            "entries": kb_entries,
+            "matcher": matcher,
+            "ngram_index": ngram_index,
+        }
         _KB_INDEX_CACHE["key"] = cache_key
         _KB_INDEX_CACHE["data"] = data
         return data
@@ -749,34 +1191,240 @@ def _get_kb_index(custom_terms_list: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _ensure_kb_matcher(kb_data: dict[str, Any]) -> dict[str, Any]:
     matcher = kb_data.get("matcher")
-    if matcher is None:
+    if matcher is None or "surface_records" not in matcher:
         entries = list((kb_data.get("entries") or {}).values())
         matcher = _build_term_matcher(entries)
         kb_data["matcher"] = matcher
+    if "ngram_index" not in kb_data and kb_data.get("entries"):
+        kb_data["ngram_index"] = UnifiedNgramKBIndex(
+            list((kb_data.get("entries") or {}).values())
+        )
     return matcher
 
 
 def _retrieve_rare_token_candidates(
-    text: str, kb_data: dict[str, Any], exclude_srcs: set[str]
+    text: str,
+    kb_data: dict[str, Any],
+    exclude_srcs: set[str] | None = None,
+    covered_tokens: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     if not text or not kb_data or not kb_data.get("entries"):
         return []
     matcher = _ensure_kb_matcher(kb_data)
-    rare_inv = matcher.get("rare_token_inv", {})
-    if not rare_inv:
+    ngram_idx: UnifiedNgramKBIndex | None = kb_data.get("ngram_index")
+    folded = _fold_ascii(text)
+    orig_words = _WORD_RE.findall(folded)
+    if not orig_words:
         return []
-    _, stems, _ = _tokenize_surface(text)
-    out: list[dict[str, Any]] = []
-    seen = set(exclude_srcs)
-    for st in stems:
-        if len(st) < 4 or st in _KB_STOP_TOKENS:
+
+    base_words: list[str] = []
+    for w in orig_words:
+        wl = w.lower()
+        bw = re.sub(r"['’]s$", "", wl).replace("'", "").replace("’", "")
+        base_words.append(bw)
+    stems = [_stem_word(bw) if bw else "" for bw in base_words]
+    n = len(base_words)
+
+    if covered_tokens is None:
+        covered_tokens = set()
+        for hit in _match_terms_in_text(text, matcher):
+            for surf in (hit.entry["src"], *hit.matched_aliases):
+                for w in _tokenize_surface(surf)[0]:
+                    covered_tokens.add(w)
+
+    candidates_by_src: dict[str, dict[str, Any]] = {}
+    aligned_oov_tokens: dict[str, dict[str, Any]] = {}
+
+    def _add_cand(entry: dict[str, Any], alias_span: str) -> None:
+        sl = entry["src"].lower()
+        clean_al = alias_span.strip()
+        if not clean_al or clean_al.lower() == sl:
+            return
+        item = candidates_by_src.get(sl)
+        if item is None:
+            als = list(entry.get("aliases") or [])
+            if clean_al.lower() not in {a.lower() for a in als}:
+                als.append(clean_al)
+            candidates_by_src[sl] = {
+                "src": entry["src"],
+                "tgt": entry["tgt"],
+                "note": str(entry.get("note") or ""),
+                "aliases": als,
+                "matched_spans": [clean_al],
+                "fix_source": bool(entry.get("fix_source", False)),
+                "source": str(entry.get("source") or "domain_kb"),
+            }
+        else:
+            if clean_al.lower() not in {a.lower() for a in item["aliases"]}:
+                item["aliases"].append(clean_al)
+            if clean_al.lower() not in {a.lower() for a in item["matched_spans"]}:
+                item["matched_spans"].append(clean_al)
+
+    anchor_inv = matcher.get("anchor_inv", {})
+    stem_df = matcher.get("stem_df", {})
+    for i, st in enumerate(stems):
+        if st not in anchor_inv:
             continue
-        for entry in rare_inv.get(st, ()):
-            sl = entry["src"].lower()
-            if sl not in seen:
-                seen.add(sl)
-                out.append(entry)
-    return out
+        for entry, e_bw, e_st, _ in anchor_inv[st]:
+            m = len(e_bw)
+            for pos, tok_st in enumerate(e_st):
+                if tok_st != st:
+                    continue
+                start = i - pos
+                end = start + m
+                if start < 0 or end > n:
+                    continue
+                win_bw = base_words[start:end]
+                win_st = stems[start:end]
+                if tuple(win_bw) == e_bw or tuple(win_st) == e_st:
+                    continue
+                tok_sims: list[float] = []
+                ok = True
+                for qw, qs, tw, ts in zip(win_bw, win_st, e_bw, e_st):
+                    if qw == tw or qs == ts:
+                        tok_sims.append(1.0)
+                    elif ts in _KB_STOP_TOKENS and qw in _KB_STOP_TOKENS:
+                        tok_sims.append(0.85)
+                    else:
+                        sim = _word_sim(qw, tw)
+                        pq, pt = _phonetic_skeleton(qw), _phonetic_skeleton(tw)
+                        both_std = _is_standard_english(qw) and _is_standard_english(tw)
+                        if both_std:
+                            if not pq or not pt or pq[0] != pt[0]:
+                                ok = False
+                                break
+                            min_tok = 0.56 if stem_df.get(st, 99) <= 5 else 0.78
+                            if sim < min_tok:
+                                ok = False
+                                break
+                        elif sim < 0.56:
+                            ok = False
+                            break
+                        tok_sims.append(sim)
+                if ok and (sum(tok_sims) / m) >= 0.78:
+                    span_str = " ".join(orig_words[start:end])
+                    _add_cand(entry, span_str)
+                    for qw, tw in zip(win_bw, e_bw):
+                        if (
+                            qw != tw
+                            and len(qw) >= 5
+                            and not _is_standard_english(qw)
+                            and not _is_standard_english(tw)
+                        ):
+                            aligned_oov_tokens[qw] = entry
+
+    rare_by_p0 = matcher.get("rare_by_p0", {})
+    for i in range(n - 1):
+        w1, w2 = base_words[i], base_words[i + 1]
+        if len(w1) < 3 or len(w2) < 3 or w1 in _KB_STOP_TOKENS or w2 in _KB_STOP_TOKENS:
+            continue
+        if w1 in covered_tokens and w2 in covered_tokens:
+            continue
+        joined = w1 + w2
+        if len(joined) < 6 or _is_standard_english(joined):
+            continue
+        p_join = _phonetic_skeleton(joined)
+        if len(p_join) < 3:
+            continue
+        for rt, entries_list in rare_by_p0.get(p_join[0], ()):
+            if abs(len(joined) - len(rt)) > 2:
+                continue
+            c_sim = _char_sim(joined, rt)
+            w_sim = _word_sim(joined, rt)
+            p_rt = _phonetic_skeleton(rt)
+            min_c = 0.65 if (p_join == p_rt and len(p_join) >= 4) else 0.72
+            if c_sim >= min_c and w_sim >= 0.85:
+                span2 = " ".join(orig_words[i : i + 2])
+                for entry in entries_list:
+                    _add_cand(entry, span2)
+                    _, e_st, _ = _tokenize_surface(entry["src"])
+                    if i + 2 < n and stems[i + 2] in e_st:
+                        _add_cand(entry, " ".join(orig_words[i : i + 3]))
+
+    stem_ngram_map = matcher.get("stem_ngram_map", {})
+    if ngram_idx is not None:
+        for i in range(n - 1):
+            w1, w2 = base_words[i], base_words[i + 1]
+            if w1 in _KB_STOP_TOKENS or w2 in _KB_STOP_TOKENS:
+                continue
+            if (stems[i], stems[i + 1]) in stem_ngram_map:
+                continue
+            if not (orig_words[i][0].isupper() and orig_words[i + 1][0].isupper()):
+                continue
+            span2 = f"{orig_words[i]} {orig_words[i + 1]}"
+            for _, entry in ngram_idx.query(span2, top_k=1, min_score=0.47):
+                e_bw, _, _ = _tokenize_surface(entry["src"])
+                if len(e_bw) >= 2:
+                    _add_cand(entry, span2)
+
+    rare_inv = matcher.get("rare_token_inv", {})
+    surface_records = matcher.get("surface_records", ())
+    seen_oov: set[str] = set()
+    for i, bw in enumerate(base_words):
+        if len(bw) < 4 or bw in _KB_STOP_TOKENS or bw.isdigit():
+            continue
+        if bw in covered_tokens or bw in seen_oov:
+            continue
+        is_oov = not _is_standard_english(bw)
+        is_cap_noun = (
+            orig_words[i][0].isupper()
+            and len(bw) >= 7
+            and not bw.endswith(("est", "ing", "ed", "ly", "tion", "ment"))
+        )
+        if not (is_oov or is_cap_noun):
+            continue
+        seen_oov.add(bw)
+        if bw in aligned_oov_tokens:
+            _add_cand(aligned_oov_tokens[bw], orig_words[i])
+            continue
+        st = stems[i]
+        if is_oov and st in rare_inv:
+            for entry in rare_inv[st]:
+                _add_cand(entry, orig_words[i])
+            continue
+        scored_by_src: dict[str, tuple[float, dict[str, Any]]] = {}
+        for entry, e_bw, e_st, e_join in surface_records:
+            if (
+                not is_oov
+                and len(e_bw) == 1
+                and _is_standard_english(entry["src"].lower())
+            ):
+                continue
+            sc = _span_sim(bw, e_bw, e_st, e_join, stem_df)
+            if sc >= 0.75:
+                sl = entry["src"].lower()
+                if "(" in sl:
+                    sc *= 0.94
+                prev = scored_by_src.get(sl)
+                if prev is None or sc > prev[0]:
+                    scored_by_src[sl] = (sc, entry)
+        scored = sorted(scored_by_src.values(), key=lambda x: x[0], reverse=True)
+        chosen_entries = [entry for _, entry in scored[:2]]
+        if ngram_idx is not None:
+            min_ng = 0.39 if is_oov else 0.54
+            for _, entry in ngram_idx.query(orig_words[i], top_k=1, min_score=min_ng):
+                if entry["src"].lower() not in {
+                    e["src"].lower() for e in chosen_entries
+                }:
+                    chosen_entries.append(entry)
+        for entry in chosen_entries:
+            _add_cand(entry, orig_words[i])
+            if i + 1 < n:
+                _, e_st, _ = _tokenize_surface(entry["src"])
+                if stems[i + 1] in e_st:
+                    _add_cand(entry, " ".join(orig_words[i : i + 2]))
+
+    entries_map = kb_data.get("entries", {})
+    for sl, cand in list(candidates_by_src.items()):
+        if " " not in sl and not _is_standard_english(sl):
+            prefix = f"{sl}'s "
+            for ek, e_entry in entries_map.items():
+                if ek.startswith(prefix) and "(" not in ek:
+                    _add_cand(e_entry, cand["src"])
+                    for sp in cand.get("matched_spans", []):
+                        _add_cand(e_entry, sp)
+
+    return list(candidates_by_src.values())
 
 
 def _scan_text_for_kb_terms(text: str, kb_data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -878,11 +1526,45 @@ def _extract_chunk_terms(
     return chunk_idx, resp
 
 
+def _resolve_ambiguous_kb_candidates_with_llm(
+    unresolved_items: list[dict[str, Any]],
+) -> dict[str, str]:
+    if not unresolved_items:
+        return {}
+    decisions: dict[str, str] = {}
+    batch_size = 30
+    batches = [
+        unresolved_items[i : i + batch_size]
+        for i in range(0, len(unresolved_items), batch_size)
+    ]
+
+    def _run_batch(batch: list[dict[str, Any]]) -> dict[str, str]:
+        check_cancel()
+        prompt = get_kb_disambiguation_prompt({"items": batch})
+        resp = ask_gpt(prompt, resp_type="json", log_title="kb_disambiguate")
+        out: dict[str, str] = {}
+        if isinstance(resp, dict):
+            for d in resp.get("decisions") or []:
+                if isinstance(d, dict):
+                    sp = str(d.get("span") or "").strip().lower()
+                    ch = str(d.get("canonical_src") or "NONE").strip()
+                    if sp and ch and ch.upper() != "NONE":
+                        out[sp] = ch
+        return out
+
+    max_workers = max(1, min(len(batches), int(load_key_or("max_workers", 4) or 4)))
+    with ContextThreadPoolExecutor(max_workers=max_workers) as ex:
+        for batch_out in ex.map(_run_batch, batches):
+            decisions.update(batch_out)
+    return decisions
+
+
 def _merge_terminology_results(
     chunk_results: list[tuple[int, dict[str, Any]]],
     custom_terms_list: list[dict[str, Any]],
     kb_data: dict[str, Any] | None = None,
     full_text: str = "",
+    run_llm_disambiguation: bool = False,
 ) -> dict[str, Any]:
     ordered_chunks = sorted(chunk_results, key=lambda x: x[0])
     themes = [
@@ -918,8 +1600,9 @@ def _merge_terminology_results(
             if al_st:
                 auth_by_stem.setdefault(tuple(al_st), entry)
 
-    if kb_data and kb_data.get("entries"):
-        for k, entry in kb_data["entries"].items():
+    kb_entries = (kb_data.get("entries") or {}) if kb_data else {}
+    if kb_entries:
+        for k, entry in kb_entries.items():
             auth_by_lower.setdefault(k, entry)
             _, st, _ = _tokenize_surface(entry["src"])
             if st:
@@ -933,12 +1616,212 @@ def _merge_terminology_results(
                 if al_st:
                     auth_by_stem.setdefault(tuple(al_st), entry)
 
+    llm_mentioned_surfaces: set[str] = set()
+    for _, res in ordered_chunks:
+        if not isinstance(res, dict):
+            continue
+        for item in res.get("terms") or []:
+            if not isinstance(item, dict):
+                continue
+            s = str(item.get("src") or "").strip()
+            if s:
+                llm_mentioned_surfaces.add(s.lower())
+            for al in _normalize_aliases(item.get("aliases"), s):
+                llm_mentioned_surfaces.add(al.lower())
+
     scanned_aliases_by_src: dict[str, list[str]] = {}
+    confirmed_kb_srcs: set[str] = set()
+    scanned_terms: list[dict[str, Any]] = []
+    rare_terms: list[dict[str, Any]] = []
     if kb_data and full_text:
-        for scanned in _scan_text_for_kb_terms(full_text, kb_data):
-            scanned_aliases_by_src[scanned["src"].lower()] = list(
-                scanned.get("aliases") or []
+        scanned_terms = _scan_text_for_kb_terms(full_text, kb_data)
+        rare_terms = _retrieve_rare_token_candidates(full_text, kb_data)
+        for scanned in scanned_terms:
+            src_low = scanned["src"].lower()
+            als = list(scanned.get("aliases") or [])
+            prev_als = scanned_aliases_by_src.setdefault(src_low, [])
+            for al in als:
+                al_str = str(al).strip()
+                if not al_str:
+                    continue
+                if al_str.lower() not in {x.lower() for x in prev_als}:
+                    prev_als.append(al_str)
+                auth_entry = kb_entries.get(src_low)
+                if auth_entry is not None:
+                    auth_by_lower.setdefault(al_str.lower(), auth_entry)
+                    _, al_st, _ = _tokenize_surface(al_str)
+                    if al_st:
+                        auth_by_stem.setdefault(tuple(al_st), auth_entry)
+
+        for rc in rare_terms:
+            sl = rc["src"].lower()
+            m_spans = list(rc.get("matched_spans") or rc.get("aliases") or [])
+            if sl in llm_mentioned_surfaces or any(
+                str(sp).strip().lower() in llm_mentioned_surfaces for sp in m_spans
+            ):
+                confirmed_kb_srcs.add(sl)
+                prev_als = scanned_aliases_by_src.setdefault(sl, [])
+                auth_entry = kb_entries.get(sl)
+                for sp in m_spans:
+                    sp_str = str(sp).strip()
+                    if not sp_str:
+                        continue
+                    if sp_str.lower() not in {x.lower() for x in prev_als}:
+                        prev_als.append(sp_str)
+                    if auth_entry is not None:
+                        auth_by_lower.setdefault(sp_str.lower(), auth_entry)
+                        _, sp_st, _ = _tokenize_surface(sp_str)
+                        if sp_st:
+                            auth_by_stem.setdefault(tuple(sp_st), auth_entry)
+
+    # Pass 2: Ground unresolved Pass-1 LLM terms & un-echoed pre-filter spans via UnifiedNgramKBIndex + LLM disambiguation
+    ngram_idx: UnifiedNgramKBIndex | None = (
+        kb_data.get("ngram_index") if kb_data else None
+    )
+    if (
+        run_llm_disambiguation
+        and kb_data
+        and ngram_idx is not None
+        and len(kb_entries) >= 10
+        and full_text
+    ):
+        text_lines = [ln.strip() for ln in full_text.splitlines() if ln.strip()]
+
+        def _find_context_sentence(span_str: str) -> str:
+            sl = span_str.lower()
+            for ln in text_lines:
+                if sl in ln.lower():
+                    return ln
+            toks = [w for w in _tokenize_surface(span_str)[0] if len(w) >= 3]
+            for ln in text_lines:
+                ll = ln.lower()
+                if toks and all(t in ll for t in toks):
+                    return ln
+            return ""
+
+        unresolved_map: dict[str, dict[str, Any]] = {}
+        auto_resolved: dict[str, dict[str, Any]] = {}
+
+        for _, res in ordered_chunks:
+            if not isinstance(res, dict):
+                continue
+            for item in res.get("terms") or []:
+                if not isinstance(item, dict):
+                    continue
+                s = str(item.get("src") or "").strip()
+                if not s:
+                    continue
+                _, st, _ = _tokenize_surface(s)
+                st_tup = tuple(st) if st else ()
+                if s.lower() in auth_by_lower or (st_tup and st_tup in auth_by_stem):
+                    continue
+                als = _normalize_aliases(item.get("aliases"), s)
+                if any(a.lower() in auth_by_lower for a in als):
+                    continue
+                queries = [s, *als]
+                cand_scores: dict[str, float] = {}
+                cand_entries: dict[str, dict[str, Any]] = {}
+                for q in queries:
+                    for sc, ent in ngram_idx.query(q, top_k=3, min_score=0.43):
+                        ek = ent["src"].lower()
+                        if sc > cand_scores.get(ek, 0.0):
+                            cand_scores[ek] = sc
+                            cand_entries[ek] = ent
+                if not cand_scores:
+                    continue
+                ranked = sorted(cand_scores.items(), key=lambda x: -x[1])[:3]
+                best_ek, best_sc = ranked[0]
+                second_sc = ranked[1][1] if len(ranked) > 1 else 0.0
+                if best_sc >= 0.84 and (best_sc - second_sc) >= 0.12:
+                    auto_resolved[s.lower()] = cand_entries[best_ek]
+                    for a in als:
+                        auto_resolved[a.lower()] = cand_entries[best_ek]
+                else:
+                    ctx = _find_context_sentence(
+                        als[0] if als else s
+                    ) or _find_context_sentence(s)
+                    unresolved_map[s.lower()] = {
+                        "span": s,
+                        "aliases": als,
+                        "sentence": ctx,
+                        "candidates": [
+                            {
+                                "src": cand_entries[ek]["src"],
+                                "tgt": cand_entries[ek]["tgt"],
+                                "note": cand_entries[ek].get("note", ""),
+                                "score": round(sc, 3),
+                            }
+                            for ek, sc in ranked
+                        ],
+                    }
+
+        for rc in rare_terms:
+            sl = rc["src"].lower()
+            m_spans = list(rc.get("matched_spans") or rc.get("aliases") or [])
+            if sl in llm_mentioned_surfaces or any(
+                str(sp).strip().lower() in llm_mentioned_surfaces for sp in m_spans
+            ):
+                continue
+            for sp in m_spans:
+                sp_str = str(sp).strip()
+                sp_low = sp_str.lower()
+                if not sp_low or sp_low in auth_by_lower or sp_low in unresolved_map:
+                    continue
+                cands_list = [
+                    {
+                        "src": rc["src"],
+                        "tgt": rc["tgt"],
+                        "note": rc.get("note", ""),
+                        "score": 0.75,
+                    }
+                ]
+                for sc, ent in ngram_idx.query(sp_str, top_k=3, min_score=0.45):
+                    if ent["src"].lower() != sl and len(cands_list) < 3:
+                        cands_list.append(
+                            {
+                                "src": ent["src"],
+                                "tgt": ent["tgt"],
+                                "note": ent.get("note", ""),
+                                "score": round(sc, 3),
+                            }
+                        )
+                unresolved_map[sp_low] = {
+                    "span": sp_str,
+                    "aliases": [],
+                    "sentence": _find_context_sentence(sp_str),
+                    "candidates": cands_list,
+                }
+
+        for sp_low, ent in auto_resolved.items():
+            ek = ent["src"].lower()
+            confirmed_kb_srcs.add(ek)
+            auth_by_lower.setdefault(sp_low, ent)
+            prev_als = scanned_aliases_by_src.setdefault(ek, [])
+            if sp_low != ek and sp_low not in {x.lower() for x in prev_als}:
+                prev_als.append(sp_low)
+
+        if unresolved_map:
+            llm_decisions = _resolve_ambiguous_kb_candidates_with_llm(
+                list(unresolved_map.values())
             )
+            for sp_low, chosen_src in llm_decisions.items():
+                ent = kb_entries.get(chosen_src.lower())
+                if ent is None:
+                    continue
+                ek = ent["src"].lower()
+                confirmed_kb_srcs.add(ek)
+                auth_by_lower[sp_low] = ent
+                prev_als = scanned_aliases_by_src.setdefault(ek, [])
+                orig_span = unresolved_map.get(sp_low, {}).get("span", sp_low)
+                if orig_span.lower() != ek and orig_span.lower() not in {
+                    x.lower() for x in prev_als
+                }:
+                    prev_als.append(orig_span)
+                for a in unresolved_map.get(sp_low, {}).get("aliases") or []:
+                    al_low = a.lower()
+                    auth_by_lower.setdefault(al_low, ent)
+                    if al_low != ek and al_low not in {x.lower() for x in prev_als}:
+                        prev_als.append(a)
 
     merged_by_src: dict[str, dict[str, Any]] = {}
     stem_to_src_key: dict[tuple[str, ...], str] = {}
@@ -962,10 +1845,35 @@ def _merge_terminology_results(
         auth = auth_by_lower.get(s.lower()) or (
             auth_by_stem.get(st_tup) if st_tup else None
         )
-        extra_aliases = list(aliases or [])
+        raw_aliases = list(aliases or [])
+        if auth is None:
+            for a in raw_aliases:
+                auth = auth_by_lower.get(str(a).strip().lower())
+                if auth is not None:
+                    break
+        extra_aliases: list[str] = []
         if auth is not None:
-            if s.lower() != auth["src"].lower():
-                extra_aliases.insert(0, s)
+            canonical_low = auth["src"].lower()
+            for a in raw_aliases:
+                a_str = str(a).strip()
+                if not a_str:
+                    continue
+                a_auth = auth_by_lower.get(a_str.lower())
+                if a_auth is not None and a_auth["src"].lower() != canonical_low:
+                    continue
+                a_toks = _tokenize_surface(a_str)[0]
+                if any(
+                    len(tok) >= 5
+                    and tok in auth_by_lower
+                    and auth_by_lower[tok]["src"].lower() != canonical_low
+                    for tok in a_toks
+                ):
+                    continue
+                extra_aliases.append(a_str)
+            if s.lower() != canonical_low:
+                s_auth = auth_by_lower.get(s.lower())
+                if s_auth is None or s_auth["src"].lower() == canonical_low:
+                    extra_aliases.insert(0, s)
             s = auth["src"]
             t = auth["tgt"]
             if not note:
@@ -979,6 +1887,8 @@ def _merge_terminology_results(
             extra_aliases = [*auth_aliases, *extra_aliases]
             _, st, _ = _tokenize_surface(s)
             st_tup = tuple(st) if st else ()
+        else:
+            extra_aliases = raw_aliases
 
         key = s.lower()
         if key not in merged_by_src and st_tup and st_tup in stem_to_src_key:
@@ -1022,6 +1932,18 @@ def _merge_terminology_results(
                 overwrite_tgt=True,
             )
 
+    for s_low in confirmed_kb_srcs:
+        if s_low not in merged_by_src and s_low in kb_entries:
+            ent = kb_entries[s_low]
+            _upsert_term(
+                ent["src"],
+                ent["tgt"],
+                str(ent.get("note") or ""),
+                scanned_aliases_by_src.get(s_low, []),
+                bool(ent.get("fix_source", False)),
+                source="task",
+            )
+
     for _, res in ordered_chunks:
         if not isinstance(res, dict):
             continue
@@ -1039,6 +1961,27 @@ def _merge_terminology_results(
             als = _normalize_aliases(item.get("aliases"), s)
             _upsert_term(s, t, n_str, als, source="task")
 
+    # Propagate 1-word OOV proper noun aliases to possessive multi-word entries in merged_by_src
+    for k, entry in list(merged_by_src.items()):
+        bw, _, _ = _tokenize_surface(entry["src"])
+        if len(bw) == 1 and len(bw[0]) >= 5 and not _is_standard_english(bw[0]):
+            w0 = bw[0]
+            als = entry.get("aliases") or []
+            if not als:
+                continue
+            for other_k, other_ent in merged_by_src.items():
+                if other_k == k:
+                    continue
+                obw, _, _ = _tokenize_surface(other_ent["src"])
+                if len(obw) >= 2 and obw[0] == w0:
+                    rest = " ".join(obw[1:])
+                    new_als = list(other_ent.get("aliases") or [])
+                    for a in als:
+                        cand_al = f"{a} {rest}"
+                        if cand_al.lower() not in {x.lower() for x in new_als}:
+                            new_als.append(cand_al)
+                    other_ent["aliases"] = _normalize_aliases(new_als, other_ent["src"])
+
     return {"theme": combined_theme, "terms": list(merged_by_src.values())}
 
 
@@ -1055,7 +1998,6 @@ def get_summary() -> None:
         return
 
     video_kb_terms = _scan_text_for_kb_terms(full_text, kb_data)
-    video_kb_srcs = {t["src"].lower() for t in video_kb_terms}
     total_chunks = len(text_chunks)
     max_workers = max(1, int(load_key_or("max_workers", 4) or 4))
 
@@ -1075,15 +2017,31 @@ def get_summary() -> None:
         for idx, chunk in enumerate(text_chunks):
             chunk_kb = _scan_text_for_kb_terms(chunk, kb_data)
             chunk_srcs = {t["src"].lower() for t in chunk_kb}
-            rare_cands = _retrieve_rare_token_candidates(
-                chunk, kb_data, chunk_srcs | video_kb_srcs
-            )
+            rare_cands = _retrieve_rare_token_candidates(chunk, kb_data)
+            seen_cand_srcs = set(chunk_srcs)
+            chunk_candidates = list(chunk_kb)
+            for rc in rare_cands:
+                rl = rc["src"].lower()
+                if rl not in seen_cand_srcs:
+                    seen_cand_srcs.add(rl)
+                    chunk_candidates.append(rc)
+                else:
+                    for existing in chunk_candidates:
+                        if existing["src"].lower() == rl:
+                            existing["aliases"] = _normalize_aliases(
+                                [
+                                    *(existing.get("aliases") or []),
+                                    *(rc.get("aliases") or []),
+                                ],
+                                existing["src"],
+                            )
             context_kb = [
-                *(t for t in video_kb_terms if t["src"].lower() not in chunk_srcs),
-                *rare_cands,
+                t for t in video_kb_terms if t["src"].lower() not in chunk_srcs
             ]
             futures.append(
-                executor.submit(_extract_chunk_terms, idx, chunk, chunk_kb, context_kb)
+                executor.submit(
+                    _extract_chunk_terms, idx, chunk, chunk_candidates, context_kb
+                )
             )
         for done_count, fut in enumerate(futures, 1):
             check_cancel()
@@ -1098,7 +2056,11 @@ def get_summary() -> None:
             )
 
     merged = _merge_terminology_results(
-        chunk_results, custom_terms_list, kb_data=kb_data, full_text=full_text
+        chunk_results,
+        custom_terms_list,
+        kb_data=kb_data,
+        full_text=full_text,
+        run_llm_disambiguation=True,
     )
     ws.save_terms(merged.get("theme", ""), merged.get("terms", []))
     report_progress(
@@ -1172,10 +2134,20 @@ def _get_term_index() -> dict[str, Any]:
                     cur.get("fix_source", False) or item.get("fix_source", False)
                 )
 
-        all_entries = list(merged_map.values())
+        norm_merged_map = _normalize_kb_entries(merged_map)
+        all_entries = list(norm_merged_map.values())
+        seen_all = set(norm_merged_map.keys())
         for k, kb_entry in (kb_data.get("entries") or {}).items():
-            if k not in merged_map:
-                all_entries.append(kb_entry)
+            if k in seen_all:
+                continue
+            if task_terms and kb_entry.get("source") == "domain_dict":
+                bw, _, _ = _tokenize_surface(kb_entry["src"])
+                content_bw = [w for w in bw if w not in _KB_STOP_TOKENS]
+                if len(content_bw) <= 1 and all(
+                    _is_standard_english(w) for w in content_bw
+                ):
+                    continue
+            all_entries.append(kb_entry)
 
         matcher = _build_term_matcher(all_entries)
         data = {"terms": list(merged_map.values()), "matcher": matcher}

@@ -1,5 +1,6 @@
 import re
 
+from core._4_1_summarize import _is_standard_english
 from core.prompts import (
     generate_shared_prompt,
     get_prompt_faithfulness,
@@ -10,11 +11,20 @@ from core.utils import ask_gpt, check_cancel, load_key, log_event
 
 
 _QUOTE_BOOK_MARK_TABLE = str.maketrans({c: None for c in "《》〈〉“”‘’「」『』"})
+_CJK_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
+_LOWER_EN_WORD_RE = re.compile(r"(?<![A-Za-z0-9_.-])[a-z]{3,}(?![A-Za-z0-9_.-])")
+_ANY_EN_WORD_RE = re.compile(r"[A-Za-z]+")
+_ALLOWED_LOANWORDS: frozenset[str] = frozenset(
+    (
+        "dps pve pvp dot aoe ads rng hud ui ux ai ar vr fps rpg mmo npc dlc ost cg op ed mv up "
+        "meta solo boss buff nerf debuff"
+    ).split()
+)
 
 
 def _normalize_book_marks(text: str) -> str:
     s = str(text).translate(_QUOTE_BOOK_MARK_TABLE)
-    if re.search(r"[\u4e00-\u9fff]", s):
+    if _CJK_CHAR_RE.search(s):
         s = s.replace('"', "")
         s = re.sub(r"(?:——+|—+|--+|[：；;])+", "，", s)
         s = re.sub(r"(?<!\d):(?!\d)", "，", s)
@@ -37,7 +47,11 @@ class TranslateResultTuple(tuple):
 
 
 def valid_translate_result(
-    result: object, required_keys: list, required_sub_keys: list
+    result: object,
+    required_keys: list,
+    required_sub_keys: list,
+    origin_lines: list[str] | None = None,
+    allowed_en_text: str = "",
 ):
     if not isinstance(result, dict):
         return {
@@ -51,6 +65,12 @@ def valid_translate_result(
             "message": f"Missing required key(s): {', '.join(set(required_keys) - set(result.keys()))}",
         }
 
+    allowed_words = (
+        {w.lower() for w in _ANY_EN_WORD_RE.findall(allowed_en_text)}
+        if allowed_en_text
+        else set()
+    ) | _ALLOWED_LOANWORDS
+
     # Check for required sub-keys in all items; keys the model added on its own are ignored
     for key in required_keys:
         if not isinstance(result[key], dict):
@@ -60,6 +80,12 @@ def valid_translate_result(
                 "status": "error",
                 "message": f"Missing required sub-key(s) in item {key}: {', '.join(set(required_sub_keys) - set(result[key].keys()))}",
             }
+        idx = int(key) - 1 if str(key).isdigit() else -1
+        orig_words = (
+            {w.lower() for w in _ANY_EN_WORD_RE.findall(origin_lines[idx])}
+            if (origin_lines is not None and 0 <= idx < len(origin_lines))
+            else set()
+        )
         for sub_key in required_sub_keys:
             val = result[key][sub_key]
             if not isinstance(val, str) or not val.strip():
@@ -67,6 +93,17 @@ def valid_translate_result(
                     "status": "error",
                     "message": f"Empty or non-string value for '{sub_key}' in item {key}",
                 }
+            if orig_words and _CJK_CHAR_RE.search(val):
+                for w in _LOWER_EN_WORD_RE.findall(val):
+                    if (
+                        w in orig_words
+                        and w not in allowed_words
+                        and _is_standard_english(w)
+                    ):
+                        return {
+                            "status": "error",
+                            "message": f"Item {key} contains untranslated source word '{w}' in '{sub_key}'",
+                        }
 
     return {"status": "success", "message": "Translation completed"}
 
@@ -86,17 +123,27 @@ def translate_lines(
         summary_prompt,
         things_to_note_prompt,
     )
+    line_list = lines.split("\n")
+    allowed_en_text = f"{things_to_note_prompt or ''}\n{summary_prompt or ''}"
 
     # Retry translation if the length of the original text and the translated text are not the same, or if the specified key is missing
     def retry_translation(prompt, length, step_name):
         def valid_faith(response_data):
             return valid_translate_result(
-                response_data, [str(i) for i in range(1, length + 1)], ["trans"]
+                response_data,
+                [str(i) for i in range(1, length + 1)],
+                ["trans"],
+                origin_lines=line_list,
+                allowed_en_text=allowed_en_text,
             )
 
         def valid_express(response_data):
             return valid_translate_result(
-                response_data, [str(i) for i in range(1, length + 1)], ["free"]
+                response_data,
+                [str(i) for i in range(1, length + 1)],
+                ["free"],
+                origin_lines=line_list,
+                allowed_en_text=allowed_en_text,
             )
 
         for retry in range(3):
@@ -129,7 +176,6 @@ def translate_lines(
         )
 
     ## Step 1: Faithful to the Original Text
-    line_list = lines.split("\n")
     prompt1 = get_prompt_faithfulness(lines, shared_prompt)
     faith_result = retry_translation(prompt1, len(line_list), "faithfulness")
 
