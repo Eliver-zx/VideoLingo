@@ -146,21 +146,29 @@ def translate_lines(
                 allowed_en_text=allowed_en_text,
             )
 
+        last_error_hint = ""
         for retry in range(3):
-            if step_name == "faithfulness":
-                result = ask_gpt(
-                    prompt + retry * " ",
-                    resp_type="json",
-                    valid_def=valid_faith,
-                    log_title=f"translate_{step_name}",
-                )
-            else:
-                result = ask_gpt(
-                    prompt + retry * " ",
-                    resp_type="json",
-                    valid_def=valid_express,
-                    log_title=f"translate_{step_name}",
-                )
+            cur_prompt = prompt + (last_error_hint if last_error_hint else retry * " ")
+            try:
+                if step_name == "faithfulness":
+                    result = ask_gpt(
+                        cur_prompt,
+                        resp_type="json",
+                        valid_def=valid_faith,
+                        log_title=f"translate_{step_name}",
+                    )
+                else:
+                    result = ask_gpt(
+                        cur_prompt,
+                        resp_type="json",
+                        valid_def=valid_express,
+                        log_title=f"translate_{step_name}",
+                    )
+            except ValueError as exc:
+                if retry < 2 and "untranslated source word" in str(exc):
+                    last_error_hint = f"\n\n[Validation Error: {exc}. Translate every ordinary English word into Chinese.]"
+                    continue
+                raise
             result = {str(i): result[str(i)] for i in range(1, length + 1)}
             if len(lines.split("\n")) == len(result):
                 return result

@@ -226,7 +226,7 @@ def get_kb_disambiguation_prompt(payload: dict) -> str:
     return f"""
 ## Role: Domain Glossary Grounding Specialist
 
-For each extracted ASR span and its sentence context below, select the matching canonical `src` from `kb_candidates` if and only if the sentence genuinely refers to that glossary item (accounting for ASR phonetic mishearings or spoken shorthands). If none of `kb_candidates` is the intended term in that sentence, output `"NONE"`.
+For each extracted ASR span and its sentence context below, select the matching canonical `src` from `candidates` if and only if the sentence genuinely refers to that glossary item (accounting for ASR phonetic mishearings or spoken shorthands). If none of `candidates` is the intended term in that sentence, output `"NONE"`.
 
 ## Input Items:
 ```json
@@ -234,10 +234,15 @@ For each extracted ASR span and its sentence context below, select the matching 
 ```
 
 ## Output Format:
-Return ONLY a JSON object mapping each item number (`"1"`, `"2"`, ...) to the exact chosen canonical `"src"` string from `kb_candidates` or `"NONE"`:
+Return ONLY a JSON object with a `"decisions"` list mapping each input `"span"` to its chosen canonical `"src"` from `candidates` or `"NONE"`:
 ```json
 {{
-  "1": "Chosen Canonical Src or NONE"
+  "decisions": [
+    {{
+      "span": "exact span from input",
+      "canonical_src": "Chosen Canonical Src or NONE"
+    }}
+  ]
 }}
 ```
 """.strip()
@@ -313,34 +318,31 @@ Translate the provided {SRC_LANGUAGE} video transcript lines into final, broadca
 
 ## Translation Guidelines:
 1. **Line-by-Line Completeness & Context Continuity**:
-   - Translate each line accurately while maintaining smooth logical and tonal continuity with `<previous_context>`, `<subsequent_context>`, and adjacent lines.
+   - Translate each line (`"1"` .. `"{len(line_splits)}"`) accurately while maintaining smooth logical, pronominal, and enumeration continuity (`First / Second / Third / Fourth`) with `<previous_context>`, `<subsequent_context>`, and adjacent lines.
    - Preserve all numbers, percentages, mechanics, and causal relationships without omission.
 2. **Native Spoken Flow & Clause Unpacking (Single-Pass Polish)**:
    - Organize clauses according to natural {TARGET_LANGUAGE} spoken word order and narrative flow rather than mirroring {SRC_LANGUAGE} syntax.
+   - **Logical & chronological clause order**: Front condition, time, or premise clauses (`do A before/if/unless/when B` -> place condition/time `B` before action `A` in natural {TARGET_LANGUAGE} order).
    - **Unpack long modifiers**: Break up post-nominal clauses (`that ...`, `which ...`, `with ...`, `where ...`) and stacked modifiers into sequential short clauses separated by commas (，). Avoid long `的` chains or clunky `在……上/中` wrappers.
    - **Modifier & equipment roll order**: When stacked attributes, perks, or traits precede an equipment or entity noun (e.g., `[Perk A] [Perk B] [Weapon Name]`), connect the attributes as modifiers of the head noun in natural {TARGET_LANGUAGE} order rather than outputting a flat, disconnected list of nouns.
+   - **Idioms, irony & numeric shorthand**: Localize figurative idioms and colloquialisms by their natural {TARGET_LANGUAGE} meaning rather than literal imagery (e.g., `"a hard pill to swallow"` -> difficult to accept, `"neck and neck"` -> evenly matched, `"quote unquote X"` -> ironic/so-called `X`), and convert spoken numeric shorthands (`5k` -> `5000`) into natural target numerals.
    - **Subtitle breathing room**: Insert natural commas (，) at topic-comment or breath boundaries so each clause stays concise (10–16 Chinese characters, never exceeding 18 characters without a comma pause).
    - Strip meaningless spoken fillers (`uh`, `um`, `you know`, `like`) for crisp, punchy subtitles.
 3. **Strict Terminology Adherence & Contextual Sense Disambiguation**:
    - Strictly use the official translations in `### 术语库-词典` (formatted as `src:tgt`, `alias:tgt (canonical_src)`, or with `[note]`) whenever the source line refers to that domain entity, including across plurals, possessives (`'s`), or verb inflections (`-ed`, `-ing`).
-   - **Sense check**: If a word in `### 术语库-词典` is used in the sentence purely as an everyday general expression (e.g., `"the number of"` meaning quantity, `"break ground"` meaning make progress, `"recent success"` meaning achievement), translate its natural everyday meaning instead of forcing a glossary term.
+   - **Sense check**: If a word in `### 术语库-词典` is used in the sentence purely as an everyday general expression or ordinal enumeration (e.g., `"the number of"` meaning quantity, `"break ground"` meaning make progress, `"Fourth, ..."` as list item #4), translate its natural everyday meaning instead of forcing a glossary term.
    - **Contextual ASR homophone recovery**: Spoken ASR transcripts frequently contain phonetic mishearings, split compounds, truncated suffixes, or portmanteaus (such as `-less` meaning "without", homophones conflicting with sentence grammar, or corrupted proper nouns). Infer the speaker's intended meaning from surrounding context and `### 术语库-词典` rather than translating corrupted literal words verbatim.
-   - **No untranslated common words**: Never leave ordinary {SRC_LANGUAGE} words (such as `past`, `boss`, `update`, `patch`, `test`, `inevitably`) untranslated in {TARGET_LANGUAGE} sentences; only standard acronyms/abbreviations (`DPS`, `PvE`, `PvP`, `DoT`) or model numbers may remain in Latin letters.
+   - **No untranslated common words**: Never leave ordinary {SRC_LANGUAGE} words (such as `past`, `boss`, `update`, `patch`, `test`, `inevitably`, `conveniently`) untranslated in {TARGET_LANGUAGE} sentences; only standard acronyms/abbreviations (`DPS`, `PvE`, `PvP`, `DoT`) or model numbers may remain in Latin letters.
 4. **Strict Subtitle Punctuation & Zero Annotations**:
    - **Allowed punctuation ONLY**: comma (，), period (。), question mark (？), enumeration comma (、), and exclamation mark (！).
    - **Forbidden punctuation**: NEVER output dashes (`——`, `—`, `--`), colons (`：`, `:`), semicolons (`；`, `;`), quotation marks (`“”`, `‘’`, `""`, `''`, `「」`, `『』`), book title marks (`《》`, `〈〉`), or parenthetical notes. Use a comma (，) instead of dashes, colons, or semicolons, and write all term, skill, and work names as plain text without quotes.
    - Do NOT append original source terms or explanations in parentheses (write `静谧狩猎`, NEVER `静谧狩猎 (Still Hunt)`).
 
-## Input Text Lines:
-<source_lines>
-{lines}
-</source_lines>
-
 ## Terminology & Shared Context:
 {shared_prompt}
 
-## Output Format:
-Return ONLY the following JSON object, filling `"trans"` with the final polished {TARGET_LANGUAGE} subtitle for each line:
+## Input Lines & Output Format:
+Return ONLY the following JSON object, filling `"trans"` with the final polished {TARGET_LANGUAGE} subtitle for each `"origin"` line:
 ```json
 {json_format}
 ```

@@ -56,18 +56,41 @@ def split_chunks_by_chars(chunk_size: int | None = None, max_i: int = 20):
 
 
 # Get context from surrounding chunks
-def get_previous_content(chunks, chunk_index):
-    return (
-        None if chunk_index == 0 else chunks[chunk_index - 1].split("\n")[-4:]
-    )  # Get last 4 lines
+def get_previous_content(
+    chunks, chunk_index, min_lines: int = 10, min_words: int = 120
+):
+    if chunk_index <= 0:
+        return None
+    collected: list[str] = []
+    word_count = 0
+    for idx in range(chunk_index - 1, -1, -1):
+        lines = [ln for ln in chunks[idx].split("\n") if ln.strip()]
+        for ln in reversed(lines):
+            collected.append(ln)
+            word_count += len(ln.split())
+            if len(collected) >= min_lines and word_count >= min_words:
+                break
+        if len(collected) >= min_lines and word_count >= min_words:
+            break
+    collected.reverse()
+    return collected
 
 
-def get_after_content(chunks, chunk_index):
-    return (
-        None
-        if chunk_index == len(chunks) - 1
-        else chunks[chunk_index + 1].split("\n")[:3]
-    )  # Get first 3 lines
+def get_after_content(chunks, chunk_index, min_lines: int = 6, min_words: int = 80):
+    if chunk_index >= len(chunks) - 1:
+        return None
+    collected: list[str] = []
+    word_count = 0
+    for idx in range(chunk_index + 1, len(chunks)):
+        lines = [ln for ln in chunks[idx].split("\n") if ln.strip()]
+        for ln in lines:
+            collected.append(ln)
+            word_count += len(ln.split())
+            if len(collected) >= min_lines and word_count >= min_words:
+                break
+        if len(collected) >= min_lines and word_count >= min_words:
+            break
+    return collected
 
 
 class ChunkTranslateResult(tuple):

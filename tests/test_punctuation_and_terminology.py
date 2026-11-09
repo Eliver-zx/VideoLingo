@@ -569,8 +569,8 @@ def test_translate_chunk_scans_previous_content_and_chunk_for_terms(monkeypatch)
     ]
     translate.translate_chunk(chunks[1], chunks, "theme", 1)
 
-    assert captured["prev"] == ["L2", "L3 mentioning Raycasting", "L4", "L5"]
-    assert captured["after"] == ["N1", "N2", "N3"]
+    assert captured["prev"] == ["L1", "L2", "L3 mentioning Raycasting", "L4", "L5"]
+    assert captured["after"] == ["N1", "N2", "N3", "N4"]
     assert captured["search_scope"] == "Current chunk referring to it."
     assert "L3 mentioning Raycasting" not in captured["search_scope"]
 
@@ -2256,3 +2256,56 @@ def test_targeted_asr_candidate_retrieval_em_dash_and_domain_dict_filtering(
         allowed_en_text="Vulkan:Vulkan 接口",
     )
     assert ok_res["status"] == "success"
+
+    # 6. Derivational -ancy/-ency stem guard ("ascending" != "Ascendancy"), domain_dict common word scan filter,
+    #    in-video constituent shorthand precedence ("Song" -> "Song of Flame"), and word-count context window
+    import core._4_2_translate as s42
+
+    assert s41._stem_word("ascendancy") != s41._stem_word("ascending")
+    shorthand_merged = s41._merge_terminology_results(
+        [
+            (
+                0,
+                {
+                    "theme": "Part 1.",
+                    "terms": [{"src": "Song of Flame", "tgt": "烈焰之歌"}],
+                },
+            ),
+            (
+                1,
+                {
+                    "theme": "Part 2.",
+                    "terms": [{"src": "Whisper of Impetus", "tgt": "刺激的低语"}],
+                },
+            ),
+            (
+                2,
+                {
+                    "theme": "Part 3.",
+                    "terms": [{"src": "Graviton Spike", "tgt": "引力子尖刺"}],
+                },
+            ),
+        ],
+        [
+            {
+                "src": "Graviton Lance",
+                "tgt": "引力子长枪",
+                "aliases": ["Graviton"],
+                "source": "domain_kb",
+            }
+        ],
+        kb_data=kb_data,
+        full_text=(
+            "We tested Song of Flame, Whisper of Impetus, and Graviton Spike.\n"
+            "Later the kill or Song requirement, Stasis Impetus rotations, and the graviton swap were used."
+        ),
+    )
+    assert shorthand_merged["theme"] == "Part 1. Part 2. Part 3."
+    sh_by_src = {t["src"]: t for t in shorthand_merged["terms"]}
+    assert "Song" in sh_by_src["Song of Flame"]["aliases"]
+    assert "Impetus" in sh_by_src["Whisper of Impetus"]["aliases"]
+    assert any(a.lower() == "graviton" for a in sh_by_src["Graviton Spike"]["aliases"])
+
+    tiny_chunks = ["Line one.\nLine two.", "Line three.\nLine four.", "Target line."]
+    prev_ctx = s42.get_previous_content(tiny_chunks, 2, min_lines=4, min_words=6)
+    assert prev_ctx == ["Line one.", "Line two.", "Line three.", "Line four."]

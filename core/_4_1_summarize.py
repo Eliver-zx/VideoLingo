@@ -81,7 +81,7 @@ def _fold_ascii(text: str) -> str:
 @lru_cache(maxsize=65536)
 def _stem_word(word: str) -> str:
     w = word.lower()
-    if len(w) <= 2 or w.endswith("ism"):
+    if len(w) <= 2 or w.endswith(("ism", "ancy", "ency")):
         return w
     st = _STEMMER.stem(w)
     if st.endswith("lv") and len(st) >= 4:
@@ -1347,6 +1347,8 @@ def _retrieve_rare_token_candidates(
             w1, w2 = base_words[i], base_words[i + 1]
             if w1 in _KB_STOP_TOKENS or w2 in _KB_STOP_TOKENS:
                 continue
+            if w1 in covered_tokens and w2 in covered_tokens:
+                continue
             if (stems[i], stems[i + 1]) in stem_ngram_map:
                 continue
             if not (orig_words[i][0].isupper() and orig_words[i + 1][0].isupper()):
@@ -1354,8 +1356,23 @@ def _retrieve_rare_token_candidates(
             span2 = f"{orig_words[i]} {orig_words[i + 1]}"
             for _, entry in ngram_idx.query(span2, top_k=1, min_score=0.47):
                 e_bw, _, _ = _tokenize_surface(entry["src"])
-                if len(e_bw) >= 2:
-                    _add_cand(entry, span2)
+                if len(e_bw) < 2:
+                    continue
+                if not all(
+                    max(_word_sim(qw, tw) for tw in e_bw) >= 0.55 for qw in (w1, w2)
+                ):
+                    continue
+                if len(e_bw) == 2:
+                    mismatch_incompatible = False
+                    for qw, tw in zip((w1, w2), e_bw):
+                        if qw != tw and (
+                            qw in covered_tokens or _word_sim(qw, tw) < 0.62
+                        ):
+                            mismatch_incompatible = True
+                            break
+                    if mismatch_incompatible:
+                        continue
+                _add_cand(entry, span2)
 
     rare_inv = matcher.get("rare_token_inv", {})
     surface_records = matcher.get("surface_records", ())
@@ -1432,18 +1449,29 @@ def _scan_text_for_kb_terms(text: str, kb_data: dict[str, Any]) -> list[dict[str
         return []
     matcher = _ensure_kb_matcher(kb_data)
     hits = _match_terms_in_text(text, matcher)
-    return [
-        {
-            "src": hit.entry["src"],
-            "tgt": hit.entry["tgt"],
-            "note": str(hit.entry.get("note") or ""),
-            "aliases": list(hit.matched_aliases),
-            "src_matched": hit.src_matched,
-            "fix_source": bool(hit.entry.get("fix_source", False)),
-            "source": str(hit.entry.get("source") or "domain_kb"),
-        }
-        for hit in hits
-    ]
+    results: list[dict[str, Any]] = []
+    for hit in hits:
+        src = hit.entry["src"]
+        source = str(hit.entry.get("source") or "domain_kb")
+        if source == "domain_dict":
+            bw, _, _ = _tokenize_surface(src)
+            content_bw = [w for w in bw if w not in _KB_STOP_TOKENS]
+            if len(content_bw) <= 1 and all(
+                w in _EXTRA_COMMON_WORDS for w in content_bw
+            ):
+                continue
+        results.append(
+            {
+                "src": src,
+                "tgt": hit.entry["tgt"],
+                "note": str(hit.entry.get("note") or ""),
+                "aliases": list(hit.matched_aliases),
+                "src_matched": hit.src_matched,
+                "fix_source": bool(hit.entry.get("fix_source", False)),
+                "source": source,
+            }
+        )
+    return results
 
 
 def _weighted_char_len(text: str) -> int:
@@ -1544,10 +1572,17 @@ def _resolve_ambiguous_kb_candidates_with_llm(
         resp = ask_gpt(prompt, resp_type="json", log_title="kb_disambiguate")
         out: dict[str, str] = {}
         if isinstance(resp, dict):
-            for d in resp.get("decisions") or []:
-                if isinstance(d, dict):
-                    sp = str(d.get("span") or "").strip().lower()
-                    ch = str(d.get("canonical_src") or "NONE").strip()
+            if isinstance(resp.get("decisions"), list):
+                for d in resp["decisions"]:
+                    if isinstance(d, dict):
+                        sp = str(d.get("span") or "").strip().lower()
+                        ch = str(d.get("canonical_src") or "NONE").strip()
+                        if sp and ch and ch.upper() != "NONE":
+                            out[sp] = ch
+            else:
+                for idx, item in enumerate(batch, 1):
+                    ch = str(resp.get(str(idx)) or "NONE").strip()
+                    sp = str(item.get("span") or "").strip().lower()
                     if sp and ch and ch.upper() != "NONE":
                         out[sp] = ch
         return out
@@ -1567,13 +1602,13 @@ def _merge_terminology_results(
     run_llm_disambiguation: bool = False,
 ) -> dict[str, Any]:
     ordered_chunks = sorted(chunk_results, key=lambda x: x[0])
-    themes = [
-        str(res.get("theme") or res.get("topic") or "").strip()
-        for _, res in ordered_chunks
-        if isinstance(res, dict)
-        and str(res.get("theme") or res.get("topic") or "").strip()
-    ]
-    combined_theme = " ".join(themes[:2]).strip()
+    themes: list[str] = []
+    for _, res in ordered_chunks:
+        if isinstance(res, dict):
+            th = str(res.get("theme") or res.get("topic") or "").strip()
+            if th and th not in themes:
+                themes.append(th)
+    combined_theme = " ".join(themes).strip()
 
     auth_by_stem: dict[tuple[str, ...], dict[str, Any]] = {}
     auth_by_lower: dict[str, dict[str, Any]] = {}
@@ -1982,7 +2017,60 @@ def _merge_terminology_results(
                             new_als.append(cand_al)
                     other_ent["aliases"] = _normalize_aliases(new_als, other_ent["src"])
 
+    _derive_in_video_shorthands(merged_by_src, full_text)
+
     return {"theme": combined_theme, "terms": list(merged_by_src.values())}
+
+
+def _derive_in_video_shorthands(
+    terms_map: dict[str, dict[str, Any]], full_text: str = ""
+) -> set[str]:
+    """Derive 1-word constituent shorthands for unique multi-word terms in the video and return all claimed lowercase surfaces."""
+    tok_to_multi: dict[str, list[dict[str, Any]]] = {}
+    protected_single: set[str] = set()
+    for entry in terms_map.values():
+        bw, _, _ = _tokenize_surface(entry["src"])
+        if len(bw) == 1:
+            if bw[0] not in _EXTRA_COMMON_WORDS:
+                protected_single.add(bw[0])
+        elif len(bw) >= 2:
+            for w in set(bw):
+                if len(w) >= 4 and w not in _KB_STOP_TOKENS:
+                    tok_to_multi.setdefault(w, []).append(entry)
+
+    if full_text:
+        for w, ent_list in tok_to_multi.items():
+            if len(ent_list) != 1 or w in protected_single:
+                continue
+            ent = ent_list[0]
+            canon = ent["src"]
+            cleaned = full_text
+            for surf in (canon, *(ent.get("aliases") or [])):
+                if surf:
+                    cleaned = re.sub(re.escape(surf), " ", cleaned, flags=re.IGNORECASE)
+            all_occ = re.findall(rf"\b{re.escape(w)}\b", cleaned, flags=re.IGNORECASE)
+            if not all_occ:
+                continue
+            mid_cap = re.findall(
+                rf"(?<![.!?,:;]\s)(?<![\n])\b{re.escape(w.capitalize())}\b", cleaned
+            )
+            cap_ratio = sum(1 for x in all_occ if x[0].isupper()) / len(all_occ)
+            is_oov = not _is_standard_english(w)
+            if is_oov or (mid_cap and cap_ratio >= 0.5):
+                shorthand = mid_cap[0] if mid_cap else all_occ[0]
+                cur_als = list(ent.get("aliases") or [])
+                if shorthand.lower() not in {a.lower() for a in cur_als}:
+                    cur_als.append(shorthand)
+                    ent["aliases"] = _normalize_aliases(cur_als, canon)
+                if w in terms_map and w in _EXTRA_COMMON_WORDS:
+                    terms_map.pop(w, None)
+
+    claimed: set[str] = set()
+    for entry in terms_map.values():
+        claimed.add(entry["src"].lower())
+        for al in entry.get("aliases") or []:
+            claimed.add(str(al).strip().lower())
+    return claimed
 
 
 @check_file_exists("summarize")
@@ -2103,11 +2191,12 @@ def _get_term_index() -> dict[str, Any]:
         custom_terms = load_custom_terms()
         kb_data = _get_kb_index(custom_terms)
 
-        primary = task_terms if ws_mtime >= ext_mtime else custom_terms
-        secondary = custom_terms if ws_mtime >= ext_mtime else task_terms
+        task_is_primary = bool(task_terms) and ws_mtime >= ext_mtime
+        primary = task_terms if task_is_primary else custom_terms
+        secondary = custom_terms if task_is_primary else task_terms
 
         merged_map: dict[str, dict[str, Any]] = {}
-        for item in (*primary, *secondary):
+        for item in primary:
             if not isinstance(item, dict):
                 continue
             s = str(item.get("src") or "").strip()
@@ -2134,9 +2223,53 @@ def _get_term_index() -> dict[str, Any]:
                     cur.get("fix_source", False) or item.get("fix_source", False)
                 )
 
+        claimed_by_task: set[str] = set()
+        if task_is_primary:
+            utts = ws.load_utterances() if hasattr(ws, "load_utterances") else []
+            utt_text = "\n".join(
+                str(u.get("src_punct") or u.get("src") or "").strip()
+                for u in utts
+                if str(u.get("src_punct") or u.get("src") or "").strip()
+            )
+            claimed_by_task = _derive_in_video_shorthands(merged_map, utt_text)
+
+        for item in secondary:
+            if not isinstance(item, dict):
+                continue
+            s = str(item.get("src") or "").strip()
+            t = str(item.get("tgt") or "").strip()
+            if not s or not t:
+                continue
+            k = s.lower()
+            raw_als = _normalize_aliases(item.get("aliases"), s)
+            als = (
+                [a for a in raw_als if a.lower() not in claimed_by_task]
+                if claimed_by_task
+                else raw_als
+            )
+            if k not in merged_map:
+                if k in claimed_by_task:
+                    continue
+                merged_map[k] = {
+                    "src": s,
+                    "tgt": t,
+                    "note": str(item.get("note") or "").strip(),
+                    "aliases": als,
+                    "fix_source": bool(item.get("fix_source", False)),
+                    "source": str(item.get("source") or "task"),
+                }
+            else:
+                cur = merged_map[k]
+                cur["aliases"] = _normalize_aliases(
+                    [*(cur.get("aliases") or []), *als], cur["src"]
+                )
+                cur["fix_source"] = bool(
+                    cur.get("fix_source", False) or item.get("fix_source", False)
+                )
+
         norm_merged_map = _normalize_kb_entries(merged_map)
         all_entries = list(norm_merged_map.values())
-        seen_all = set(norm_merged_map.keys())
+        seen_all = set(norm_merged_map.keys()) | claimed_by_task
         for k, kb_entry in (kb_data.get("entries") or {}).items():
             if k in seen_all:
                 continue
@@ -2147,6 +2280,14 @@ def _get_term_index() -> dict[str, Any]:
                     _is_standard_english(w) for w in content_bw
                 ):
                     continue
+            if claimed_by_task and kb_entry.get("aliases"):
+                filtered_als = [
+                    a
+                    for a in kb_entry["aliases"]
+                    if str(a).strip().lower() not in claimed_by_task
+                ]
+                if len(filtered_als) != len(kb_entry["aliases"]):
+                    kb_entry = {**kb_entry, "aliases": filtered_als}
             all_entries.append(kb_entry)
 
         matcher = _build_term_matcher(all_entries)
