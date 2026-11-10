@@ -1722,6 +1722,25 @@ def promote_terms_to_domain(
     return promote_terms_to_global(terms, csv_path=csv_file)
 
 
+def remove_terms_from_domain(
+    srcs: list[str],
+    domain: str | None = None,
+    base_dir: str | Path | None = None,
+    csv_path: str | Path | None = None,
+) -> int:
+    if csv_path is not None:
+        return remove_terms_from_global(srcs, csv_path=csv_path)
+    target_domain = str(
+        domain
+        if domain is not None
+        else load_key_or("glossary_domain", DEFAULT_GLOSSARY_DOMAIN)
+    ).strip()
+    if not target_domain:
+        return 0
+    csv_file = domain_terms_csv_path(target_domain, base_dir=base_dir)
+    return remove_terms_from_global(srcs, csv_path=csv_file)
+
+
 def _resolve_default_glossary_csv() -> Path:
     if (
         GLOBAL_GLOSSARY_CSV != Path("glossary") / "custom_terms.csv"
@@ -1858,6 +1877,22 @@ def promote_terms_to_global(
         added_or_updated += 1
     save_global_glossary(list(by_key.values()), csv_path)
     return added_or_updated
+
+
+def remove_terms_from_global(
+    srcs: list[str], csv_path: str | Path | None = None
+) -> int:
+    target_keys = {str(s or "").strip().lower() for s in srcs if str(s or "").strip()}
+    if not target_keys:
+        return 0
+    existing = load_global_glossary(csv_path)
+    if not existing:
+        return 0
+    kept = [item for item in existing if item["src"].lower() not in target_keys]
+    removed = len(existing) - len(kept)
+    if removed > 0:
+        save_global_glossary(kept, csv_path)
+    return removed
 
 
 # ─── Active Workspace Context Management ───

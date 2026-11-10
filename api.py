@@ -49,6 +49,7 @@ from core.workspace import (
     load_domain_glossary,
     load_global_glossary,
     promote_terms_to_domain,
+    remove_terms_from_domain,
     rmtree_robust,
     sanitize_domain_name,
     save_domain_glossary,
@@ -219,6 +220,13 @@ class TermsUpdateRequest(BaseModel):
     terms: list[dict[str, Any]] | None = None
     summary: str | None = None
     glossary_domain: str | None = None
+
+
+class DomainTermSyncRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["add", "remove"]
+    terms: list[dict[str, Any]] | None = None
+    srcs: list[str] | None = None
 
 
 class CreateDomainRequest(BaseModel):
@@ -835,12 +843,140 @@ def invalidate_task_stage(task_id: str, request: InvalidateStageRequest):
     return {"invalidated": invalidated}
 
 
+_DOMAIN_DICT_SRCS_CACHE: dict[str, tuple[float, frozenset[str]]] = {}
+
+
+def _resolve_task_domain(ws: TaskWorkspace) -> str:
+    manifest = ws.load_manifest()
+    overrides = dict(manifest.get("config_override") or {})
+    task_domain = overrides.get("glossary_domain")
+    if task_domain is None:
+        return str(
+            load_key_or("glossary_domain", DEFAULT_GLOSSARY_DOMAIN) or ""
+        ).strip()
+    return str(task_domain).strip()
+
+
+def _domain_known_src_sets(domain: str) -> tuple[set[str], frozenset[str]]:
+    if not domain:
+        return set(), frozenset()
+    try:
+        csv_srcs = {
+            str(t.get("src") or "").strip().lower()
+            for t in load_domain_glossary(domain)
+            if str(t.get("src") or "").strip()
+        }
+    except ValueError:
+        return set(), frozenset()
+    try:
+        dict_path = domain_dict_json_path(domain)
+    except ValueError:
+        return csv_srcs, frozenset()
+    if not dict_path.is_file():
+        return csv_srcs, frozenset()
+    try:
+        mtime = dict_path.stat().st_mtime
+    except OSError:
+        return csv_srcs, frozenset()
+    cache_key = str(dict_path)
+    cached = _DOMAIN_DICT_SRCS_CACHE.get(cache_key)
+    if cached is not None and cached[0] == mtime:
+        return csv_srcs, cached[1]
+    from core._4_1_summarize import _extract_generic_kb_pairs, _normalize_kb_entries
+
+    try:
+        raw_dom = json.loads(dict_path.read_text(encoding="utf-8-sig"))
+        kb_map: dict[str, dict[str, Any]] = {}
+        _extract_generic_kb_pairs(raw_dom, kb_map, source_tag="domain_dict")
+        norm_map = _normalize_kb_entries(kb_map)
+        dict_srcs = frozenset(norm_map.keys())
+        _DOMAIN_DICT_SRCS_CACHE[cache_key] = (mtime, dict_srcs)
+        return csv_srcs, dict_srcs
+    except (OSError, ValueError):
+        return csv_srcs, frozenset()
+
+
 @app.get("/api/tasks/{task_id}/terms")
 def get_task_terms(task_id: str):
     ws = _resolve_workspace(task_id)
-    if ws.has_terms():
-        return ws.load_terms()
-    return {"summary": "", "terms": []}
+    if not ws.has_terms():
+        return {"summary": "", "terms": []}
+    data = ws.load_terms()
+    task_domain = _resolve_task_domain(ws)
+    csv_srcs, dict_srcs = _domain_known_src_sets(task_domain)
+    promoted_here = {
+        str(s).strip().lower()
+        for s in (ws.get_kv("task_promoted_srcs", []) or [])
+        if str(s).strip()
+    }
+    enriched_terms: list[dict[str, Any]] = []
+    for item in data.get("terms") or []:
+        k = str(item.get("src") or "").strip().lower()
+        src_tag = str(item.get("source") or "task")
+        in_csv = bool(k and k in csv_srcs)
+        if k in promoted_here or src_tag == "manual":
+            in_domain_kb = False
+        elif (
+            src_tag in ("domain_kb", "global_kb", "domain_dict", "custom", "json_kb")
+            or in_csv
+            or (k in dict_srcs)
+        ):
+            in_domain_kb = True
+        else:
+            in_domain_kb = False
+        enriched_terms.append(
+            {
+                **item,
+                "in_domain_kb": in_domain_kb,
+                "promoted": in_csv,
+            }
+        )
+    return {"summary": data.get("summary", ""), "terms": enriched_terms}
+
+
+@app.post("/api/tasks/{task_id}/terms/domain")
+def sync_task_terms_with_domain(task_id: str, request: DomainTermSyncRequest):
+    ws = _resolve_workspace(task_id)
+    task_domain = _resolve_task_domain(ws)
+    if not task_domain:
+        raise HTTPException(
+            422, "Task has no bound glossary domain; select a domain first."
+        )
+    promoted_here = {
+        str(s).strip().lower()
+        for s in (ws.get_kv("task_promoted_srcs", []) or [])
+        if str(s).strip()
+    }
+    if request.action == "add":
+        items = [
+            t
+            for t in (request.terms or [])
+            if str(t.get("src") or "").strip() and str(t.get("tgt") or "").strip()
+        ]
+        if not items:
+            raise HTTPException(422, "Term `src` and `tgt` must be non-empty.")
+        _, dict_srcs = _domain_known_src_sets(task_domain)
+        csv_before, _ = _domain_known_src_sets(task_domain)
+        count = promote_terms_to_domain(items, domain=task_domain)
+        for t in items:
+            k = str(t["src"]).strip().lower()
+            if k not in csv_before and k not in dict_srcs:
+                promoted_here.add(k)
+        ws.set_kv("task_promoted_srcs", sorted(promoted_here))
+        return {"promoted": count, "removed": 0, "glossary_domain": task_domain}
+
+    srcs = [str(s or "").strip() for s in (request.srcs or []) if str(s or "").strip()]
+    if not srcs and request.terms:
+        srcs = [
+            str(t.get("src") or "").strip()
+            for t in request.terms
+            if str(t.get("src") or "").strip()
+        ]
+    removed = remove_terms_from_domain(srcs, domain=task_domain)
+    for s in srcs:
+        promoted_here.discard(s.lower())
+    ws.set_kv("task_promoted_srcs", sorted(promoted_here))
+    return {"promoted": 0, "removed": removed, "glossary_domain": task_domain}
 
 
 @app.put("/api/tasks/{task_id}/terms")
@@ -853,13 +989,7 @@ def update_task_terms(task_id: str, request: TermsUpdateRequest):
         manifest["config_override"] = overrides
         ws.save_manifest(manifest)
 
-    task_domain = overrides.get("glossary_domain")
-    if task_domain is None:
-        task_domain = str(
-            load_key_or("glossary_domain", DEFAULT_GLOSSARY_DOMAIN) or ""
-        ).strip()
-    else:
-        task_domain = str(task_domain).strip()
+    task_domain = _resolve_task_domain(ws)
 
     if request.terms is None:
         current = get_task_terms(task_id)
@@ -870,7 +1000,7 @@ def update_task_terms(task_id: str, request: TermsUpdateRequest):
             "glossary_domain": task_domain,
         }
 
-    current = get_task_terms(task_id)
+    current = ws.load_terms() if ws.has_terms() else {"summary": "", "terms": []}
     summary = (
         request.summary if request.summary is not None else current.get("summary", "")
     )
@@ -879,11 +1009,20 @@ def update_task_terms(task_id: str, request: TermsUpdateRequest):
         for t in request.terms
         if t.get("promote_to_domain") or t.get("promote_to_global")
     ]
-    promoted = (
-        promote_terms_to_domain(to_promote, domain=task_domain)
-        if (to_promote and task_domain)
-        else 0
-    )
+    promoted = 0
+    if to_promote and task_domain:
+        csv_before, dict_srcs = _domain_known_src_sets(task_domain)
+        promoted = promote_terms_to_domain(to_promote, domain=task_domain)
+        promoted_here = {
+            str(s).strip().lower()
+            for s in (ws.get_kv("task_promoted_srcs", []) or [])
+            if str(s).strip()
+        }
+        for t in to_promote:
+            k = str(t.get("src") or "").strip().lower()
+            if k and k not in csv_before and k not in dict_srcs:
+                promoted_here.add(k)
+        ws.set_kv("task_promoted_srcs", sorted(promoted_here))
     ws.save_terms(summary, request.terms)
     loaded = ws.load_terms()
     return {

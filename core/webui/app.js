@@ -379,7 +379,9 @@
               aliases: Array.isArray(item.aliases) ? item.aliases : [],
               note: item.note || '',
               fix_source: Boolean(item.fix_source),
-              promote: Boolean(item.promote_to_domain ?? item.promote ?? false),
+              source: item.source || 'task',
+              in_domain_kb: Boolean(item.in_domain_kb),
+              promote: Boolean(item.promoted ?? item.promote_to_domain ?? item.promote ?? false),
             }))
           );
           const themeInput = document.getElementById('terms-theme-input');
@@ -1458,8 +1460,17 @@
     function renderTaskTerms() {
       const tbody = document.getElementById('task-terms-tbody');
       const query = (document.getElementById('task-terms-search').value || '').trim().toLowerCase();
+      const toggleKbBtn = document.getElementById('btn-toggle-kb-terms');
+      if (toggleKbBtn) {
+        toggleKbBtn.setAttribute('aria-pressed', String(showExistingKbTerms));
+      }
 
-      const filtered = REAL_TASK_TERMS.map((item, idx) => ({ item, idx })).filter(({ item }) => {
+      const visibleItems = REAL_TASK_TERMS
+        .map((item, idx) => ({ item, idx }))
+        .filter(({ item }) => showExistingKbTerms || !item.in_domain_kb);
+      const hiddenCount = REAL_TASK_TERMS.length - visibleItems.length;
+
+      const filtered = visibleItems.filter(({ item }) => {
         if (!query) return true;
         return (
           item.src.toLowerCase().includes(query) ||
@@ -1470,18 +1481,28 @@
       });
 
       document.getElementById('task-terms-counter').textContent = query
-        ? `${filtered.length} / ${REAL_TASK_TERMS.length} 条`
-        : `${REAL_TASK_TERMS.length} 条`;
+        ? `${filtered.length} / ${visibleItems.length} 条`
+        : (hiddenCount > 0 ? `${visibleItems.length} 条新词（已隐 ${hiddenCount}）` : `${visibleItems.length} 条`);
+      const batchBtn = document.getElementById('btn-batch-promote-on');
+      if (batchBtn) {
+        const actionable = filtered.filter(({ item }) => item.src.trim() && item.tgt.trim());
+        const allLit = actionable.length > 0 && actionable.every(({ item }) => item.promote);
+        batchBtn.textContent = allLit ? '取消入库' : '全选入库';
+      }
       const termNode = PIPELINE_BATCH_NODES.find(n => n.id === 'terms-03');
       if (termNode) {
-        termNode.meta = `${REAL_TASK_TERMS.length} 条`;
+        const newCount = REAL_TASK_TERMS.filter(t => !t.in_domain_kb).length;
+        termNode.meta = hiddenCount > 0 ? `${newCount} 新词` : `${REAL_TASK_TERMS.length} 条`;
         renderBatchTree();
       }
 
       if (filtered.length === 0) {
-        const emptyHint = REAL_TASK_TERMS.length === 0
-          ? '当前任务暂无提取的术语，可点击右上角「新增」手动添加或「重新提取」'
-          : '未匹配到符合搜索条件的术语';
+        let emptyHint = '未匹配到符合搜索条件的术语';
+        if (REAL_TASK_TERMS.length === 0) {
+          emptyHint = '当前任务暂无提取的术语，可点击右上角「新增」手动添加或「重新提取」';
+        } else if (!query && hiddenCount > 0) {
+          emptyHint = `提取的 ${REAL_TASK_TERMS.length} 条术语均已在领域词库内，点击右上角「全部」可展开查看`;
+        }
         tbody.innerHTML = `
           <tr>
             <td colspan="5" style="padding:36px 16px; text-align:center; color:var(--text-muted); font-size:var(--fs-xs);">
@@ -1492,7 +1513,11 @@
         return;
       }
 
-      tbody.innerHTML = filtered.map(({ item: t, idx }) => `
+      tbody.innerHTML = filtered.map(({ item: t, idx }) => {
+        const promoteTitle = t.promote
+          ? '已入库：点击从领域词库移除'
+          : '未入库：点击加入领域词库';
+        return `
         <tr data-term-row="${idx}">
           <td><input type="text" class="cell-input mono" value="${escapeAttr(t.src)}" placeholder="原文术语" data-term-field="src" data-idx="${idx}"></td>
           <td><input type="text" class="cell-input" style="font-weight:600; color:var(--brand-bright);" value="${escapeAttr(t.tgt)}" placeholder="目标译名" data-term-field="tgt" data-idx="${idx}"></td>
@@ -1510,7 +1535,7 @@
           <td><input type="text" class="cell-input" value="${escapeAttr(t.note)}" placeholder="选填备注" data-term-field="note" data-idx="${idx}"></td>
           <td>
             <div class="term-actions">
-              <button type="button" class="term-icon-btn ${t.promote ? 'is-promote-on' : ''}" data-term-promote="${idx}" aria-pressed="${Boolean(t.promote)}" title="存入词表：将该词条归档保存到领域词表" aria-label="存入词表">
+              <button type="button" class="term-icon-btn ${t.promote ? 'is-promote-on' : ''}" data-term-promote="${idx}" aria-pressed="${Boolean(t.promote)}" title="${escapeAttr(promoteTitle)}" aria-label="${escapeAttr(promoteTitle)}">
                 <svg class="icon" viewBox="0 0 24 24"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/></svg>
               </button>
               <button type="button" class="term-icon-btn is-del" data-del-term="${idx}" title="移除该条术语" aria-label="移除术语">
@@ -1519,12 +1544,14 @@
             </div>
           </td>
         </tr>
-      `).join('');
+      `;
+      }).join('');
 
       tbody.querySelectorAll('[data-del-alias]').forEach(btn => {
         btn.addEventListener('click', () => {
           const [rIdx, aIdx] = btn.getAttribute('data-del-alias').split(':').map(Number);
           REAL_TASK_TERMS[rIdx].aliases.splice(aIdx, 1);
+          REAL_TASK_TERMS[rIdx].dirty = true;
           isEditingTerms = true;
           setAutosaveStatus('paused', '术语未保存');
           renderTaskTerms();
@@ -1537,6 +1564,7 @@
             e.preventDefault();
             const rIdx = Number(inp.getAttribute('data-add-alias'));
             REAL_TASK_TERMS[rIdx].aliases.push(inp.value.trim());
+            REAL_TASK_TERMS[rIdx].dirty = true;
             isEditingTerms = true;
             setAutosaveStatus('paused', '术语未保存');
             renderTaskTerms();
@@ -1549,20 +1577,67 @@
           const rIdx = Number(inp.getAttribute('data-idx'));
           const field = inp.getAttribute('data-term-field');
           REAL_TASK_TERMS[rIdx][field] = inp.value;
+          REAL_TASK_TERMS[rIdx].dirty = true;
           isEditingTerms = true;
           setAutosaveStatus('paused', '术语未保存');
         });
       });
 
       tbody.querySelectorAll('[data-term-promote]').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
           const rIdx = Number(btn.getAttribute('data-term-promote'));
-          const next = !REAL_TASK_TERMS[rIdx].promote;
-          REAL_TASK_TERMS[rIdx].promote = next;
+          const row = REAL_TASK_TERMS[rIdx];
+          if (!row) return;
+          const srcVal = String(row.src || '').trim();
+          const tgtVal = String(row.tgt || '').trim();
+          if (!row.promote && (!srcVal || !tgtVal)) {
+            setAutosaveStatus('paused', '请先填写原文与译名');
+            return;
+          }
+          const next = !row.promote;
+          row.promote = next;
+          const nextTitle = next ? '已入库：点击从领域词库移除' : '未入库：点击加入领域词库';
           btn.classList.toggle('is-promote-on', next);
           btn.setAttribute('aria-pressed', String(next));
-          isEditingTerms = true;
-          setAutosaveStatus('paused', '术语未保存');
+          btn.title = nextTitle;
+          btn.setAttribute('aria-label', nextTitle);
+
+          const task = REAL_TASKS.find(x => x.id === activeTaskId);
+          if (isBackendConnected && task?.fromBackend) {
+            try {
+              if (next) {
+                await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/terms/domain`, {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    action: 'add',
+                    terms: [{
+                      src: srcVal,
+                      tgt: tgtVal,
+                      aliases: row.aliases,
+                      note: row.note,
+                      fix_source: Boolean(row.fix_source),
+                    }],
+                  }),
+                });
+                row.dirty = false;
+                setAutosaveStatus('completed', '已入库');
+              } else {
+                await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/terms/domain`, {
+                  method: 'POST',
+                  body: JSON.stringify({ action: 'remove', srcs: [srcVal] }),
+                });
+                setAutosaveStatus('completed', '已取消入库');
+              }
+              renderTaskTerms();
+              await loadBackendGlossaryDomains();
+            } catch (err) {
+              row.promote = !next;
+              renderTaskTerms();
+              reportActionError('TERMS', err);
+            }
+          } else {
+            renderTaskTerms();
+          }
         });
       });
 
@@ -1585,12 +1660,66 @@
 
     document.getElementById('task-terms-search').addEventListener('input', renderTaskTerms);
 
-    document.getElementById('btn-batch-promote-on').addEventListener('click', () => {
-      const allOn = REAL_TASK_TERMS.every(t => t.promote);
-      REAL_TASK_TERMS.forEach(t => { t.promote = !allOn; });
-      isEditingTerms = true;
-      setAutosaveStatus('paused', '术语未保存');
+    document.getElementById('btn-toggle-kb-terms')?.addEventListener('click', () => {
+      showExistingKbTerms = !showExistingKbTerms;
       renderTaskTerms();
+    });
+
+    document.getElementById('btn-batch-promote-on').addEventListener('click', async () => {
+      const query = (document.getElementById('task-terms-search').value || '').trim().toLowerCase();
+      const targets = REAL_TASK_TERMS.filter(item => {
+        if (!showExistingKbTerms && item.in_domain_kb) return false;
+        if (!String(item.src || '').trim() || !String(item.tgt || '').trim()) return false;
+        if (!query) return true;
+        return (
+          item.src.toLowerCase().includes(query) ||
+          item.tgt.toLowerCase().includes(query) ||
+          item.note.toLowerCase().includes(query) ||
+          item.aliases.some(a => a.toLowerCase().includes(query))
+        );
+      });
+      if (targets.length === 0) return;
+      const allOn = targets.every(t => t.promote);
+      const next = !allOn;
+      targets.forEach(t => { t.promote = next; });
+      renderTaskTerms();
+
+      const task = REAL_TASKS.find(x => x.id === activeTaskId);
+      if (isBackendConnected && task?.fromBackend) {
+        try {
+          if (next) {
+            await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/terms/domain`, {
+              method: 'POST',
+              body: JSON.stringify({
+                action: 'add',
+                terms: targets.map(t => ({
+                  src: String(t.src).trim(),
+                  tgt: String(t.tgt).trim(),
+                  aliases: t.aliases,
+                  note: t.note,
+                  fix_source: Boolean(t.fix_source),
+                })),
+              }),
+            });
+            targets.forEach(t => { t.dirty = false; });
+            setAutosaveStatus('completed', `已入库 ${targets.length} 条`);
+          } else {
+            await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/terms/domain`, {
+              method: 'POST',
+              body: JSON.stringify({
+                action: 'remove',
+                srcs: targets.map(t => String(t.src).trim()),
+              }),
+            });
+            setAutosaveStatus('completed', `已取消入库 ${targets.length} 条`);
+          }
+          await loadBackendGlossaryDomains();
+        } catch (err) {
+          targets.forEach(t => { t.promote = !next; });
+          renderTaskTerms();
+          reportActionError('TERMS', err);
+        }
+      }
     });
 
     document.getElementById('btn-add-task-term').addEventListener('click', () => {
@@ -1600,7 +1729,9 @@
         aliases: [],
         note: '',
         fix_source: false,
-        promote: true
+        source: 'manual',
+        in_domain_kb: false,
+        promote: false,
       });
       isEditingTerms = true;
       setAutosaveStatus('paused', '术语未保存');
@@ -1626,12 +1757,14 @@
           aliases: t.aliases,
           note: t.note,
           fix_source: Boolean(t.fix_source),
-          promote_to_domain: Boolean(t.promote),
+          source: t.source || 'task',
+          promote_to_domain: Boolean(t.promote && t.dirty),
         }));
       await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/terms`, {
         method: 'PUT',
         body: JSON.stringify({ summary, terms: payloadTerms, glossary_domain }),
       });
+      REAL_TASK_TERMS.forEach(t => { t.dirty = false; });
       isEditingTerms = false;
       setAutosaveStatus('completed', '已保存');
     }
@@ -2756,7 +2889,9 @@
               aliases: Array.isArray(item.aliases) ? item.aliases : [],
               note: item.note || '',
               fix_source: Boolean(item.fix_source),
-              promote: Boolean(item.promote_to_domain ?? item.promote ?? false),
+              source: item.source || 'task',
+              in_domain_kb: Boolean(item.in_domain_kb),
+              promote: Boolean(item.promoted ?? item.promote_to_domain ?? item.promote ?? false),
             }))
           );
           const themeInput = document.getElementById('terms-theme-input');

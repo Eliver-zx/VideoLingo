@@ -5,7 +5,7 @@ import time
 import cv2
 
 from core._1_ytdlp import find_media_file, find_video_files as _default_find_video_files
-from core.utils import load_key, log_event, report_progress
+from core.utils import check_cancel, load_key, log_event, report_progress
 from core.utils.models import resolve_task_path
 from core.utils.subtitle_style import (
     get_optimal_video_encoder_args,

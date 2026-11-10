@@ -842,8 +842,9 @@ def test_cache_key_differentiates_vocal_separation_models_when_demucs_enabled(tm
 
 
 def test_format_time_sec_and_progress_parsing():
-    from core._7_sub_into_vid import _format_time_sec
+    from core import _7_sub_into_vid
 
-    assert _format_time_sec(0) == "00:00"
-    assert _format_time_sec(75) == "01:15"
-    assert _format_time_sec(3665) == "01:01:05"
+    assert _7_sub_into_vid._format_time_sec(0) == "00:00"
+    assert _7_sub_into_vid._format_time_sec(75) == "01:15"
+    assert _7_sub_into_vid._format_time_sec(3665) == "01:01:05"
+    assert callable(_7_sub_into_vid.check_cancel)

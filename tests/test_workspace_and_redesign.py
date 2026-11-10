@@ -472,6 +472,7 @@ def test_fastapi_webui_tasks_terms_and_utterances_endpoints(
         'id="terms-review-panel"',
         'id="task-terms-counter"',
         'id="task-terms-search"',
+        'id="btn-toggle-kb-terms"',
         'id="btn-add-task-term"',
         'id="btn-batch-promote-on"',
         'id="btn-rerun-term-extract"',
@@ -1167,6 +1168,70 @@ def test_domain_glossary_crud_import_and_task_binding(tmp_path: Path, monkeypatc
     app_js_text = client.get("/app.js").text
     assert "stage: 'summarize'" in app_js_text
     assert "stage: 'summary'" not in app_js_text
+    assert (
+        "source: 'manual',\n        in_domain_kb: false,\n        promote: false"
+        in app_js_text
+    )
+
+    # 5. Instant toggle add/remove in domain glossary while keeping new terms visible (`in_domain_kb=False`)
+    ws_t1.save_terms(
+        "Destiny lore",
+        [
+            {"src": "Traveler", "tgt": "旅行者", "note": "Pre-existing in terms.csv"},
+            {"src": "Core DPS", "tgt": "核心DPS", "note": "Newly extracted term"},
+        ],
+    )
+    ws_t1.set_kv("task_promoted_srcs", [])
+    initial_get = client.get(f"/api/tasks/{t1_id}/terms").json()["terms"]
+    by_src_init = {t["src"]: t for t in initial_get}
+    assert by_src_init["Traveler"]["in_domain_kb"] is True
+    assert by_src_init["Traveler"]["promoted"] is True
+    assert by_src_init["Core DPS"]["in_domain_kb"] is False
+    assert by_src_init["Core DPS"]["promoted"] is False
+
+    # Click ON -> immediately added to destiny2/terms.csv, promoted=True, still in_domain_kb=False (visible)
+    res_add = client.post(
+        f"/api/tasks/{t1_id}/terms/domain",
+        json={
+            "action": "add",
+            "terms": [
+                {
+                    "src": "Core DPS",
+                    "tgt": "核心DPS",
+                    "aliases": [],
+                    "note": "Newly extracted term",
+                }
+            ],
+        },
+    )
+    assert res_add.status_code == 200
+    assert res_add.json()["promoted"] == 1
+    assert any(
+        t["src"] == "Core DPS"
+        for t in client.get("/api/glossary?domain=destiny2").json()["terms"]
+    )
+    after_add = {
+        t["src"]: t for t in client.get(f"/api/tasks/{t1_id}/terms").json()["terms"]
+    }
+    assert after_add["Core DPS"]["in_domain_kb"] is False
+    assert after_add["Core DPS"]["promoted"] is True
+
+    # Click OFF (undo mis-click) -> immediately removed from destiny2/terms.csv, promoted=False
+    res_rem = client.post(
+        f"/api/tasks/{t1_id}/terms/domain",
+        json={"action": "remove", "srcs": ["Core DPS"]},
+    )
+    assert res_rem.status_code == 200
+    assert res_rem.json()["removed"] == 1
+    assert not any(
+        t["src"] == "Core DPS"
+        for t in client.get("/api/glossary?domain=destiny2").json()["terms"]
+    )
+    after_rem = {
+        t["src"]: t for t in client.get(f"/api/tasks/{t1_id}/terms").json()["terms"]
+    }
+    assert after_rem["Core DPS"]["in_domain_kb"] is False
+    assert after_rem["Core DPS"]["promoted"] is False
 
     # 5. Delete domain 'medical' and 'destiny2' (verify deleting default domain destiny2 does NOT recreate it)
     res_del_dom = client.delete("/api/glossary/domains/medical")

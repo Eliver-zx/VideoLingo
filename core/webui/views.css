@@ -91,7 +91,8 @@
     }
 
     .term-icon-btn.is-fix-on,
-    .term-icon-btn.is-promote-on {
+    .term-icon-btn.is-promote-on,
+    #btn-toggle-kb-terms[aria-pressed="true"] {
       background: var(--brand-soft);
       color: var(--brand-bright);
       border-color: transparent;

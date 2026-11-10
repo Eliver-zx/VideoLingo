@@ -8,8 +8,9 @@
     let activeTaskId = '';
     let activeBatchId = 'all';
     let isEditingTerms = false;
+    let showExistingKbTerms = false;
 
-    /** @type {Array<{src: string, tgt: string, aliases: string[], note: string, fix_source: boolean, promote: boolean}>} */
+    /** @type {Array<{src: string, tgt: string, aliases: string[], note: string, fix_source: boolean, promote: boolean, in_domain_kb?: boolean, source?: string, dirty?: boolean}>} */
     const REAL_TASK_TERMS = [];
 
     /** @type {Array<{id: string, kind: string, step: string, title: string, meta: string, time: string, desc: string}>} */
