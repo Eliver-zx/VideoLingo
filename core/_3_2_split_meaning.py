@@ -34,27 +34,120 @@ def _resolve_split_joiner(text: str, language: str | None = None) -> str:
         return get_joiner(get_source_language())
 
 
+def _is_word_or_punct_boundary(text: str, pos: int) -> bool:
+    prev_ch = text[pos - 1]
+    curr_ch = text[pos]
+    return (
+        not prev_ch.isalnum()
+        or not curr_ch.isalnum()
+        or ord(prev_ch) > 0x2E80
+        or ord(curr_ch) > 0x2E80
+    )
+
+
 def find_split_positions(original, modified, language=None):
     split_positions = []
     parts = modified.split("[br]")
     start = 0
     joiner = _resolve_split_joiner(original, language)
+    n_orig = len(original)
 
     for i in range(len(parts) - 1):
-        max_similarity = 0
+        max_similarity = 0.0
         best_split = None
 
-        for j in range(start + 1, len(original)):
-            original_left = original[start:j]
+        if start + 1 < n_orig:
             modified_left = join_words(parts[i].split(), joiner)
+            target_len = len(modified_left)
+            exact_j = start + target_len
+            if (
+                target_len > 0
+                and exact_j < n_orig
+                and original[start:exact_j] == modified_left
+            ):
+                max_similarity = 1.0
+                best_split = exact_j
+            else:
+                matcher = SequenceMatcher(None, "", modified_left)
+                seen: set[int] = set()
+                rem = original[start:]
+                lead_ws = len(rem) - len(rem.lstrip())
+                win_low = max(start + 1, start + int(target_len * 0.5))
+                win_high = min(
+                    n_orig - 1,
+                    start + lead_ws + max(int(target_len * 1.6), target_len + 16),
+                )
+                expected_j = min(
+                    n_orig - 1,
+                    max(start + 1, start + lead_ws + max(1, target_len)),
+                )
 
-            left_similarity = SequenceMatcher(
-                None, original_left, modified_left
-            ).ratio()
+                def _eval_candidates(cands) -> None:
+                    nonlocal max_similarity, best_split
+                    for j in cands:
+                        if j in seen:
+                            continue
+                        seen.add(j)
+                        l1 = j - start
+                        denom = l1 + target_len
+                        ub = (
+                            2.0 * (l1 if l1 < target_len else target_len) / denom
+                            if denom
+                            else 1.0
+                        )
+                        if best_split is not None:
+                            if j > best_split and ub <= max_similarity:
+                                continue
+                            if j < best_split and ub < max_similarity:
+                                continue
+                        matcher.set_seq1(original[start:j])
+                        if best_split is not None:
+                            qr = matcher.quick_ratio()
+                            if j > best_split and qr <= max_similarity:
+                                continue
+                            if j < best_split and qr < max_similarity:
+                                continue
+                        sim = matcher.ratio()
+                        if sim > max_similarity or (
+                            sim == max_similarity
+                            and sim > 0
+                            and best_split is not None
+                            and j < best_split
+                        ):
+                            max_similarity = sim
+                            best_split = j
 
-            if left_similarity > max_similarity:
-                max_similarity = left_similarity
-                best_split = j
+                if target_len > 0 and win_low <= win_high:
+                    if joiner == " ":
+                        boundary_cands = sorted(
+                            (
+                                j
+                                for j in range(win_low, win_high + 1)
+                                if _is_word_or_punct_boundary(original, j)
+                            ),
+                            key=lambda j: (abs(j - expected_j), j),
+                        )
+                        _eval_candidates(boundary_cands)
+                        if 0.9 < max_similarity < 1.0 and best_split is not None:
+                            _eval_candidates(
+                                range(
+                                    max(start + 1, best_split - 2),
+                                    min(n_orig, best_split + 3),
+                                )
+                            )
+                    else:
+                        window_cands = sorted(
+                            range(win_low, win_high + 1),
+                            key=lambda j: (abs(j - expected_j), j),
+                        )
+                        _eval_candidates(window_cands)
+
+                if max_similarity <= 0.9:
+                    fallback_cands = sorted(
+                        range(start + 1, n_orig),
+                        key=lambda j: (abs(j - expected_j), j),
+                    )
+                    _eval_candidates(fallback_cands)
 
         if max_similarity < 0.9:
             log_event(

@@ -181,6 +181,7 @@ def _flush_chunk_translation_live(
     chunk_offsets: list[tuple[int, list[str]]],
     res_item: ChunkTranslateResult,
     last_flush_ts: float,
+    dirty_indices: list[int] | None = None,
 ) -> float:
     chunk_idx, _, chunk_trans = res_item
     if chunk_idx < 0 or chunk_idx >= len(chunk_offsets):
@@ -190,11 +191,13 @@ def _flush_chunk_translation_live(
     if len(trans_lines) != len(chunk_lines):
         return last_flush_ts
     direct_chunk = getattr(res_item, "direct_lines", None)
+    target_dirty = dirty_indices if dirty_indices is not None else []
     for j, tgt_raw in enumerate(trans_lines):
         utt_pos = offset + j
         if utt_pos >= len(non_empty_indices):
             break
-        utt = utterances[non_empty_indices[utt_pos]]
+        utt_idx = non_empty_indices[utt_pos]
+        utt = utterances[utt_idx]
         tgt_str = str(tgt_raw).strip()
         dir_str = (
             str(direct_chunk[j]).strip()
@@ -204,9 +207,11 @@ def _flush_chunk_translation_live(
         utt["direct"] = dir_str
         utt["tgt"] = tgt_str
         utt["tts_text"] = tgt_str
+        target_dirty.append(utt_idx)
     now = time.monotonic()
-    if now - last_flush_ts >= 1.5:
-        ws.save_utterances(utterances, mark_translated=False)
+    if now - last_flush_ts >= 1.5 and target_dirty:
+        ws.flush_live_utterance_slice(utterances, target_dirty)
+        target_dirty.clear()
         return now
     return last_flush_ts
 
@@ -248,6 +253,7 @@ def translate_all():
             chunk_offsets.append((running_offset, ch_lines))
             running_offset += len(ch_lines)
         can_live_flush = bool(live_utts) and len(non_empty_indices) == running_offset
+        dirty_live_indices: list[int] = []
         last_flush_ts = 0.0
 
         total_chunks = max(1, len(chunks))
@@ -279,6 +285,7 @@ def translate_all():
                             chunk_offsets,
                             res_item,
                             last_flush_ts,
+                            dirty_live_indices,
                         )
                     done_cnt = len(results)
                     report_progress(

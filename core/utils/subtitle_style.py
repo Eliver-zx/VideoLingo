@@ -180,6 +180,25 @@ def get_subtitle_filters(video, source_srt, translation_srt):
     )
 
 
+def _single_subtitle_filter(sub_path: str | Path, kind: str) -> str:
+    ext = Path(sub_path).suffix.lower()
+    escaped = escape_ffmpeg_filter_path(sub_path)
+    if ext in {".ass", ".ssa"}:
+        return f"ass={escaped}"
+    return f"subtitles={escaped}:force_style='{get_force_style(kind)}'"
+
+
+def build_standalone_subtitle_filter(
+    primary_sub: str | Path, secondary_sub: str | Path | None = None
+) -> str:
+    """Build FFmpeg subtitle filter chain for one primary subtitle and optional secondary subtitle."""
+    primary_part = _single_subtitle_filter(primary_sub, "translation")
+    if secondary_sub:
+        secondary_part = _single_subtitle_filter(secondary_sub, "source")
+        return f"{secondary_part},{primary_part}"
+    return primary_part
+
+
 def escape_ffmpeg_filter_path(path: str | Path) -> str:
     """Escape a filesystem path for FFmpeg's two-stage filtergraph and option parser."""
     s = str(path).replace("\\", "/")

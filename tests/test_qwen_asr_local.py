@@ -265,6 +265,15 @@ def test_model_source_prefers_complete_local_copy(monkeypatch, tmp_path):
     inc.write_bytes(b"partial")
     assert qwen._model_source("Qwen/Qwen3-ASR-1.7B") == expected_path
     assert downloads == [("Qwen/Qwen3-ASR-1.7B", expected_path)]
+    inc.unlink()
+    nested_dl = model_dir / ".cache" / "huggingface" / "download" / "speech_tokenizer"
+    nested_dl.mkdir(parents=True, exist_ok=True)
+    downloads.clear()
+    assert qwen._model_source("Qwen/Qwen3-ASR-1.7B") == expected_path
+    assert downloads == []
+    (nested_dl / "vocab.json.incomplete").write_bytes(b"partial")
+    assert qwen._model_source("Qwen/Qwen3-ASR-1.7B") == expected_path
+    assert downloads == [("Qwen/Qwen3-ASR-1.7B", expected_path)]
 
 
 def test_model_table():

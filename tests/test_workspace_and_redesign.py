@@ -448,17 +448,12 @@ def test_fastapi_webui_tasks_terms_and_utterances_endpoints(
         'id="btn-run-dubbing"',
         'id="btn-preview-video-modal"',
         'id="btn-stop-task"',
-        # 5-Stage Pipeline Ribbon
-        'id="pill-stage-1"',
-        'id="pill-badge-1"',
-        'id="pill-stage-2"',
-        'id="pill-badge-2"',
-        'id="pill-stage-3"',
-        'id="pill-badge-3"',
-        'id="pill-stage-4"',
-        'id="pill-badge-4"',
-        'id="pill-stage-5"',
-        'id="pill-badge-5"',
+        'id="btn-open-output-root"',
+        # Standalone Burn & Unified Settings Form
+        'id="tab-burn"',
+        'id="view-burn"',
+        'id="burn-stage-preview"',
+        'id="settings-form"',
         # Center Master-Detail Workspace (Batch Tree + Subtitle Stream + Terms Workbench)
         'id="workspace-mode-timeline"',
         'id="batch-count-badge"',
@@ -473,8 +468,6 @@ def test_fastapi_webui_tasks_terms_and_utterances_endpoints(
         'id="task-terms-counter"',
         'id="task-terms-search"',
         'id="btn-toggle-kb-terms"',
-        'id="btn-add-task-term"',
-        'id="btn-batch-promote-on"',
         'id="btn-rerun-term-extract"',
         'id="btn-save-terms-only"',
         'id="btn-save-terms-and-continue"',
@@ -573,11 +566,30 @@ def test_fastapi_webui_tasks_terms_and_utterances_endpoints(
     ]
     for asset in (
         "/",
-        "/base.css",
-        "/workbench.css",
-        "/views.css",
-        "/data.js",
-        "/app.js",
+        "/css/base.css",
+        "/css/layout-rail.css",
+        "/css/intake-modal.css",
+        "/css/stream-grid.css",
+        "/css/terms-console.css",
+        "/css/burn-glossary.css",
+        "/css/settings-dialog.css",
+        "/js/state.js",
+        "/js/dom-utils.js",
+        "/js/console-log.js",
+        "/js/router.js",
+        "/js/pipeline-ribbon.js",
+        "/js/task-rail.js",
+        "/js/intake-modal.js",
+        "/js/stream-table.js",
+        "/js/terms-review.js",
+        "/js/video-preview.js",
+        "/js/glossary-data.js",
+        "/js/glossary-view.js",
+        "/js/ass-preview.js",
+        "/js/settings-view.js",
+        "/js/burn-view.js",
+        "/js/sse.js",
+        "/js/main.js",
     ):
         res_asset = client.get(asset)
         assert res_asset.status_code == 200, f"Static asset {asset} failed"
@@ -988,6 +1000,18 @@ def test_domain_glossary_crud_import_and_task_binding(tmp_path: Path, monkeypatc
     assert res_imp_json.json()["dict_count"] == 2
     assert (glossary_root / "medical" / "dict.json").exists()
 
+    tsv_dict_bytes = "src\ttgt\nPET-CT\t正电子发射计算机断层显像\nUltrasound\t超声检查\nCBC\t血常规\n".encode(
+        "utf-8"
+    )
+    res_imp_tsv_dict = client.post(
+        "/api/glossary/domains/medical/import",
+        data={"target": "dict"},
+        files={"file": ("med_dict.tsv", tsv_dict_bytes, "text/tab-separated-values")},
+    )
+    assert res_imp_tsv_dict.status_code == 200
+    assert res_imp_tsv_dict.json()["imported_as"] == "dict.json"
+    assert res_imp_tsv_dict.json()["dict_count"] == 3
+
     # Importing >500 rows CSV with rich columns (note, aliases, fix_source) routes to dict.json and preserves all fields
     big_rows = ["src,tgt,aliases,note,fix_source"] + [
         f"Term{i},译名{i},Variant{i},Note{i},true" for i in range(505)
@@ -1165,12 +1189,14 @@ def test_domain_glossary_crud_import_and_task_binding(tmp_path: Path, monkeypatc
     assert res_inv_sum.status_code == 200
     assert "summarize" in res_inv_sum.json()["invalidated"]
     assert "translate" in res_inv_sum.json()["invalidated"]
-    app_js_text = client.get("/app.js").text
-    assert "stage: 'summarize'" in app_js_text
-    assert "stage: 'summary'" not in app_js_text
-    assert (
-        "source: 'manual',\n        in_domain_kb: false,\n        promote: false"
-        in app_js_text
+    terms_js_res = client.get("/js/terms-review.js")
+    assert terms_js_res.status_code == 200
+    terms_js_text = terms_js_res.text
+    assert "stage: 'summarize'" in terms_js_text
+    assert "stage: 'summary'" not in terms_js_text
+    assert re.search(
+        r"source:\s*'manual',\s*in_domain_kb:\s*false,\s*promote:\s*false",
+        terms_js_text,
     )
 
     # 5. Instant toggle add/remove in domain glossary while keeping new terms visible (`in_domain_kb=False`)
@@ -2150,3 +2176,87 @@ def test_sse_events_terminates_immediately_on_first_sigint():
         asyncio.run(_exercise())
     finally:
         api._shutdown_event.clear()
+
+
+def test_webui_build_index_matches_checked_in_html():
+    from core.webui.build import INDEX_OUT, build_index_html
+
+    assert build_index_html() == INDEX_OUT.read_text(encoding="utf-8")
+
+
+def test_sqlite_thread_exit_finalizer_and_unicode_log_lines(tmp_path):
+    import gc
+    import threading
+    import weakref
+    import core.workspace.db_core as db_core
+
+    ws = TaskWorkspace(tmp_path / "pool_task")
+    ws.set_kv("probe", 1)
+
+    holder_refs: list[weakref.ReferenceType[object]] = []
+    holder_dicts: list[dict] = []
+
+    def _worker() -> None:
+        assert ws.get_kv("probe") == 1
+        holder = getattr(db_core._THREAD_LOCAL, "holder", None)
+        assert holder is not None and len(holder.conns) == 1
+        holder_refs.append(weakref.ref(holder))
+        holder_dicts.append(holder.conns)
+
+    t = threading.Thread(target=_worker)
+    t.start()
+    t.join(5.0)
+    gc.collect()
+    assert len(holder_refs) == 1 and holder_refs[0]() is None
+    assert holder_dicts == [{}]
+
+    errors: list[Exception] = []
+    stop_evt = threading.Event()
+
+    def _reader() -> None:
+        while not stop_evt.is_set():
+            try:
+                ws.get_kv("probe")
+            except Exception as exc:
+                errors.append(exc)
+                break
+
+    readers = [threading.Thread(target=_reader) for _ in range(3)]
+    for r in readers:
+        r.start()
+    for _ in range(25):
+        ws.clear_runtime_cache(None)
+    stop_evt.set()
+    for r in readers:
+        r.join(5.0)
+    assert errors == []
+
+    ws.append_log("lineA\u2028lineB\u2029lineC\x85end")
+    logs = ws.load_logs(limit=10)
+    assert len(logs) == 1
+    assert logs[0]["msg"] == "lineA\u2028lineB\u2029lineC\x85end"
+
+
+def test_get_term_index_invalidates_when_utterances_change(tmp_path):
+    import core._4_1_summarize as s41
+
+    ws = TaskWorkspace(tmp_path / "shorthand_task")
+    ws.save_terms(
+        "Destiny",
+        [{"src": "Song of Flame", "tgt": "烈焰之歌", "aliases": [], "note": ""}],
+    )
+    ws.save_utterances(
+        [{"id": "u_0001", "src": "The sung requirement is easy.", "tgt": ""}]
+    )
+    with workspace_context(ws.root):
+        assert (
+            s41.search_things_to_note_in_prompt("The Song requirement is easy.") is None
+        )
+        ws.save_utterances(
+            [{"id": "u_0001", "src": "The Song requirement is easy.", "tgt": ""}]
+        )
+        prompt_note = s41.search_things_to_note_in_prompt(
+            "The Song requirement is easy."
+        )
+        assert prompt_note is not None
+        assert "烈焰之歌" in prompt_note

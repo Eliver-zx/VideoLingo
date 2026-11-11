@@ -6,11 +6,13 @@ import ipaddress
 from threading import Lock
 from urllib.parse import urlparse
 import json_repair
-from openai import OpenAI
+from openai import OpenAI as _DEFAULT_OPENAI
 from core.task_runner import TaskRunner
 from core.utils.config_utils import load_key, load_key_or, is_placeholder_key
 from core.utils.models import resolve_task_path
 from core.utils.decorator import except_handler
+
+OpenAI = _DEFAULT_OPENAI
 
 # ------------
 # cache gpt response
@@ -19,6 +21,27 @@ from core.utils.decorator import except_handler
 LOCK = Lock()
 GPT_LOG_FOLDER = "output/gpt_log"
 _CACHE_MISS = object()
+_OPENAI_CLIENTS: dict[tuple[str, str], _DEFAULT_OPENAI] = {}
+_CHAT_COMPLETIONS_SUFFIX_RE = re.compile(r"/chat/completions/?$")
+_VERSION_SUFFIX_RE = re.compile(r"/v\d+$")
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", flags=re.DOTALL | re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"</think>", flags=re.IGNORECASE)
+_THINK_UNCLOSED_RE = re.compile(r"<think>.*", flags=re.DOTALL | re.IGNORECASE)
+_FENCED_JSON_RE = re.compile(
+    r"```(?:json)?[ \t]*\n(.*?)```", flags=re.DOTALL | re.IGNORECASE
+)
+
+
+def _get_openai_client(api_key: str, base_url: str):
+    if OpenAI is not _DEFAULT_OPENAI:
+        return OpenAI(api_key=api_key, base_url=base_url)
+    key = (str(base_url), str(api_key))
+    with LOCK:
+        client = _OPENAI_CLIENTS.get(key)
+        if client is None:
+            client = _DEFAULT_OPENAI(api_key=api_key, base_url=base_url)
+            _OPENAI_CLIENTS[key] = client
+        return client
 
 
 def _resolve_log_folder() -> str:
@@ -136,6 +159,9 @@ def _load_cache(prompt, resp_type, log_title, model=None, reasoning_effort=None)
         )
         if hit:
             return val
+        legacy_file = os.path.join(_resolve_log_folder(), f"{log_title}.json")
+        if not os.path.exists(legacy_file):
+            return False
     with LOCK:
         folder = _resolve_log_folder()
         file = os.path.join(folder, f"{log_title}.json")
@@ -214,9 +240,9 @@ def normalize_base_url(base_url):
     base_url = str(base_url or "").strip()
     if "ark" in base_url:
         return "https://ark.cn-beijing.volces.com/api/v3"  # huoshan base url
-    base_url = re.sub(r"/chat/completions/?$", "", base_url.rstrip("/"))
-    if "v1" not in base_url and not re.search(
-        r"/v\d+$", base_url
+    base_url = _CHAT_COMPLETIONS_SUFFIX_RE.sub("", base_url.rstrip("/"))
+    if "v1" not in base_url and not _VERSION_SUFFIX_RE.search(
+        base_url
     ):  # e.g. .../api/paas/v4
         base_url = base_url.strip("/") + "/v1"
     return base_url
@@ -229,18 +255,10 @@ def normalize_base_url(base_url):
 
 def parse_json_response(resp_content):
     """Read the JSON object of a reply that may carry reasoning or prose around it."""
-    text = re.sub(
-        r"<think>.*?</think>", "", resp_content or "", flags=re.DOTALL | re.IGNORECASE
-    )
-    text = re.split(r"</think>", text, flags=re.IGNORECASE)[
-        -1
-    ]  # opening tag cut off by the server
-    text = re.sub(
-        r"<think>.*", "", text, flags=re.DOTALL | re.IGNORECASE
-    )  # reasoning never closed
-    blocks = re.findall(
-        r"```(?:json)?[ \t]*\n(.*?)```", text, flags=re.DOTALL | re.IGNORECASE
-    )
+    text = _THINK_BLOCK_RE.sub("", resp_content or "")
+    text = _THINK_CLOSE_RE.split(text)[-1]  # opening tag cut off by the server
+    text = _THINK_UNCLOSED_RE.sub("", text)  # reasoning never closed
+    blocks = _FENCED_JSON_RE.findall(text)
     candidates = [block for block in reversed(blocks) if "{" in block] + [text]
     resp = None
     for candidate in candidates:
@@ -285,7 +303,7 @@ def ask_gpt(prompt, resp_type=None, valid_def=None, log_title="default"):
             return cached
 
     base_url = normalize_base_url(load_key("api.base_url"))
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    client = _get_openai_client(api_key=api_key, base_url=base_url)
     response_format = (
         {"type": "json_object"}
         if resp_type == "json" and load_key("api.llm_support_json")

@@ -1,10 +1,13 @@
+from collections import deque
+import contextlib
 import os
 import subprocess
+import threading
 import time
-
-import cv2
+from typing import Callable
 
 from core._1_ytdlp import find_media_file, find_video_files as _default_find_video_files
+from core.task_runner import StopTask
 from core.utils import check_cancel, load_key, log_event, report_progress
 from core.utils.models import resolve_task_path
 from core.utils.subtitle_style import (
@@ -22,6 +25,8 @@ OUTPUT_VIDEO = f"{OUTPUT_DIR}/output_sub.mp4"
 SRC_SRT = f"{OUTPUT_DIR}/src.srt"
 TRANS_SRT = f"{OUTPUT_DIR}/trans.srt"
 
+_MP4_COPY_AUDIO_CODECS = {"", "aac", "mp3", "opus", "ac3", "eac3", "alac", "mp2"}
+
 
 def _format_time_sec(seconds: float) -> str:
     secs = max(0, int(round(seconds)))
@@ -31,23 +36,222 @@ def _format_time_sec(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
 
-def check_gpu_available():
+def _resolve_video_metadata(video_file: str) -> dict:
+    ws = get_active_workspace()
+    if ws.manifest_path.is_file():
+        manifest = ws.load_manifest()
+        media = manifest.get("media") or {}
+        fname = media.get("filename")
+        if (
+            fname
+            and int(media.get("width") or 0) > 0
+            and int(media.get("height") or 0) > 0
+            and float(media.get("duration_sec") or 0.0) > 0
+            and "audio_codec" in media
+        ):
+            cand = (ws.root / fname).resolve()
+            if os.path.abspath(video_file) == str(cand):
+                return media
+    return probe_media_metadata(video_file)
+
+
+def burn_subtitles_to_video(
+    video_file: str,
+    out_video: str,
+    vf_filter: str,
+    *,
+    ffmpeg_gpu: bool | None = None,
+    on_progress: Callable[[float, str, str | None], None] | None = None,
+    on_log: Callable[[str, str, str, bool], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    register_process: Callable[[subprocess.Popen[str] | None], None] | None = None,
+) -> float:
+    os.makedirs(os.path.dirname(out_video) or ".", exist_ok=True)
+    use_gpu = bool(load_key("ffmpeg_gpu")) if ffmpeg_gpu is None else bool(ffmpeg_gpu)
+
+    def _emit_progress(frac: float, sub_lbl: str, msg: str | None = None) -> None:
+        if on_progress is not None:
+            on_progress(frac, sub_lbl, msg)
+        else:
+            report_progress(frac, sub_lbl, msg, tag="asr", label="VIDEO")
+
+    def _emit_error_log(msg: str) -> None:
+        if on_log is not None:
+            on_log(msg, "warn", "VIDEO", True)
+        else:
+            log_event(msg, tag="warn", label="VIDEO", level="error")
+
+    def _check_abort() -> None:
+        if should_stop is not None:
+            if should_stop():
+                raise StopTask()
+        else:
+            check_cancel()
+
+    _check_abort()
+    meta = _resolve_video_metadata(video_file)
+    target_width = int(meta.get("display_width") or meta.get("width") or 0)
+    target_height = int(meta.get("display_height") or meta.get("height") or 0)
+    if target_width <= 0 or target_height <= 0:
+        import cv2
+
+        video = cv2.VideoCapture(video_file)
+        target_width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
+        target_height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        video.release()
+    if target_width <= 0 or target_height <= 0:
+        target_width, target_height = 1920, 1080
+
+    hw_input_args, wrapped_vf = wrap_gpu_subtitle_filter(
+        vf_filter, use_gpu, video_meta=meta
+    )
+    audio_codec = str(meta.get("audio_codec") or "").lower()
+    audio_args = (
+        ["-c:a", "copy"]
+        if audio_codec in _MP4_COPY_AUDIO_CODECS
+        else ["-c:a", "aac", "-b:a", "192k"]
+    )
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-nostdin",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        *hw_input_args,
+        "-i",
+        video_file,
+        "-vf",
+        wrapped_vf,
+    ]
+    ffmpeg_cmd.extend(get_optimal_video_encoder_args(use_gpu))
+    ffmpeg_cmd.extend([*audio_args, "-movflags", "+faststart", "-y", out_video])
+
+    _check_abort()
+    gpu_label = "GPU" if use_gpu else "CPU"
+    total_duration = float(meta.get("duration_sec") or 0.0)
+    _emit_progress(
+        0.05,
+        f"开始压制字幕 ({target_width}x{target_height})",
+        f"开始压制带字幕视频 ({target_width}x{target_height}, {gpu_label})",
+    )
+    start_time = time.time()
+    process = subprocess.Popen(
+        ffmpeg_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+    stderr_thread: threading.Thread | None = None
+    stderr_chunks: deque[str] = deque(maxlen=100)
+
+    def _terminate_and_reap() -> None:
+        if process.poll() is None:
+            with contextlib.suppress(OSError):
+                process.kill()
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            process.wait(timeout=5.0)
+        if stderr_thread is not None and stderr_thread.is_alive():
+            stderr_thread.join(timeout=2.0)
+
     try:
-        result = subprocess.run(
-            ["ffmpeg", "-nostdin", "-encoders"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        return "h264_nvenc" in (result.stdout or "")
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            "FFmpeg executable not found in PATH. Please install FFmpeg "
-            "(e.g. `winget install Gyan.FFmpeg` or `conda install ffmpeg`) and restart."
-        ) from exc
-    except Exception:
-        return False
+        if register_process is not None:
+            register_process(process)
+        _check_abort()
+
+        def _drain_stderr():
+            if process.stderr:
+                for line in process.stderr:
+                    stderr_chunks.append(line)
+
+        stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+        stderr_thread.start()
+
+        last_report = 0.0
+        cur_speed = ""
+        cur_time_sec = 0.0
+
+        if process.stdout:
+            for raw_line in process.stdout:
+                _check_abort()
+                line = raw_line.strip()
+                if not line or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip()
+                if k == "out_time_us":
+                    try:
+                        cur_time_sec = max(0.0, float(v) / 1_000_000.0)
+                    except ValueError:
+                        pass
+                elif k == "speed":
+                    cur_speed = v
+                elif k == "progress" and (v in ("continue", "end")):
+                    now = time.time()
+                    if (now - last_report >= 0.75) or (v == "end"):
+                        last_report = now
+                        if total_duration > 0:
+                            frac = min(0.98, max(0.05, cur_time_sec / total_duration))
+                            pct_int = int(round(frac * 100))
+                            cur_str = _format_time_sec(cur_time_sec)
+                            dur_str = _format_time_sec(total_duration)
+                            speed_num = 0.0
+                            if cur_speed.endswith("x"):
+                                try:
+                                    speed_num = float(cur_speed[:-1].strip())
+                                except ValueError:
+                                    pass
+                            eta_str = ""
+                            if speed_num > 0.05 and cur_time_sec < total_duration:
+                                remaining_sec = (
+                                    total_duration - cur_time_sec
+                                ) / speed_num
+                                eta_str = f" · 剩余 {_format_time_sec(remaining_sec)}"
+                            speed_str = (
+                                f" · 速度 {cur_speed}"
+                                if cur_speed and cur_speed != "N/A"
+                                else ""
+                            )
+                            sub_lbl = f"压制中 {pct_int}% (已处理 {cur_str}/{dur_str}{speed_str}{eta_str})"
+                        else:
+                            frac = 0.50
+                            cur_str = _format_time_sec(cur_time_sec)
+                            speed_str = (
+                                f" · 速度 {cur_speed}"
+                                if cur_speed and cur_speed != "N/A"
+                                else ""
+                            )
+                            sub_lbl = f"压制中 (已处理 {cur_str}{speed_str})"
+
+                        _emit_progress(frac, sub_lbl, None)
+
+        ret = process.wait()
+        stderr_thread.join(timeout=2.0)
+        _check_abort()
+        if ret != 0:
+            err_tail = "".join(stderr_chunks).strip()[-800:]
+            raise subprocess.CalledProcessError(ret, ffmpeg_cmd, stderr=err_tail)
+        return time.time() - start_time
+    except StopTask:
+        _terminate_and_reap()
+        raise
+    except Exception as e:
+        _terminate_and_reap()
+        detail = getattr(e, "stderr", "") or "".join(stderr_chunks).strip()[-800:]
+        msg = f"字幕视频压制失败: {e}" + (f" | {detail}" if detail else "")
+        _emit_error_log(msg)
+        raise
+    finally:
+        if register_process is not None:
+            register_process(None)
+        if process.stdout is not None:
+            with contextlib.suppress(OSError):
+                process.stdout.close()
+        if process.stderr is not None:
+            with contextlib.suppress(OSError):
+                process.stderr.close()
 
 
 def merge_subtitles_to_video():
@@ -106,169 +310,16 @@ def merge_subtitles_to_video():
 
     sync_subtitles_from_srt_if_newer()
 
-    meta = probe_media_metadata(video_file)
-    TARGET_WIDTH = int(meta.get("display_width") or meta.get("width") or 0)
-    TARGET_HEIGHT = int(meta.get("display_height") or meta.get("height") or 0)
-    if TARGET_WIDTH <= 0 or TARGET_HEIGHT <= 0:
-        video = cv2.VideoCapture(video_file)
-        TARGET_WIDTH = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
-        TARGET_HEIGHT = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        video.release()
-    if TARGET_WIDTH <= 0 or TARGET_HEIGHT <= 0:
-        TARGET_WIDTH, TARGET_HEIGHT = 1920, 1080
-
     vf_filter = get_subtitle_filters("subtitle", src_srt, trans_srt)
-    ffmpeg_gpu = bool(load_key("ffmpeg_gpu"))
-    hw_input_args, vf_filter = wrap_gpu_subtitle_filter(
-        vf_filter, ffmpeg_gpu, video_meta=meta
-    )
-    ffmpeg_cmd = [
-        "ffmpeg",
-        "-nostdin",
-        "-progress",
-        "pipe:1",
-        "-nostats",
-        *hw_input_args,
-        "-i",
-        video_file,
-        "-vf",
-        vf_filter,
-    ]
-    ffmpeg_cmd.extend(get_optimal_video_encoder_args(ffmpeg_gpu))
-    ffmpeg_cmd.extend(["-c:a", "copy", "-movflags", "+faststart", "-y", out_video])
-
-    gpu_label = "GPU" if ffmpeg_gpu else "CPU"
-    total_duration = float(meta.get("duration_sec") or 0.0)
+    elapsed = burn_subtitles_to_video(video_file, out_video, vf_filter)
+    get_active_workspace().notify_artifact_update("video", tag="asr", label="VIDEO")
     report_progress(
-        0.05,
-        f"开始压制字幕 ({TARGET_WIDTH}x{TARGET_HEIGHT})",
-        f"开始压制带字幕视频 ({TARGET_WIDTH}x{TARGET_HEIGHT}, {gpu_label})",
+        1.0,
+        f"视频压制完成 ({elapsed:.1f}s)",
+        f"字幕视频压制完成，耗时 {elapsed:.1f}s",
         tag="asr",
         label="VIDEO",
     )
-    start_time = time.time()
-    process = subprocess.Popen(
-        ffmpeg_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
-    )
-
-    stderr_chunks: list[str] = []
-
-    def _drain_stderr():
-        if process.stderr:
-            for line in process.stderr:
-                stderr_chunks.append(line)
-                if len(stderr_chunks) > 100:
-                    stderr_chunks.pop(0)
-
-    import threading
-
-    stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
-    stderr_thread.start()
-
-    last_report = 0.0
-    cur_speed = ""
-    cur_time_sec = 0.0
-
-    try:
-        if process.stdout:
-            for raw_line in process.stdout:
-                check_cancel()
-                line = raw_line.strip()
-                if not line:
-                    continue
-                if "=" in line:
-                    k, v = line.split("=", 1)
-                    k, v = k.strip(), v.strip()
-                    if k == "out_time_us":
-                        try:
-                            cur_time_sec = max(0.0, float(v) / 1_000_000.0)
-                        except ValueError:
-                            pass
-                    elif k == "speed":
-                        cur_speed = v
-                    elif k == "progress" and (v in ("continue", "end")):
-                        now = time.time()
-                        if (now - last_report >= 0.75) or (v == "end"):
-                            last_report = now
-                            if total_duration > 0:
-                                frac = min(
-                                    0.98, max(0.05, cur_time_sec / total_duration)
-                                )
-                                pct_int = int(round(frac * 100))
-                                cur_str = _format_time_sec(cur_time_sec)
-                                dur_str = _format_time_sec(total_duration)
-                                speed_num = 0.0
-                                if cur_speed.endswith("x"):
-                                    try:
-                                        speed_num = float(cur_speed[:-1].strip())
-                                    except ValueError:
-                                        pass
-                                eta_str = ""
-                                if speed_num > 0.05 and cur_time_sec < total_duration:
-                                    remaining_sec = (
-                                        total_duration - cur_time_sec
-                                    ) / speed_num
-                                    eta_str = (
-                                        f" · 剩余 {_format_time_sec(remaining_sec)}"
-                                    )
-                                speed_str = (
-                                    f" · 速度 {cur_speed}"
-                                    if cur_speed and cur_speed != "N/A"
-                                    else ""
-                                )
-                                sub_lbl = f"压制中 {pct_int}% (已处理 {cur_str}/{dur_str}{speed_str}{eta_str})"
-                            else:
-                                frac = 0.50
-                                cur_str = _format_time_sec(cur_time_sec)
-                                speed_str = (
-                                    f" · 速度 {cur_speed}"
-                                    if cur_speed and cur_speed != "N/A"
-                                    else ""
-                                )
-                                sub_lbl = f"压制中 (已处理 {cur_str}{speed_str})"
-
-                            report_progress(
-                                frac,
-                                sub_lbl,
-                                tag="asr",
-                                label="VIDEO",
-                            )
-
-        ret = process.wait()
-        stderr_thread.join(timeout=2.0)
-        if ret == 0:
-            elapsed = time.time() - start_time
-            get_active_workspace().notify_artifact_update(
-                "video", tag="asr", label="VIDEO"
-            )
-            report_progress(
-                1.0,
-                f"视频压制完成 ({elapsed:.1f}s)",
-                f"字幕视频压制完成，耗时 {elapsed:.1f}s",
-                tag="asr",
-                label="VIDEO",
-            )
-        else:
-            err_tail = "".join(stderr_chunks).strip()[-800:]
-            raise subprocess.CalledProcessError(ret, ffmpeg_cmd, stderr=err_tail)
-    except Exception as e:
-        detail = getattr(e, "stderr", "") or "".join(stderr_chunks).strip()[-800:]
-        msg = f"字幕视频压制失败: {e}" + (f" | {detail}" if detail else "")
-        log_event(
-            msg,
-            tag="warn",
-            label="VIDEO",
-            level="error",
-        )
-        if process.poll() is None:
-            process.kill()
-        raise
 
 
 if __name__ == "__main__":

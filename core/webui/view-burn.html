@@ -1,0 +1,141 @@
+  <section id="view-burn" class="burn-shell hidden">
+    <div class="burn-workspace">
+
+      <div class="task-command-bar">
+        <div class="task-identity">
+          <h1 class="task-heading">独立视频烧录</h1>
+          <span class="status-label" id="burn-status-badge">待选择文件</span>
+        </div>
+
+        <div class="toolbar-group">
+          <button type="button" class="ghost" id="btn-burn-jump-style" title="前往全局设置调整 SRT 字幕字体、字号与描边">
+            <span>字幕样式设置 ↗</span>
+          </button>
+          <button type="button" class="hidden" id="btn-burn-open-output" disabled title="在访达 / 资源管理器中定位输出视频">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <span>打开输出位置</span>
+          </button>
+          <button type="button" class="hidden" id="btn-burn-preview" disabled title="预览压制完成的 MP4 成片">
+            <svg class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <span>预览成片</span>
+          </button>
+          <button type="button" class="danger hidden" id="btn-burn-stop" disabled title="中止当前压制进程">
+            <svg class="icon" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+            <span>停止</span>
+          </button>
+          <button type="button" class="primary" id="btn-burn-start">
+            <svg class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <span id="btn-burn-start-label">开始烧录</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="burn-progress-strip hidden" id="burn-progress-strip">
+        <div class="burn-progress-meta">
+          <span id="burn-step-text">准备压制…</span>
+          <span class="mono" id="burn-progress-pct">0%</span>
+        </div>
+        <div class="progress-track burn-progress-track">
+          <div class="progress-fill" id="burn-progress-fill" style="inline-size:0%;"></div>
+        </div>
+      </div>
+
+      <div class="burn-body-grid">
+
+        <div class="burn-form-pane" id="burn-drop-surface">
+          <div class="burn-drop-banner">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <span>将本地视频与字幕文件（.srt / .ass / .ssa）直接拖入左侧区域即可自动匹配</span>
+          </div>
+
+          <div class="burn-field-group">
+            <div class="nt-field">
+              <div class="nt-label-row">
+                <label class="nt-label" for="burn-video-path">源视频</label>
+              </div>
+              <div class="burn-file-row" id="burn-video-drop">
+                <svg class="icon nt-drop-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 9 15 12 10 15 10 9"/></svg>
+                <input type="text" id="burn-video-path" class="mono" placeholder="选择本地源视频或粘贴路径" autocomplete="off" spellcheck="false">
+                <button type="button" class="xs" id="btn-burn-pick-video">浏览…</button>
+              </div>
+            </div>
+
+            <div class="nt-field">
+              <div class="nt-label-row">
+                <label class="nt-label" for="burn-sub-path">主字幕</label>
+              </div>
+              <div class="burn-file-row" id="burn-sub-drop">
+                <svg class="icon nt-drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+                <input type="text" id="burn-sub-path" class="mono" placeholder="选择字幕文件 (.srt / .ass / .ssa)" autocomplete="off" spellcheck="false">
+                <button type="button" class="xs" id="btn-burn-pick-sub">浏览…</button>
+              </div>
+            </div>
+
+            <div class="nt-field">
+              <div class="nt-label-row">
+                <label class="nt-label" for="burn-sec-sub-path">副字幕（可选）</label>
+              </div>
+              <div class="burn-file-row burn-optional-row" id="burn-sec-sub-drop">
+                <svg class="icon nt-drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+                <input type="text" id="burn-sec-sub-path" class="mono" placeholder="留空仅压制单条字幕" autocomplete="off" spellcheck="false">
+                <button type="button" class="ghost xs hidden" id="btn-burn-clear-sec-sub">清空</button>
+                <button type="button" class="xs" id="btn-burn-pick-sec-sub">浏览…</button>
+              </div>
+            </div>
+
+            <div class="nt-field">
+              <div class="nt-label-row">
+                <label class="nt-label" for="burn-output-path">输出位置</label>
+                <button type="button" class="nt-link" id="btn-burn-reset-output">恢复默认同目录路径</button>
+              </div>
+              <div class="burn-file-row">
+                <svg class="icon nt-drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                <input type="text" id="burn-output-path" class="mono" placeholder="选择源视频后自动生成同目录 _sub.mp4" autocomplete="off" spellcheck="false">
+                <button type="button" class="xs" id="btn-burn-pick-output">浏览…</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="burn-options-row">
+            <label class="switch-label">
+              <input type="checkbox" class="switch" role="switch" id="burn-gpu-chk" checked>
+              <span>启用显卡硬件加速编码</span>
+            </label>
+            <span class="field-hint">音频流兼容 MP4 容器时自动无损直拷，保留原始音质</span>
+          </div>
+        </div>
+
+        <div class="burn-side-pane">
+          <div class="burn-preview-card">
+            <div class="subpane-bar">
+              <span class="subpane-title">SRT 压制样式预览</span>
+              <span class="field-hint" id="burn-style-mode-hint">导入 .srt 时自动应用全局字幕样式</span>
+            </div>
+            <div class="burn-preview-body">
+              <div class="ass-monitor" id="burn-stage-preview">
+                <div class="ass-safe-frame"></div>
+                <div class="ass-caption-stack" id="burn-preview-box">
+                  <div id="burn-preview-tr">主字幕样式预览（SRT 自动套用译文样式）</div>
+                  <div id="burn-preview-src">Secondary subtitle preview when dual subtitles are selected.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="console-dock burn-console-pane">
+            <div class="console-bar">
+              <div class="console-bar-left">
+                <span class="subpane-title">压制日志</span>
+                <span class="sr-only" id="burn-console-preview">等待开始烧录…</span>
+              </div>
+              <div class="toolbar-group">
+                <button type="button" class="xs" id="btn-burn-copy-log">复制</button>
+              </div>
+            </div>
+            <div class="terminal-box" id="burn-log-console"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>

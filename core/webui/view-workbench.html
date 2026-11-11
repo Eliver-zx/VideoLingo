@@ -1,10 +1,7 @@
-<!-- =========================================================
-       TOP STUDIO CHROME BAR (42px Edge-to-Edge)
-       ========================================================= -->
   <header class="topbar">
     <div class="brand-cluster">
       <svg class="brand-logo" viewBox="0 0 28 28" aria-hidden="true">
-        <rect x="1" y="1" width="26" height="26" rx="6" fill="#1f1b18"/>
+        <rect x="1" y="1" width="26" height="26" rx="6" fill="#1d1916"/>
         <rect x="5.5" y="11" width="2.2" height="6" rx="1.1" fill="#c4501b"/>
         <rect x="9.3" y="7.5" width="2.2" height="13" rx="1.1" fill="#c4501b"/>
         <rect x="13.1" y="10" width="2.2" height="8" rx="1.1" fill="#c4501b"/>
@@ -18,14 +15,18 @@
       <button type="button" class="seg-btn active" data-nav="workbench" id="tab-workbench">
         <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M14 9h4M14 13h4"/></svg>
         <span>工作台</span>
-        <span class="seg-count" id="nav-task-count">0</span>
+        <span class="seg-count" id="nav-task-count" data-zero="true">0</span>
+      </button>
+      <button type="button" class="seg-btn" data-nav="burn" id="tab-burn">
+        <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 15h10M9 18h6"/></svg>
+        <span>烧录</span>
       </button>
       <button type="button" class="seg-btn" data-nav="glossary" id="tab-glossary">
         <svg class="icon" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         <span>词表</span>
       </button>
       <button type="button" class="seg-btn" data-nav="settings" id="tab-settings">
-        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06-.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         <span>设置</span>
       </button>
     </nav>
@@ -35,16 +36,12 @@
     </div>
   </header>
 
-  <!-- =========================================================
-       VIEW 1: 任务工作台 (256px Left Rail + Edge-to-Edge Main Dock)
-       ========================================================= -->
   <section id="view-workbench" class="studio-shell">
 
-    <!-- 左侧常驻任务队列轨 -->
     <aside class="task-rail" aria-label="任务工作区队列">
       <div class="rail-header">
-        <span class="rail-title">任务</span>
-        <button type="button" class="primary xs" id="btn-toggle-new-task">
+        <span class="rail-title">任务队列</span>
+        <button type="button" class="xs" id="btn-toggle-new-task">
           <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
           <span>新建</span>
         </button>
@@ -53,126 +50,87 @@
       <div class="rail-list" id="task-rail-list"></div>
 
       <div class="rail-footer">
-        <span>输出目录</span>
-        <span class="mono">./output/</span>
+        <button type="button" class="ghost xs rail-footer-btn" id="btn-open-output-root" title="在访达 / 资源管理器中打开 ./output 总目录">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          <span>打开总输出目录</span>
+        </button>
       </div>
     </aside>
 
-    <!-- 右侧一体化主控台画布 -->
     <div class="studio-main">
 
-      <!-- ROW 1: 任务主命令工具栏 (Identity + Handoff Actions) -->
       <div class="task-command-bar">
         <div class="task-identity">
           <h1 class="task-heading" id="detail-task-title">未选择任务</h1>
           <span class="status-label" id="detail-task-badge">等待导入</span>
-          <span class="tag mono" id="detail-domain-pill">无领域</span>
+          <span class="tag hidden" id="detail-domain-pill">通用</span>
         </div>
 
         <div class="toolbar-group">
-          <button type="button" class="primary" id="btn-start-resume-task" title="启动新任务或从中断/暂停处继续执行">
+          <button type="button" class="primary" id="btn-start-resume-task" title="启动新任务或从暂停处继续执行">
             <svg class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             <span id="btn-start-resume-label">启动任务</span>
           </button>
-          <button type="button" id="btn-open-task-dir" title="在访达/资源管理器中打开输出目录">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-            <span>打开目录</span>
-          </button>
-          <button type="button" id="btn-burn-sub-video" title="压制双语字幕视频 output_sub.mp4">
-            <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
-            <span>烧录字幕</span>
-          </button>
-          <button type="button" id="btn-run-dubbing" title="生成配音视频 output_dub.mp4">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
-            <span>合成配音</span>
-          </button>
-          <button type="button" id="btn-preview-video-modal">
-            <svg class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            <span>预览</span>
-          </button>
-          <button type="button" class="danger" id="btn-stop-task">
+          <button type="button" class="danger" id="btn-stop-task" disabled title="停止当前运行、暂停或排队中的任务">
             <svg class="icon" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
             <span>停止</span>
           </button>
+          <span class="toolbar-sep" aria-hidden="true"></span>
+          <button type="button" id="btn-burn-sub-video" title="压制字幕视频 output_sub.mp4">
+            <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 15h10"/></svg>
+            <span>压制字幕</span>
+          </button>
+          <button type="button" id="btn-run-dubbing" title="合成配音视频 output_dub.mp4">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+            <span>合成配音</span>
+          </button>
+          <span class="toolbar-sep" aria-hidden="true"></span>
+          <button type="button" id="btn-preview-video-modal" title="预览当前任务视频或成片">
+            <svg class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <span>预览</span>
+          </button>
+          <button type="button" id="btn-open-task-dir" title="在访达 / 资源管理器中打开当前任务目录">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <span>目录</span>
+          </button>
         </div>
       </div>
 
-      <!-- ROW 2: 五阶段流水线进度指示 -->
-      <div class="pipeline-ribbon">
-        <div class="pipeline-steps" role="list" aria-label="流水线五阶段进度">
-          <div class="pipe-node" id="pill-stage-1" role="listitem">
-            <span class="pipe-dot"></span>
-            <span class="pipe-num">01</span>
-            <span>语音识别</span>
-            <span class="pipe-stat" id="pill-badge-1">未开始</span>
-          </div>
-          <span class="pipe-line" id="pipe-line-1"></span>
-          <div class="pipe-node" id="pill-stage-2" role="listitem">
-            <span class="pipe-dot"></span>
-            <span class="pipe-num">02</span>
-            <span>断句</span>
-            <span class="pipe-stat" id="pill-badge-2">0句</span>
-          </div>
-          <span class="pipe-line" id="pipe-line-2"></span>
-          <div class="pipe-node" id="pill-stage-3" role="listitem">
-            <span class="pipe-dot"></span>
-            <span class="pipe-num">03</span>
-            <span>术语</span>
-            <span class="pipe-stat" id="pill-badge-3">0条</span>
-          </div>
-          <span class="pipe-line" id="pipe-line-3"></span>
-          <div class="pipe-node" id="pill-stage-4" role="listitem">
-            <span class="pipe-dot"></span>
-            <span class="pipe-num">04</span>
-            <span>翻译</span>
-            <span class="pipe-stat" id="pill-badge-4">0批</span>
-          </div>
-          <span class="pipe-line" id="pipe-line-4"></span>
-          <div class="pipe-node" id="pill-stage-5" role="listitem">
-            <span class="pipe-dot"></span>
-            <span class="pipe-num">05</span>
-            <span>合成</span>
-            <span class="pipe-stat" id="pill-badge-5">待合成</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- CENTER WORKSPACE BODY (常驻左树 + 右侧原地切换画布) -->
       <div class="workspace-body">
         <div class="timeline-split" id="workspace-mode-timeline">
 
-          <!-- 左子栏 (248px): 常驻阶段与批次进度流 (唯一导航) -->
-          <aside class="batch-sidebar">
+          <aside class="batch-sidebar" aria-label="任务视图与流水线阶段">
             <div class="subpane-bar">
-              <span class="subpane-title">执行步骤</span>
-              <span class="field-key" id="batch-count-badge">01–05</span>
+              <span class="subpane-title">流程导航</span>
+              <span class="field-hint mono" id="batch-count-badge">0/5 完成</span>
             </div>
             <div class="batch-tree" id="batch-tree-list"></div>
           </aside>
 
-          <!-- 右侧详情槽 A: 双语字幕只读结果表 -->
           <div class="subtitle-stage" id="subtitle-detail-pane">
             <div class="subpane-bar">
-              <div class="row" style="gap:8px;">
-                <span class="subpane-title" id="active-batch-heading">成品字幕 (0 轴)</span>
-                <span class="field-key" id="active-batch-tag"></span>
+              <div class="subpane-bar-left">
+                <span class="subpane-title" id="active-batch-heading">成品字幕</span>
+                <span class="field-hint mono" id="active-batch-tag"></span>
               </div>
 
-              <div class="row" style="gap:8px;">
-                <input id="subtitle-stream-search" type="text" placeholder="搜索字幕或术语…" style="inline-size:210px;">
+              <div class="subpane-bar-right">
+                <input id="subtitle-stream-search" type="text" placeholder="搜索字幕内容或编号…" style="inline-size:200px;">
                 <span class="field-hint mono" id="stream-row-counter">共 0 轴</span>
-                <button type="button" class="xs" id="btn-sync-subtitles-from-srt" style="inline-size:26px; padding:0;" title="从本地 src.srt / trans.srt 刷新同步数据库" aria-label="从 SRT 刷新同步数据库">
+                <button type="button" class="xs" id="btn-sync-subtitles-from-srt" title="从本地 src.srt / trans.srt 重新同步字幕">
                   <svg class="icon" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                  <span>刷新 SRT</span>
                 </button>
-                <button type="button" class="primary xs hidden" id="btn-save-utterances-and-continue" title="确认字幕并继续后续流程">继续任务 →</button>
+                <button type="button" class="primary xs hidden" id="btn-save-utterances-and-continue" title="确认字幕并继续后续合成流程">确认并继续 →</button>
               </div>
             </div>
 
             <div class="table-scroll">
-              <table class="data-grid" aria-label="双语字幕列表">
+              <table class="data-grid" aria-label="字幕与阶段数据列表">
                 <thead id="structured-stream-thead">
                   <tr>
-                    <th style="width:56px;">#</th>
+                    <th style="width:60px;">#</th>
+                    <th style="width:184px;">时间轴</th>
                     <th>双语字幕（上译文 / 下原文）</th>
                   </tr>
                 </thead>
@@ -181,42 +139,37 @@
             </div>
           </div>
 
-          <!-- 右侧详情槽 B: Step 03 术语提取与消歧面板 (同级右侧切换，不隐藏左侧进度流) -->
           <section class="terms-workbench hidden" id="terms-review-panel">
             <div class="subpane-bar">
-              <div class="row" style="gap:10px;">
+              <div class="subpane-bar-left">
                 <span class="subpane-title">术语审校</span>
                 <span class="field-hint mono" id="task-terms-counter">0 条</span>
               </div>
-              <div class="row" style="gap:8px;">
-                <input id="task-terms-search" type="text" placeholder="搜索术语…" style="inline-size:160px;">
-                <button type="button" class="xs" id="btn-toggle-kb-terms" aria-pressed="false" title="显示或隐藏已在领域词库内的术语">全部</button>
-                <button type="button" class="xs" id="btn-add-task-term"><svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新增</span></button>
-                <button type="button" class="xs" id="btn-batch-promote-on">全选入库</button>
-                <button type="button" class="xs" id="btn-rerun-term-extract">重新提取</button>
+              <div class="subpane-bar-right">
+                <input id="task-terms-search" type="text" placeholder="筛选术语或译名…" style="inline-size:168px;">
+                <button type="button" class="xs" id="btn-toggle-kb-terms" aria-pressed="false" title="切换是否显示已在领域词库内的术语">显示全部</button>
+                <button type="button" class="xs" id="btn-rerun-term-extract" title="清空当前提取结果并重新调用模型提取术语">重新提取</button>
                 <button type="button" class="xs" id="btn-save-terms-only">保存</button>
-                <button type="button" class="primary xs" id="btn-save-terms-and-continue">继续翻译 →</button>
+                <button type="button" class="primary xs" id="btn-save-terms-and-continue">确认并继续 →</button>
               </div>
             </div>
 
             <div class="terms-context-strip">
-              <label class="field">
-                <span class="field-label">
-                  <span>内容摘要</span>
-                </span>
-                <textarea id="terms-theme-input" rows="2" placeholder="提取术语后自动生成内容摘要，也可手动补充背景说明…"></textarea>
+              <label class="terms-summary-card" for="terms-theme-input">
+                <span class="terms-summary-label">背景摘要</span>
+                <textarea id="terms-theme-input" rows="1" placeholder="提取术语时自动生成视频主题摘要，也可手动补充翻译语境…"></textarea>
               </label>
             </div>
 
             <div class="table-scroll">
-              <table class="data-grid" aria-label="任务专业术语审校表">
+              <table class="data-grid terms-grid" aria-label="任务专业术语审校表">
                 <thead>
                   <tr>
-                    <th style="width:18%;">原文</th>
-                    <th style="width:16%;">译名</th>
-                    <th style="width:34%;">术语别名</th>
-                    <th style="width:22%;">备注</th>
-                    <th style="width:108px; text-align:right;">操作</th>
+                    <th style="width:24%;">原文术语</th>
+                    <th style="width:22%;">目标译名</th>
+                    <th style="width:26%;">同义词 / 识别纠错</th>
+                    <th style="width:18%;">备注</th>
+                    <th style="width:116px; text-align:right;">操作</th>
                   </tr>
                 </thead>
                 <tbody id="task-terms-tbody"></tbody>
@@ -224,7 +177,6 @@
             </div>
           </section>
 
-          <!-- 右侧详情槽 C: 运行日志面板 (log/runtime.jsonl，执行步骤第一个显示) -->
           <section class="console-dock hidden" id="console-dock">
             <div class="console-bar" id="console-bar-toggle-area">
               <div class="console-bar-left">
@@ -232,30 +184,28 @@
                   <svg class="icon" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
                   <span>运行日志</span>
                 </span>
-                <span class="field-key">runtime.jsonl</span>
-                <span class="console-preview" id="console-latest-preview">等待任务运行…</span>
+                <span class="sr-only" id="console-latest-preview">等待任务运行…</span>
               </div>
-              <div class="row" style="gap:6px; flex-shrink:0;">
+              <div class="subpane-bar-right">
                 <button type="button" class="xs" id="btn-filter-warn-log">仅看告警 (0)</button>
                 <button type="button" class="xs" id="btn-copy-log">复制</button>
-                <button type="button" class="ghost xs hidden" id="btn-toggle-console">收起</button>
+                <button type="button" class="ghost xs hidden" id="btn-toggle-console">返回字幕</button>
               </div>
             </div>
             <div class="terminal-box" id="global-log-console"></div>
           </section>
 
-          </div>
         </div>
       </div>
-
-      <!-- 右侧详情槽 C: 运行日志面板 (与字幕/术语面板同级切换，执行步骤第一个显示) -->
     </div>
   </section>
 
-  <!-- 新建任务弹窗 -->
   <dialog id="new-task-dialog" class="nt-dialog" closedby="any" aria-labelledby="new-task-modal-title">
     <header class="nt-head">
-      <h2 class="nt-title" id="new-task-modal-title">新建任务</h2>
+      <div>
+        <h2 class="nt-title" id="new-task-modal-title">新建任务</h2>
+        <p class="nt-subtitle">导入本地音视频或在线链接，按需生成双语字幕与配音成片</p>
+      </div>
       <button type="button" class="ghost nt-close" id="btn-close-intake" title="关闭 (Esc)" aria-label="关闭">
         <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
@@ -265,22 +215,24 @@
       <section class="nt-field">
         <div class="nt-label-row">
           <label class="nt-label" for="input-source-path">媒体来源</label>
-          <span class="nt-aside">可直接拖入文件</span>
+          <span class="nt-aside">支持拖拽视频、音频或字幕文件到此窗口</span>
         </div>
         <div class="nt-drop" id="upload-dropzone">
           <svg class="icon nt-drop-icon" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <input id="input-source-path" type="text" autofocus value="" placeholder="粘贴本地路径或 YouTube 链接">
+          <input id="input-source-path" type="text" autofocus value="" placeholder="粘贴本地媒体路径或 YouTube 链接">
           <button type="button" class="nt-browse" id="btn-pick-local">浏览…</button>
         </div>
-        <div class="nt-affix">
+        <div class="nt-affix" id="sub-dropzone">
           <label class="nt-affix-label" for="input-sub-path">原文字幕</label>
-          <input id="input-sub-path" type="text" placeholder="可选，已有 .srt 可跳过语音识别">
+          <input id="input-sub-path" type="text" placeholder="选填，已有 .srt 原文字幕可跳过语音识别">
+          <button type="button" class="ghost xs hidden" id="btn-clear-sub">清空</button>
+          <button type="button" class="xs nt-affix-browse" id="btn-pick-sub">浏览…</button>
         </div>
       </section>
 
       <div class="nt-row-split">
         <section class="nt-field">
-          <span class="nt-label">语言</span>
+          <span class="nt-label">源语言与目标语言</span>
           <div class="nt-lang">
             <div class="nt-dropdown" id="nt-src-lang-dropdown">
               <input type="hidden" id="task-src-lang" value="en">
@@ -334,21 +286,41 @@
               </div>
             </div>
             <svg class="icon nt-lang-arrow" viewBox="0 0 24 24" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="13 6 19 12 13 18"/></svg>
-            <input id="task-tgt-lang" type="text" value="简体中文" placeholder="目标语言" aria-label="目标语言">
+            <div class="nt-dropdown nt-combo" id="nt-tgt-lang-dropdown">
+              <div class="nt-combo-box">
+                <input id="task-tgt-lang" type="text" value="简体中文" placeholder="目标语言" aria-label="目标语言">
+                <button type="button" class="nt-combo-toggle" aria-haspopup="listbox" aria-expanded="false" aria-label="选择常用目标语言">
+                  <svg class="icon nt-select-chevron" viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+              </div>
+              <div class="nt-menu" role="listbox" aria-label="常用目标语言">
+                <div class="nt-menu-list">
+                  <button type="button" class="nt-menu-item active" role="option" data-value="简体中文"><span class="nt-item-main">简体中文</span></button>
+                  <button type="button" class="nt-menu-item" role="option" data-value="繁體中文"><span class="nt-item-main">繁體中文</span></button>
+                  <button type="button" class="nt-menu-item" role="option" data-value="English"><span class="nt-item-main">English</span></button>
+                  <button type="button" class="nt-menu-item" role="option" data-value="日本語"><span class="nt-item-main">日本語</span></button>
+                  <button type="button" class="nt-menu-item" role="option" data-value="한국어"><span class="nt-item-main">한국어</span></button>
+                  <button type="button" class="nt-menu-item" role="option" data-value="Español"><span class="nt-item-main">Español</span></button>
+                  <button type="button" class="nt-menu-item" role="option" data-value="Français"><span class="nt-item-main">Français</span></button>
+                  <button type="button" class="nt-menu-item" role="option" data-value="Deutsch"><span class="nt-item-main">Deutsch</span></button>
+                  <button type="button" class="nt-menu-item" role="option" data-value="Русский"><span class="nt-item-main">Русский</span></button>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
         <section class="nt-field">
           <div class="nt-label-row">
             <span class="nt-label">领域词表</span>
-            <button type="button" class="nt-link" id="btn-open-glossary-center">管理词表 ↗</button>
+            <button type="button" class="nt-link" id="btn-open-glossary-center" title="切换到词表页管理领域术语">管理词表 ↗</button>
           </div>
           <div class="nt-dropdown" id="nt-domain-dropdown">
             <input type="hidden" id="task-domain" value="destiny2">
             <button type="button" class="nt-select-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="领域词表">
               <span class="nt-select-value">
                 <span class="mono" id="nt-domain-slug">destiny2</span>
-                <span class="nt-select-badge" id="nt-domain-sub">命运2</span>
+                <span class="nt-select-badge" id="nt-domain-sub">0 词</span>
               </span>
               <svg class="icon nt-select-chevron" viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
             </button>
@@ -370,40 +342,59 @@
       </div>
 
       <section class="nt-field">
-        <span class="nt-label">产出</span>
+        <span class="nt-label">产出范围</span>
         <div class="nt-options" role="radiogroup" aria-label="产出范围">
           <label class="nt-option">
             <input type="radio" name="task-scope" value="subtitles" checked>
             <span class="nt-option-title">双语字幕</span>
-            <span class="nt-option-desc">识别并翻译，输出 SRT 后停下</span>
+            <span class="nt-option-desc">识别并翻译，输出 SRT 供校对或压制</span>
           </label>
           <label class="nt-option">
             <input type="radio" name="task-scope" value="all">
             <span class="nt-option-title">完整成片</span>
-            <span class="nt-option-desc">字幕、烧录与配音一次完成</span>
+            <span class="nt-option-desc">字幕、硬字幕压制与配音一步完成</span>
           </label>
           <label class="nt-option">
             <input type="radio" name="task-scope" value="transcribe">
             <span class="nt-option-title">仅原文字幕</span>
-            <span class="nt-option-desc">只做语音识别与断句</span>
+            <span class="nt-option-desc">仅执行语音识别与语义断句</span>
           </label>
           <label class="nt-option">
             <input type="radio" name="task-scope" value="dubbing">
-            <span class="nt-option-title">仅配音</span>
-            <span class="nt-option-desc">用已校对的译文 SRT 合成配音</span>
+            <span class="nt-option-title">仅合成配音</span>
+            <span class="nt-option-desc">基于已校对的译文 SRT 生成配音</span>
           </label>
         </div>
       </section>
     </div>
 
     <footer class="nt-foot">
-      <label class="switch-label nt-toggle">
+      <label class="switch-label nt-toggle" id="nt-pause-terms-wrap">
         <input type="checkbox" class="switch" id="task-pause-terms-chk" checked>
-        <span>翻译前暂停，审校术语</span>
+        <span id="nt-pause-terms-text">翻译前暂停，人工审校术语</span>
       </label>
       <div class="nt-actions">
         <button type="button" class="ghost nt-btn" id="btn-cancel-intake">取消</button>
         <button type="button" class="primary nt-btn" id="btn-create-task">创建任务</button>
       </div>
     </footer>
+  </dialog>
+
+  <dialog id="video-preview-dialog" class="preview-dialog" closedby="any" aria-labelledby="preview-dialog-title">
+    <header class="preview-head">
+      <div class="preview-head-left">
+        <h2 class="dialog-title" id="preview-dialog-title">视频预览</h2>
+        <div class="segmented-track preview-tabs hidden" id="preview-source-tabs" role="tablist" aria-label="视频版本切换"></div>
+      </div>
+      <button type="button" class="ghost nt-close" id="btn-close-preview-modal" title="关闭 (Esc)" aria-label="关闭">
+        <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </header>
+    <div class="dialog-body" id="video-preview-body">
+      <div class="preview-empty-state">
+        <svg class="icon preview-empty-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 9 15 12 10 15 10 9"/></svg>
+        <div class="preview-empty-title" id="preview-video-tag">暂未生成成片视频</div>
+        <div class="preview-empty-desc" id="preview-modal-status">完成压制字幕或合成配音后，可在此直接预览成片效果</div>
+      </div>
+    </div>
   </dialog>

@@ -27,6 +27,7 @@ _TASK_CONFIG_OVERRIDES: contextvars.ContextVar[dict[str, Any] | None] = (
 # whenever config.yaml is edited externally or updated via update_key / update_keys.
 _CACHED_CONFIG_STAT: tuple[str, int, int, int] | None = None
 _CACHED_CONFIG_DATA: dict[str, Any] | None = None
+_SCHEMA_VERIFIED_STAT: tuple[str, int, int, int] | None = None
 
 # Free-form mapping keys whose children are arbitrary user labels (may contain dots)
 # rather than nested config sections.
@@ -85,7 +86,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "style": {
             "source": {
                 "font_name": "",
-                "font_size": 14,
+                "font_size": 15,
                 "font_color": "&HFFFFFF",
                 "outline_color": "&H000000",
                 "outline_width": 1.5,
@@ -277,21 +278,37 @@ def task_config_context(overrides: dict[str, Any] | None):
         _TASK_CONFIG_OVERRIDES.reset(token)
 
 
+def _has_all_default_keys(dst: dict[str, Any], src: dict[str, Any]) -> bool:
+    for k, v in src.items():
+        if k not in dst:
+            return False
+        if isinstance(v, dict):
+            cur = dst.get(k)
+            if isinstance(cur, dict) and not _has_all_default_keys(cur, v):
+                return False
+    return True
+
+
 def _refresh_cache_for_path(target: Path, plain_data: dict[str, Any]) -> None:
     """Update the in-memory plain dict cache immediately after an atomic write."""
-    global _CACHED_CONFIG_STAT, _CACHED_CONFIG_DATA
+    global _CACHED_CONFIG_STAT, _CACHED_CONFIG_DATA, _SCHEMA_VERIFIED_STAT
     try:
         st = target.stat()
-        _CACHED_CONFIG_STAT = (
+        stat_key = (
             str(target.resolve()),
             st.st_ino,
             st.st_mtime_ns,
             st.st_size,
         )
+        _CACHED_CONFIG_STAT = stat_key
         _CACHED_CONFIG_DATA = plain_data
+        _SCHEMA_VERIFIED_STAT = (
+            stat_key if _has_all_default_keys(plain_data, DEFAULT_CONFIG) else None
+        )
     except OSError:
         _CACHED_CONFIG_STAT = None
         _CACHED_CONFIG_DATA = None
+        _SCHEMA_VERIFIED_STAT = None
 
 
 def _load_cached_config_dict(config_path: str | Path = CONFIG_PATH) -> dict[str, Any]:
@@ -508,6 +525,7 @@ def update_keys(updates: dict[str, Any], add_missing: bool = True) -> bool:
 
 def ensure_config_schema(config_path: str | Path | None = None) -> bool:
     """Backfill any missing keys from `DEFAULT_CONFIG` into `config.yaml` while preserving comments."""
+    global _CACHED_CONFIG_STAT, _CACHED_CONFIG_DATA, _SCHEMA_VERIFIED_STAT
     target = Path(config_path if config_path is not None else CONFIG_PATH)
     if not target.is_file():
         with lock:
@@ -515,6 +533,18 @@ def ensure_config_schema(config_path: str | Path | None = None) -> bool:
         return True
 
     with lock:
+        st = target.stat()
+        stat_key = (str(target.resolve()), st.st_ino, st.st_mtime_ns, st.st_size)
+        if _SCHEMA_VERIFIED_STAT == stat_key:
+            return False
+        if (
+            _CACHED_CONFIG_STAT == stat_key
+            and _CACHED_CONFIG_DATA is not None
+            and _has_all_default_keys(_CACHED_CONFIG_DATA, DEFAULT_CONFIG)
+        ):
+            _SCHEMA_VERIFIED_STAT = stat_key
+            return False
+
         with open(target, "r", encoding="utf-8") as f:
             data = yaml.load(f)
         if not isinstance(data, dict):
@@ -534,6 +564,11 @@ def ensure_config_schema(config_path: str | Path | None = None) -> bool:
         _merge_defaults(data, DEFAULT_CONFIG)
         if changed:
             _atomic_dump_yaml(data, target)
+        else:
+            plain = _to_plain_data(data)
+            _CACHED_CONFIG_STAT = stat_key
+            _CACHED_CONFIG_DATA = plain
+            _SCHEMA_VERIFIED_STAT = stat_key
         return changed
 
 

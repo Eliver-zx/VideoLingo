@@ -1,55 +1,73 @@
-  <!-- =========================================================
-       VIEW 2: 领域词表中心 (Edge-to-Edge Split Studio Shell)
-       ========================================================= -->
   <section id="view-glossary" class="glossary-shell hidden">
 
-    <!-- 左栏：领域目录列表与新建/删除 -->
     <aside class="task-rail" aria-label="领域词表">
       <div class="rail-header">
         <span class="rail-title">领域词表</span>
+        <button type="button" class="xs" id="btn-toggle-new-domain">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          <span>新建</span>
+        </button>
+      </div>
+
+      <div class="domain-create-card hidden" id="new-domain-card">
+        <input id="new-domain-input" type="text" class="mono" placeholder="英文标识，如 poe2 / unreal5">
+        <div class="domain-create-actions">
+          <button type="button" class="ghost xs" id="btn-cancel-domain">取消</button>
+          <button type="button" class="primary xs" id="btn-create-domain">创建</button>
+        </div>
       </div>
 
       <div class="rail-list" id="domain-list-box"></div>
-
-      <div style="padding:12px 4px 8px; display:flex; flex-direction:column; gap:12px;">
-        <label class="field">
-          <span class="field-label"><span>新建领域</span></span>
-          <input id="new-domain-input" type="text" class="mono" placeholder="例如：poe2 或 unreal5">
-        </label>
-        <div class="row" style="justify-content:space-between;">
-          <button type="button" class="primary xs" id="btn-create-domain"><svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新建</span></button>
-          <button type="button" class="danger xs" id="btn-delete-domain">删除</button>
-        </div>
-      </div>
     </aside>
 
-    <!-- 右栏上下分栏：上 terms.csv 自定义表 + 下 dict.json 权威大词典检索 -->
     <div class="glossary-main">
 
-      <!-- 上半屏：自定义术语表 terms.csv -->
-      <section class="glossary-pane">
-        <div class="subpane-bar">
-          <div class="row">
-            <strong id="glossary-active-title" style="font-size:var(--fs-sm); font-weight:600;">未选择领域 · 自定义术语</strong>
-            <span class="field-key">terms.csv</span>
-          </div>
-          <div class="row">
-            <input id="glossary-csv-search" type="text" placeholder="搜索术语…" style="inline-size:200px;">
-            <button type="button" class="xs" id="btn-import-glossary">导入</button>
-            <button type="button" class="xs" id="btn-add-domain-term"><svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新增</span></button>
-            <button type="button" class="primary xs" id="btn-save-domain-csv">保存</button>
+      <header class="glossary-header">
+        <div class="glossary-header-left">
+          <h1 class="task-heading" id="glossary-active-title">未选择领域</h1>
+          <div class="segmented-track" role="tablist" aria-label="词表数据源切换">
+            <button type="button" class="seg-btn active" role="tab" aria-selected="true" data-glossary-tab="terms" id="tab-glossary-terms">
+              <span>自定义术语</span>
+              <span class="seg-count" id="glossary-terms-count">0</span>
+            </button>
+            <button type="button" class="seg-btn" role="tab" aria-selected="false" data-glossary-tab="dict" id="tab-glossary-dict">
+              <span>参考大词典</span>
+              <span class="status-label" id="dict-count-pill">未挂载</span>
+            </button>
           </div>
         </div>
 
+        <div class="glossary-toolbar" id="glossary-terms-toolbar">
+          <input id="glossary-csv-search" type="text" placeholder="搜索原文、译名或别名…" style="inline-size:210px;">
+          <label class="btn xs" id="btn-import-glossary" title="导入 CSV / TSV / Excel / JSON 术语表">
+            <span>导入</span>
+            <input type="file" id="input-import-glossary" class="sr-only" accept=".csv,.tsv,.xlsx,.xls,.json">
+          </label>
+          <button type="button" class="xs" id="btn-add-domain-term"><svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新增术语</span></button>
+          <button type="button" class="primary xs" id="btn-save-domain-csv">保存</button>
+          <span class="toolbar-sep" aria-hidden="true"></span>
+          <button type="button" class="danger xs" id="btn-delete-domain" title="删除当前选中的领域词表">删除领域</button>
+        </div>
+
+        <div class="glossary-toolbar hidden" id="glossary-dict-toolbar">
+          <input id="dict-search-input" type="text" value="" placeholder="检索内置参考词典…" style="inline-size:240px;">
+          <label class="btn xs" id="btn-import-dict" title="导入 JSON / CSV / TSV / Excel 权威参考词典">
+            <span>导入词典</span>
+            <input type="file" id="input-import-dict" class="sr-only" accept=".json,.csv,.tsv,.xlsx,.xls">
+          </label>
+        </div>
+      </header>
+
+      <section class="glossary-pane" id="glossary-pane-terms">
         <div class="table-scroll">
-          <table class="data-grid">
+          <table class="data-grid terms-grid" aria-label="领域自定义术语表">
             <thead>
               <tr>
-                <th style="width:18%;">原文</th>
-                <th style="width:16%;">译名</th>
-                <th style="width:36%;">术语别名</th>
-                <th style="width:30%;">备注</th>
-                <th style="width:64px; text-align:right;">操作</th>
+                <th style="width:24%;">原文术语</th>
+                <th style="width:22%;">目标译名</th>
+                <th style="width:26%;">同义词 / 识别纠错</th>
+                <th style="width:20%;">备注</th>
+                <th style="width:88px; text-align:right;">操作</th>
               </tr>
             </thead>
             <tbody id="domain-csv-tbody"></tbody>
@@ -57,26 +75,14 @@
         </div>
       </section>
 
-      <!-- 下半屏：内置词典 dict.json 检索 -->
-      <section class="glossary-pane" style="border-block-end:none;">
-        <div class="subpane-bar">
-          <div class="row">
-            <strong style="font-size:var(--fs-sm); font-weight:600;">内置词典</strong>
-            <span class="field-key">dict.json</span>
-            <span class="status-label" id="dict-count-pill">未挂载词典</span>
-          </div>
-          <div class="row">
-            <input id="dict-search-input" type="text" value="" placeholder="搜索词典…" style="inline-size:240px;">
-            <button type="button" class="xs" id="btn-import-dict">导入词典</button>
-          </div>
-        </div>
-
+      <section class="glossary-pane hidden" id="glossary-pane-dict">
         <div class="table-scroll">
-          <table class="data-grid">
+          <table class="data-grid" aria-label="领域参考大词典">
             <thead>
               <tr>
-                <th style="width:40%;">原文</th>
-                <th style="width:60%;">译名</th>
+                <th style="width:36%;">原文词条</th>
+                <th style="width:50%;">参考译名</th>
+                <th style="width:14%; text-align:right;">操作</th>
               </tr>
             </thead>
             <tbody id="dict-search-tbody"></tbody>
@@ -86,4 +92,3 @@
 
     </div>
   </section>
-

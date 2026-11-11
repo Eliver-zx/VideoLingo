@@ -36,12 +36,17 @@ def client(tmp_path, monkeypatch):
     r = TaskRunner()
     r.add_listener(api._on_runner_event)
     monkeypatch.setattr(api, "runner", r)
+    monkeypatch.setattr(api, "burn_job", api.StandaloneBurnJob())
     with TestClient(api.app) as client:
         yield client
     api.runner.stop(clear_queue=True)
+    api.burn_job.stop()
     if api.runner._thread:
         api.runner._thread.join(3)
         assert not api.runner._thread.is_alive()
+    if api.burn_job._thread:
+        api.burn_job._thread.join(3)
+        assert not api.burn_job._thread.is_alive()
 
 
 def finish(client, task_id: str | None = None):
@@ -680,3 +685,319 @@ def test_per_task_log_isolation_and_restart_persistence(client):
     assert [
         x["msg"] for x in client.get(f"/api/tasks/{task_b}/logs").json()["logs"]
     ] == msgs_b
+
+
+def test_build_standalone_subtitle_filter():
+    from core.utils.subtitle_style import build_standalone_subtitle_filter
+
+    srt_only = build_standalone_subtitle_filter(Path("/tmp/a.srt"))
+    assert "subtitles=" in srt_only
+    assert "force_style=" in srt_only
+
+    ass_only = build_standalone_subtitle_filter(Path("/tmp/styled.ass"))
+    assert ass_only.startswith("ass=")
+    assert "force_style=" not in ass_only
+
+    bilingual = build_standalone_subtitle_filter(
+        Path("/tmp/trans.ass"), Path("/tmp/src.srt")
+    )
+    assert bilingual.startswith("subtitles=/tmp/src.srt:force_style='")
+    assert bilingual.endswith(",ass=/tmp/trans.ass")
+
+
+def test_standalone_burn_validation_and_lifecycle(client, tmp_path):
+    media_dir = tmp_path / "movies"
+    media_dir.mkdir()
+    vid = media_dir / "clip.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=320x180:d=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=44100:cl=mono",
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-y",
+            str(vid),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    srt = media_dir / "clip.srt"
+    srt.write_text(
+        "1\n00:00:00,000 --> 00:00:00,800\nStandalone burn test\n",
+        encoding="utf-8",
+    )
+    bad_ass = media_dir / "broken.ass"
+    bad_ass.write_text("not an ass file", encoding="utf-8")
+
+    # Rejects output_path colliding with source video_path
+    same_out = client.post(
+        "/api/burn/start",
+        json={
+            "video_path": str(vid),
+            "subtitle_path": str(srt),
+            "output_path": str(vid),
+            "ffmpeg_gpu": False,
+        },
+    )
+    assert same_out.status_code == 422
+
+    # Rejects malformed .ass subtitle
+    bad_sub = client.post(
+        "/api/burn/start",
+        json={
+            "video_path": str(vid),
+            "subtitle_path": str(bad_ass),
+            "ffmpeg_gpu": False,
+        },
+    )
+    assert bad_sub.status_code == 422
+
+    # Runs standalone burn to default <video_dir>/<stem>_sub.mp4 without creating tasks
+    res = client.post(
+        "/api/burn/start",
+        json={
+            "video_path": str(vid),
+            "subtitle_path": str(srt),
+            "ffmpeg_gpu": False,
+        },
+    )
+    assert res.status_code == 202, res.text
+    expected_out = (media_dir / "clip_sub.mp4").resolve()
+    assert Path(res.json()["output_path"]).resolve() == expected_out
+
+    assert api.burn_job._thread is not None
+    api.burn_job._thread.join(15)
+    assert not api.burn_job._thread.is_alive()
+
+    status = client.get("/api/burn/status").json()
+    assert status["state"] == "completed", status
+    assert Path(status["completed_output_path"]).resolve() == expected_out
+    assert expected_out.is_file() and expected_out.stat().st_size > 0
+    assert any(entry["label"] == "DONE" for entry in status["logs"])
+
+    # Does not pollute workbench tasks
+    assert client.get("/api/tasks").json()["tasks"] == []
+
+    # Preview and open-output endpoints resolve the burned video
+    preview_res = client.get("/api/burn/preview")
+    assert preview_res.status_code == 200
+    assert preview_res.headers["content-type"].startswith("video/mp4")
+
+    open_res = client.post("/api/burn/open-output")
+    assert open_res.status_code == 200
+    assert Path(open_res.json()["path"]).resolve() == expected_out
+
+
+def test_standalone_burn_multipart_upload_with_ass_and_secondary_srt(client, tmp_path):
+    vid = tmp_path / "drop_demo.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=navy:s=320x180:d=1",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-y",
+            str(vid),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    ass_bytes = (
+        "[Script Info]\nScriptType: v4.00+\nPlayResX: 320\nPlayResY: 180\n\n"
+        "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        "Style: Default,Arial,18,&H0000FFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,10,10,16,1\n\n"
+        "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 0,0:00:00.00,0:00:00.80,Default,,0,0,0,,ASS Primary Line\n"
+    ).encode("utf-8")
+    sec_srt_bytes = b"1\n00:00:00,000 --> 00:00:00,800\nSecondary Source Line\n"
+
+    res = client.post(
+        "/api/burn/upload",
+        files={
+            "video": ("drop_demo.mp4", vid.read_bytes(), "video/mp4"),
+            "subtitle": ("styled.ass", ass_bytes, "text/plain"),
+            "secondary_subtitle": ("en.srt", sec_srt_bytes, "application/x-subrip"),
+        },
+        data={"ffmpeg_gpu": "false"},
+    )
+    assert res.status_code == 202, res.text
+    assert api.burn_job._thread is not None
+    api.burn_job._thread.join(15)
+    assert not api.burn_job._thread.is_alive()
+
+    status = client.get("/api/burn/status").json()
+    assert status["state"] == "completed", status
+    expected_out = (tmp_path / "output" / "drop_demo_sub.mp4").resolve()
+    assert Path(status["completed_output_path"]).resolve() == expected_out
+    assert expected_out.is_file() and expected_out.stat().st_size > 0
+    assert client.get("/api/tasks").json()["tasks"] == []
+
+
+def test_orphaned_active_manifest_states_reconcile_across_restart(client):
+    task_a = create_local_task(client, "orphan_run.mp4")
+    task_b = create_local_task(client, "orphan_pause.mp4")
+
+    ws_a = TaskWorkspace(Path("output") / task_a)
+    ws_a.update_manifest(
+        execution={"state": "running", "current_step": "Merging subtitles"}
+    )
+    ws_b = TaskWorkspace(Path("output") / task_b)
+    ws_b.update_manifest(
+        execution={"state": "paused", "pause_reason": "Review terminology"}
+    )
+
+    # Fresh runner simulates backend restart: neither task is running or queued
+    summary_a = client.get(f"/api/tasks/{task_a}").json()
+    assert summary_a["execution"]["state"] == "stopped"
+    assert ws_a.load_manifest()["execution"]["state"] == "stopped"
+
+    # Calling /stop directly on an orphaned paused manifest reconciles to stopped (200)
+    stop_b = client.post(f"/api/tasks/{task_b}/stop")
+    assert stop_b.status_code == 200
+    assert stop_b.json()["state"] == "stopped"
+    reloaded_b = ws_b.load_manifest()["execution"]
+    assert reloaded_b["state"] == "stopped"
+    assert reloaded_b["pause_reason"] is None
+
+    # Once stopped, subsequent /stop returns 409 as inactive
+    assert client.post(f"/api/tasks/{task_b}/stop").status_code == 409
+
+
+def test_standalone_burn_rejects_directory_output_path(client, tmp_path):
+    vid = tmp_path / "clip.mp4"
+    sub = tmp_path / "clip.srt"
+    vid.write_bytes(b"fake")
+    sub.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n", encoding="utf-8")
+    out_dir_mp4 = tmp_path / "folder.mp4"
+    out_dir_mp4.mkdir()
+
+    res = client.post(
+        "/api/burn/start",
+        json={
+            "video_path": str(vid),
+            "subtitle_path": str(sub),
+            "output_path": str(out_dir_mp4),
+            "ffmpeg_gpu": False,
+        },
+    )
+    assert res.status_code == 422
+    assert client.get("/api/burn/status").json()["state"] != "running"
+
+
+def test_task_utterances_and_terms_fast_paths_and_cache_invalidation(
+    client, monkeypatch, tmp_path
+):
+    import core.workspace as _ws_mod
+
+    gloss_root = tmp_path / "glossary"
+    dom_dir = gloss_root / "d2fast"
+    dom_dir.mkdir(parents=True)
+    (dom_dir / "terms.csv").write_text(
+        "src,tgt,aliases,note,fix_source\nGolden Gun,黄金枪,,,false\n",
+        encoding="utf-8",
+    )
+    (dom_dir / "dict.json").write_text(
+        '{"entries": {"Celestial Nighthawk": "天界夜鹰", "Facet: Bravery": "棱镜：勇猛"}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_ws_mod, "GLOSSARY_DIR", gloss_root)
+
+    ws = TaskWorkspace(Path("output") / "fast_switch_task")
+    ws.ensure_dirs()
+    ws.update_manifest(config_override={"glossary_domain": "d2fast"})
+    ws.save_words(
+        [
+            {"text": "celestial", "start": 0.0, "end": 0.4},
+            {"text": "nighthawk", "start": 0.4, "end": 0.9},
+            {"text": "buff", "start": 0.9, "end": 1.3},
+        ]
+    )
+    ws.save_utterances(
+        [
+            {
+                "id": 0,
+                "word_span": [0, 3],
+                "start": 0.0,
+                "end": 1.3,
+                "src": "Celestial Nighthawk buff.",
+                "tgt": "天界夜鹰增益。",
+            }
+        ]
+    )
+    ws.save_terms(
+        "Hunter DPS",
+        [
+            {"src": "Celestial Nighthawk", "tgt": "天界夜鹰", "source": "task"},
+            {"src": "Bravery", "tgt": "勇猛", "source": "task"},
+            {"src": "Golden Gun", "tgt": "黄金枪", "source": "task"},
+            {"src": "Still Hunt", "tgt": "寂静狩猎", "source": "task"},
+        ],
+    )
+
+    r_no_asr = client.get("/api/tasks/fast_switch_task/utterances?include_asr=0")
+    assert r_no_asr.status_code == 200
+    d_no_asr = r_no_asr.json()
+    assert d_no_asr["asr_segments"] is None
+    assert d_no_asr["total_words"] == 3
+    assert d_no_asr["utterances"][0]["src_raw"] == "celestial nighthawk buff"
+
+    # Warm hit for include_asr=0 followed by include_asr=1 must populate asr_segments
+    assert (
+        client.get("/api/tasks/fast_switch_task/utterances?include_asr=0").json()[
+            "asr_segments"
+        ]
+        is None
+    )
+    d_with_asr = client.get(
+        "/api/tasks/fast_switch_task/utterances?include_asr=1"
+    ).json()
+    assert isinstance(d_with_asr["asr_segments"], list)
+    assert len(d_with_asr["asr_segments"]) == 1
+
+    # Saving updated utterances must invalidate the cached JSON bytes immediately
+    ws.save_utterances(
+        [
+            {
+                "id": 0,
+                "word_span": [0, 3],
+                "start": 0.0,
+                "end": 1.3,
+                "src": "Celestial Nighthawk buff.",
+                "tgt": "天界夜鹰伤害加成。",
+            }
+        ]
+    )
+    d_updated = client.get(
+        "/api/tasks/fast_switch_task/utterances?include_asr=0"
+    ).json()
+    assert d_updated["utterances"][0]["tgt"] == "天界夜鹰伤害加成。"
+
+    # Terms endpoint resolves dict.json + colon-tail + CSV known sources accurately
+    terms_res = client.get("/api/tasks/fast_switch_task/terms").json()
+    by_src = {t["src"]: t for t in terms_res["terms"]}
+    assert by_src["Celestial Nighthawk"]["in_domain_kb"] is True
+    assert by_src["Bravery"]["in_domain_kb"] is True
+    assert by_src["Golden Gun"]["in_domain_kb"] is True
+    assert by_src["Golden Gun"]["promoted"] is True
+    assert by_src["Still Hunt"]["in_domain_kb"] is False
+    assert by_src["Still Hunt"]["promoted"] is False

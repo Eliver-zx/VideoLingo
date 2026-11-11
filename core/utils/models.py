@@ -44,11 +44,20 @@ def resolve_windows_binary(name: str) -> str | None:
     return None
 
 
+_LAST_SANITIZED_WIN_PATH: str | None = None
+
+
 def ensure_windows_ffmpeg_path() -> None:
     """Sanitize Windows PATH (dropping quotes and broken dirs) and hook Popen for bare binaries."""
+    global _LAST_SANITIZED_WIN_PATH
     if os.name != "nt":
         return
-    raw_parts = os.environ.get("PATH", "").split(os.pathsep)
+    cur_path = os.environ.get("PATH", "")
+    if cur_path == _LAST_SANITIZED_WIN_PATH and getattr(
+        subprocess.Popen.__init__, "_vl_win_patched", False
+    ):
+        return
+    raw_parts = cur_path.split(os.pathsep)
     cleaned_parts: list[str] = []
     seen_lower: set[str] = set()
     for part in raw_parts:
@@ -135,6 +144,7 @@ def ensure_windows_ffmpeg_path() -> None:
 
         setattr(_patched_popen_init, "_vl_win_patched", True)
         subprocess.Popen.__init__ = _patched_popen_init  # type: ignore[method-assign]
+    _LAST_SANITIZED_WIN_PATH = os.environ.get("PATH", "")
 
 
 ensure_windows_ffmpeg_path()
