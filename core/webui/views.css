@@ -207,7 +207,7 @@
     }
 
     /* =========================================================
-       CONSOLE STAGE PANE (log/runtime.log)
+       CONSOLE STAGE PANE (log/runtime.jsonl)
        ========================================================= */
     .console-dock {
       background: var(--bg-pane);

@@ -159,7 +159,7 @@ class TaskRunner:
     ] = field(default_factory=deque)
     _queue_lock: threading.Lock = field(default_factory=threading.Lock)
     _state_lock: threading.RLock = field(default_factory=threading.RLock)
-    _logs: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=300))
+    _logs_by_task: dict[str, deque[dict[str, Any]]] = field(default_factory=dict)
     _last_log_msg: str = ""
     _last_log_ts: float = 0.0
 
@@ -176,9 +176,15 @@ class TaskRunner:
         if callback in self._listeners:
             self._listeners.remove(callback)
 
-    def recent_logs(self) -> list[dict[str, Any]]:
+    def recent_logs(self, task_id: str | None = None) -> list[dict[str, Any]]:
         with self._state_lock:
-            return list(self._logs)
+            key = (self.active_task_id or "") if task_id is None else task_id
+            bucket = self._logs_by_task.get(key)
+            return list(bucket) if bucket is not None else []
+
+    def clear_logs(self, task_id: str) -> None:
+        with self._state_lock:
+            self._logs_by_task.pop(task_id, None)
 
     def _notify(
         self,
@@ -207,7 +213,12 @@ class TaskRunner:
                 or (self.error_msg if event_type == "task_error" else "")
             )
             if display_msg:
-                self._logs.append(
+                bucket_key = self.active_task_id or ""
+                bucket = self._logs_by_task.get(bucket_key)
+                if bucket is None:
+                    bucket = deque(maxlen=300)
+                    self._logs_by_task[bucket_key] = bucket
+                bucket.append(
                     {
                         "time": now_str,
                         "tag": resolved_tag,

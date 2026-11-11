@@ -143,14 +143,13 @@ def _on_runner_event(payload: dict[str, Any]) -> None:
             or (payload.get("error") if ev_type == "task_error" else None)
         )
         if msg:
-            try:
-                ws.log_dir.mkdir(parents=True, exist_ok=True)
-                time_str = payload.get("time") or ""
-                label_str = payload.get("log_label") or "RUN"
-                with open(ws.log_dir / "runtime.log", "a", encoding="utf-8") as log_f:
-                    log_f.write(f"{time_str} [{label_str}] {msg}\n")
-            except OSError:
-                pass
+            ws.append_log(
+                msg,
+                tag=payload.get("log_tag") or "llm",
+                label=payload.get("log_label") or "RUN",
+                warn=bool(payload.get("warn")),
+                time_str=payload.get("time"),
+            )
         if ws.manifest_path.is_file() and payload.get("type") not in (
             "task_progress",
             "task_log",
@@ -243,6 +242,15 @@ class UtterancesUpdateRequest(BaseModel):
 class ConfigUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     updates: dict[str, Any]
+
+
+class TaskLogEntryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    msg: str = Field(min_length=1)
+    tag: Literal["asr", "llm", "warn"] = "llm"
+    label: str = Field(default="RUN", min_length=1, max_length=16)
+    warn: bool = False
+    time: str | None = None
 
 
 # ─── Shared Helpers ───
@@ -384,7 +392,11 @@ async def sse_events(request: Request):
                 "active_task_id": runner.active_task_id,
                 "progress": runner.progress,
                 "stages_done": dict(runner.stages_done) if runner.stages_done else None,
-                "recent_logs": runner.recent_logs(),
+                "recent_logs": (
+                    runner.recent_logs(runner.active_task_id)
+                    if runner.active_task_id
+                    else []
+                ),
             }
             yield f"data: {json.dumps(init_payload, ensure_ascii=False)}\n\n"
             while not _shutdown_event.is_set():
@@ -1287,12 +1299,32 @@ def sync_task_subtitles_from_srt(task_id: str):
     return result
 
 
+@app.get("/api/tasks/{task_id}/logs")
+def get_task_logs(task_id: str):
+    ws = _resolve_workspace(task_id)
+    return {"task_id": ws.task_id, "logs": ws.load_logs()}
+
+
+@app.post("/api/tasks/{task_id}/logs", status_code=201)
+def append_task_log(task_id: str, request: TaskLogEntryRequest):
+    ws = _resolve_workspace(task_id)
+    entry = ws.append_log(
+        request.msg,
+        tag=request.tag,
+        label=request.label.upper()[:8],
+        warn=request.warn,
+        time_str=request.time,
+    )
+    return {"task_id": ws.task_id, "entry": entry}
+
+
 @app.delete("/api/tasks/{task_id}")
 def delete_task(task_id: str):
     ws = _resolve_workspace(task_id)
     if runner.active_task_id == ws.task_id and runner.is_active:
         raise HTTPException(409, "Cannot delete an active task; stop it first.")
     runner.cancel_queued(ws.task_id)
+    runner.clear_logs(ws.task_id)
     ws.clear_runtime_cache()
     rmtree_robust(ws.root)
     return {"deleted": ws.task_id}

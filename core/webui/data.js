@@ -15,7 +15,7 @@
 
     /** @type {Array<{id: string, kind: string, step: string, title: string, meta: string, time: string, desc: string}>} */
     const DEFAULT_PIPELINE_BATCH_NODES = [
-      { id: 'runtime-log', kind: 'summary', step: 'LOG', title: '运行日志', meta: '0 条', time: '', desc: '运行日志 (runtime.log)' },
+      { id: 'runtime-log', kind: 'summary', step: 'LOG', title: '运行日志', meta: '0 条', time: '', desc: '运行日志 (runtime.jsonl)' },
       { id: 'all', kind: 'summary', step: 'SRT', title: '成品字幕', meta: '0 轴', time: '', desc: '成品字幕 (0 轴)' },
       { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: '未开始', time: '', desc: '语音识别' },
       { id: 'nlp-all', kind: 'step', step: '02', title: '标点与断句', meta: '0 句', time: '', desc: '标点与断句' },
@@ -37,6 +37,9 @@
 
     /** @type {Array<{time: string, tag: string, label: string, msg: string, warn: boolean}>} */
     const REAL_SYSTEM_LOGS = [];
+
+    /** @type {Map<string, Array<{time: string, tag: string, label: string, msg: string, warn: boolean}>>} */
+    const TASK_LOGS_BY_ID = new Map();
 
     /** @type {Array<{k: string, v: string}>} */
     const REAL_DICT_ENTRIES = [];

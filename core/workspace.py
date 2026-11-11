@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 import contextlib
 import contextvars
 import copy
@@ -317,6 +318,10 @@ class TaskWorkspace:
         return self.root / "log"
 
     @property
+    def runtime_log_path(self) -> Path:
+        return self.log_dir / "runtime.jsonl"
+
+    @property
     def gpt_log_dir(self) -> Path:
         return self.root / "gpt_log"
 
@@ -523,6 +528,34 @@ class TaskWorkspace:
             str(self.root / sub_rel) if sub_rel else None,
         )
         return self.save_manifest(manifest)
+
+    def append_log(
+        self,
+        msg: str,
+        *,
+        tag: str = "llm",
+        label: str = "RUN",
+        warn: bool = False,
+        time_str: str | None = None,
+    ) -> dict[str, Any]:
+        entry: dict[str, Any] = {
+            "time": time_str or datetime.now().strftime("%H:%M:%S"),
+            "tag": tag,
+            "label": label,
+            "msg": msg,
+            "warn": bool(warn),
+        }
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        with open(self.runtime_log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n")
+        return entry
+
+    def load_logs(self, limit: int = 300) -> list[dict[str, Any]]:
+        if not self.runtime_log_path.is_file():
+            return []
+        with open(self.runtime_log_path, "r", encoding="utf-8") as f:
+            tail = deque((line.strip() for line in f if line.strip()), maxlen=limit)
+        return [json.loads(line) for line in tail]
 
     def _write_legacy_input_manifest(
         self, media_path: str, media_type: str, subtitle_path: str | None = None

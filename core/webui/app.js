@@ -22,10 +22,10 @@
       el.style.height = `${next}px`;
     }
 
-    function reportActionError(scope, err) {
+    function reportActionError(scope, err, taskId = '') {
       const msg = err?.message || String(err || '操作失败');
       setAutosaveStatus('error', '操作失败');
-      appendLog('warn', scope, msg, true);
+      appendLog('warn', scope, msg, true, undefined, { taskId });
     }
 
     async function apiFetch(url, options = {}) {
@@ -197,6 +197,7 @@
         autoResizeThemeTextarea(themeInput);
       }
       activeBatchId = 'all';
+      syncActiveTaskLogsView();
       syncPipelineRibbon(null, 0, 0);
       renderBatchTree();
       syncDetailPane();
@@ -218,6 +219,7 @@
       }
       document.getElementById('detail-task-title').textContent = task.title;
       document.getElementById('detail-domain-pill').textContent = task.domain || '无领域';
+      syncActiveTaskLogsView();
       if (task.fromBackend) {
         await loadBackendTaskDetail(task.id);
       } else {
@@ -324,6 +326,12 @@
         const prevActive = REAL_TASKS.find(t => t.id === activeTaskId);
         const prevState = prevActive?.rawState || prevActive?.state || '';
         const tasks = (data.tasks || []).map(mapBackendTaskToCard);
+        const liveIds = new Set(tasks.map(t => t.id));
+        for (const key of Array.from(TASK_LOGS_BY_ID.keys())) {
+          if (key && !liveIds.has(key)) {
+            TASK_LOGS_BY_ID.delete(key);
+          }
+        }
         REAL_TASKS.splice(0, REAL_TASKS.length, ...tasks);
         if (REAL_TASKS.length > 0) {
           if (!REAL_TASKS.some(t => t.id === activeTaskId)) {
@@ -348,18 +356,24 @@
           resetWorkbenchToEmpty();
         }
       } catch (err) {
-        appendLog('warn', 'TASKS', `同步任务列表失败: ${err.message}`, true);
+        appendLog('warn', 'TASKS', `同步任务列表失败: ${err.message}`, true, undefined, { taskId: '', persist: false });
       }
     }
 
     async function loadBackendTaskDetail(taskId, options = {}) {
       const preserveEdits = Boolean(options.preserveEdits);
       try {
-        const [taskData, termsData, uttsData] = await Promise.all([
+        const inflight = pendingLogWritesByTask.get(taskId);
+        if (inflight) {
+          await inflight;
+        }
+        const [taskData, termsData, uttsData, logsData] = await Promise.all([
           apiFetch(`/api/tasks/${encodeURIComponent(taskId)}`),
           apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/terms`),
           apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/utterances`),
+          apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/logs`),
         ]);
+        setTaskLogsFromServer(taskId, logsData?.logs);
         const card = mapBackendTaskToCard(taskData);
         const idx = REAL_TASKS.findIndex(x => x.id === taskId);
         if (idx >= 0) REAL_TASKS[idx] = card;
@@ -410,7 +424,7 @@
           renderTaskTerms();
         }
       } catch (err) {
-        appendLog('warn', 'TASK', `加载任务详情失败 (${taskId}): ${err.message}`, true);
+        appendLog('warn', 'TASK', `加载任务详情失败 (${taskId}): ${err.message}`, true, undefined, { taskId, persist: false });
       }
     }
 
@@ -551,7 +565,7 @@
         const asrSegCount = ASR_SEGMENT_ROWS.length || rows.length;
         const asrMeta = sd.asr ? (totalWords > 0 ? `${totalWords} 词` : '已完成') : '未开始';
         const baseNodes = [
-          { id: 'runtime-log', kind: 'summary', step: 'LOG', title: '运行日志', meta: `${REAL_SYSTEM_LOGS.length} 条`, time: '', desc: '运行日志 (runtime.log)' },
+          { id: 'runtime-log', kind: 'summary', step: 'LOG', title: '运行日志', meta: `${REAL_SYSTEM_LOGS.length} 条`, time: '', desc: '运行日志 (runtime.jsonl)' },
           { id: 'all', kind: 'summary', step: 'SRT', title: '成品字幕', meta: `${cueRows.length} 轴`, time: '', desc: `成品字幕 (${cueRows.length} 轴)` },
           { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: asrMeta, time: '', desc: `语音识别 · 词级时间戳对齐 (${totalWords} 词 / ${asrSegCount} 段声学切片)` },
           { id: 'nlp-all', kind: 'step', step: '02', title: '标点与断句', meta: `${utts.length} 句`, time: '', desc: `标点恢复与语义断句 (${utts.length} 句)` },
@@ -569,7 +583,7 @@
         PIPELINE_BATCH_NODES.splice(
           0,
           PIPELINE_BATCH_NODES.length,
-          { id: 'runtime-log', kind: 'summary', step: 'LOG', title: '运行日志', meta: `${REAL_SYSTEM_LOGS.length} 条`, time: '', desc: '运行日志 (runtime.log)' },
+          { id: 'runtime-log', kind: 'summary', step: 'LOG', title: '运行日志', meta: `${REAL_SYSTEM_LOGS.length} 条`, time: '', desc: '运行日志 (runtime.jsonl)' },
           { id: 'all', kind: 'summary', step: 'SRT', title: '成品字幕', meta: '0 轴', time: '', desc: '成品字幕 (0 轴)' },
           { id: 'asr-01', kind: 'step', step: '01', title: '语音识别', meta: sd.asr ? '已完成' : '未开始', time: '', desc: '语音识别' },
           { id: 'nlp-all', kind: 'step', step: '02', title: '标点与断句', meta: '0 句', time: '', desc: '标点与断句' },
@@ -835,7 +849,7 @@
           }
           if (Array.isArray(res.paths)) return;
         } catch (err) {
-          appendLog('warn', 'FILE', `调用系统文件选择器失败，已切换为浏览器文件选择: ${err.message}`, true);
+          appendLog('warn', 'FILE', `调用系统文件选择器失败，已切换为浏览器文件选择: ${err.message}`, true, undefined, { taskId: '', persist: false });
         }
       }
       localVideoFileInput.click();
@@ -865,7 +879,7 @@
       const rawPath = sourceInput.value.trim().replace(/^["']+|["']+$/g, '').trim();
       if (!rawPath && !droppedFile) {
         sourceInput.focus();
-        appendLog('warn', 'WARN', '请先选择本地媒体文件或输入有效的视频路径 / YouTube 链接', true);
+        appendLog('warn', 'WARN', '请先选择本地媒体文件或输入有效的视频路径 / YouTube 链接', true, undefined, { taskId: '', persist: false });
         return;
       }
       const cleanedSub = subInput.value.trim().replace(/^["']+|["']+$/g, '').trim();
@@ -926,12 +940,12 @@
             sourceInput.value = '';
             subInput.value = '';
             closeTopLayer(newTaskDialog);
-            appendLog('asr', 'TASK', `已创建工作区 output/${created.task_id}/，点击「启动任务」开始执行。`, false);
+            appendLog('asr', 'TASK', `已创建工作区 output/${created.task_id}/，点击「启动任务」开始执行。`, false, undefined, { taskId: created.task_id });
             await loadBackendTasks();
             return;
           }
         } catch (err) {
-          appendLog('warn', 'WARN', `任务创建失败: ${err.message}`, true);
+          appendLog('warn', 'WARN', `任务创建失败: ${err.message}`, true, undefined, { taskId: '', persist: false });
           return;
         } finally {
           createBtn.disabled = false;
@@ -1266,7 +1280,7 @@
           appendLog('llm', 'SUBS', `已从本地 SRT 文件同步更新数据库 (${res.cues || 0} 轴)。`, false);
         } catch (err) {
           setAutosaveStatus('error', '同步失败');
-          reportActionError('SUBS', err);
+          reportActionError('SUBS', err, activeTaskId);
         }
       }
     });
@@ -1280,7 +1294,7 @@
         }
         appendLog('llm', 'SUBS', `Resumed subtitle pipeline for ${activeTaskId}.`, false);
       } catch (err) {
-        reportActionError('SUBS', err);
+        reportActionError('SUBS', err, activeTaskId);
       }
     });
 
@@ -1633,7 +1647,7 @@
             } catch (err) {
               row.promote = !next;
               renderTaskTerms();
-              reportActionError('TERMS', err);
+              reportActionError('TERMS', err, activeTaskId);
             }
           } else {
             renderTaskTerms();
@@ -1717,7 +1731,7 @@
         } catch (err) {
           targets.forEach(t => { t.promote = !next; });
           renderTaskTerms();
-          reportActionError('TERMS', err);
+          reportActionError('TERMS', err, activeTaskId);
         }
       }
     });
@@ -1782,7 +1796,7 @@
           await loadBackendTasks();
           return;
         } catch (err) {
-          reportActionError('TERMS', err);
+          reportActionError('TERMS', err, activeTaskId);
           return;
         }
       }
@@ -1804,7 +1818,7 @@
           }
           await loadBackendTasks();
         } catch (err) {
-          reportActionError('TERMS', err);
+          reportActionError('TERMS', err, activeTaskId);
           return;
         }
       }
@@ -1820,7 +1834,7 @@
         await persistTaskTermsToBackend();
         appendLog('llm', 'TERMS', 'Saved task terms to project.sqlite without advancing pipeline checkpoint.', false);
       } catch (err) {
-        reportActionError('TERMS', err);
+        reportActionError('TERMS', err, activeTaskId);
       }
     });
 
@@ -1828,6 +1842,59 @@
     // 7. 运行日志阶段面板渲染与过滤
     // =========================================================================
     let warnOnlyLog = false;
+    const pendingLogWritesByTask = new Map();
+
+    function getTaskLogBucket(taskId) {
+      const key = String(taskId || '');
+      let bucket = TASK_LOGS_BY_ID.get(key);
+      if (!bucket) {
+        bucket = [];
+        TASK_LOGS_BY_ID.set(key, bucket);
+      }
+      return bucket;
+    }
+
+    function syncActiveTaskLogsView() {
+      const current = activeTaskId ? getTaskLogBucket(activeTaskId) : [];
+      REAL_SYSTEM_LOGS.splice(0, REAL_SYSTEM_LOGS.length, ...current);
+      renderSystemLogs();
+    }
+
+    function persistClientTaskLog(taskId, entry) {
+      const prev = pendingLogWritesByTask.get(taskId) || Promise.resolve();
+      const next = prev
+        .catch(() => {})
+        .then(() =>
+          apiFetch(`/api/tasks/${encodeURIComponent(taskId)}/logs`, {
+            method: 'POST',
+            body: JSON.stringify(entry),
+          })
+        )
+        .catch(() => {});
+      pendingLogWritesByTask.set(taskId, next);
+      return next;
+    }
+
+    function setTaskLogsFromServer(taskId, logs) {
+      if (!taskId) return;
+      const normalized = Array.isArray(logs)
+        ? logs
+            .filter(item => item && item.msg)
+            .map(item => ({
+              time: item.time || '--:--:--',
+              tag: item.tag || 'llm',
+              label: item.label || 'RUN',
+              msg: item.msg,
+              warn: Boolean(item.warn),
+            }))
+            .slice(-300)
+        : [];
+      TASK_LOGS_BY_ID.set(String(taskId), normalized);
+      if (String(taskId) === String(activeTaskId || '')) {
+        syncActiveTaskLogsView();
+      }
+    }
+
     function renderSystemLogs() {
       const box = document.getElementById('global-log-console');
       const warnCount = REAL_SYSTEM_LOGS.filter(x => x.warn).length;
@@ -1863,46 +1930,63 @@
       }
     }
 
-    function appendLog(tag, label, msg, warn, time) {
-      const now = time || new Date().toTimeString().slice(0, 8);
-      REAL_SYSTEM_LOGS.push({
-        time: now,
-        tag: tag || 'llm',
-        label: label || 'RUN',
+    function appendLog(tag, label, msg, warn, time, options = {}) {
+      const hasExplicitTask = Object.prototype.hasOwnProperty.call(options, 'taskId');
+      const targetTaskId = hasExplicitTask ? String(options.taskId || '') : String(activeTaskId || '');
+      if (!targetTaskId) return;
+      const fromServer = Boolean(options.fromServer);
+      const persist = options.persist !== undefined ? Boolean(options.persist) : !fromServer;
+      const normalizedTag = tag === 'asr' || tag === 'warn' ? tag : 'llm';
+      const entry = {
+        time: time || new Date().toTimeString().slice(0, 8),
+        tag: warn ? 'warn' : normalizedTag,
+        label: String(label || 'RUN').toUpperCase().slice(0, 8),
         msg,
         warn: Boolean(warn),
-      });
-      if (REAL_SYSTEM_LOGS.length > 300) {
-        REAL_SYSTEM_LOGS.splice(0, REAL_SYSTEM_LOGS.length - 300);
+      };
+      const bucket = getTaskLogBucket(targetTaskId);
+      bucket.push(entry);
+      if (bucket.length > 300) {
+        bucket.splice(0, bucket.length - 300);
       }
-      renderSystemLogs();
+      if (targetTaskId === String(activeTaskId || '')) {
+        syncActiveTaskLogsView();
+      }
+      if (persist && isBackendConnected) {
+        const task = REAL_TASKS.find(x => x.id === targetTaskId);
+        if (!task || task.fromBackend) {
+          persistClientTaskLog(targetTaskId, entry);
+        }
+      }
     }
 
     function hydrateSystemLogs(logs) {
       if (!Array.isArray(logs) || logs.length === 0) return;
-      const seen = new Set(REAL_SYSTEM_LOGS.map(x => `${x.time}|${x.label}|${x.msg}`));
-      let added = false;
+      let activeTouched = false;
       logs.forEach(item => {
-        if (!item || !item.msg) return;
+        if (!item || !item.msg || !item.task_id) return;
+        const tid = String(item.task_id);
+        const bucket = getTaskLogBucket(tid);
         const t = item.time || '--:--:--';
         const lbl = item.label || 'RUN';
-        const key = `${t}|${lbl}|${item.msg}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-        REAL_SYSTEM_LOGS.push({
+        const dup = bucket.some(x => x.time === t && x.label === lbl && x.msg === item.msg);
+        if (dup) return;
+        bucket.push({
           time: t,
           tag: item.tag || 'llm',
           label: lbl,
           msg: item.msg,
           warn: Boolean(item.warn),
         });
-        added = true;
-      });
-      if (added) {
-        if (REAL_SYSTEM_LOGS.length > 300) {
-          REAL_SYSTEM_LOGS.splice(0, REAL_SYSTEM_LOGS.length - 300);
+        if (bucket.length > 300) {
+          bucket.splice(0, bucket.length - 300);
         }
-        renderSystemLogs();
+        if (tid === String(activeTaskId || '')) {
+          activeTouched = true;
+        }
+      });
+      if (activeTouched) {
+        syncActiveTaskLogsView();
       }
     }
 
@@ -1955,7 +2039,7 @@
           await loadBackendTasks();
           return;
         } catch (err) {
-          reportActionError('RUN', err);
+          reportActionError('RUN', err, activeTaskId);
           return;
         }
       }
@@ -1977,7 +2061,7 @@
         try {
           await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/open-dir`, { method: 'POST' });
         } catch (err) {
-          reportActionError('OPEN', err);
+          reportActionError('OPEN', err, activeTaskId);
           return;
         }
       }
@@ -1998,7 +2082,7 @@
           });
           await loadBackendTasks();
         } catch (err) {
-          reportActionError('MERGE', err);
+          reportActionError('MERGE', err, activeTaskId);
         }
       }
     });
@@ -2017,7 +2101,7 @@
           });
           await loadBackendTasks();
         } catch (err) {
-          reportActionError('TTS', err);
+          reportActionError('TTS', err, activeTaskId);
         }
       }
     });
@@ -2030,7 +2114,7 @@
           await apiFetch(`/api/tasks/${encodeURIComponent(activeTaskId)}/stop`, { method: 'POST' });
           await loadBackendTasks();
         } catch (err) {
-          reportActionError('STOP', err);
+          reportActionError('STOP', err, activeTaskId);
           return;
         }
       }
@@ -2260,7 +2344,7 @@
           await selectGlossaryDomain('');
         }
       } catch (err) {
-        appendLog('warn', 'GLOSSARY', `加载领域词表列表失败: ${err.message}`, true);
+        appendLog('warn', 'GLOSSARY', `加载领域词表列表失败: ${err.message}`, true, undefined, { taskId: '', persist: false });
       }
     }
 
@@ -2274,7 +2358,7 @@
             return;
           }
         } catch (err) {
-          appendLog('warn', 'DICT', `检索内置词典失败 (${dom}): ${err.message}`, true);
+          appendLog('warn', 'DICT', `检索内置词典失败 (${dom}): ${err.message}`, true, undefined, { taskId: '', persist: false });
         }
       }
       domainDictEntries = [];
@@ -2805,7 +2889,7 @@
         syncTtsMethodPanel();
         updateAssPreview();
       } catch (err) {
-        appendLog('warn', 'CONFIG', `加载全局设置失败: ${err.message}`, true);
+        appendLog('warn', 'CONFIG', `加载全局设置失败: ${err.message}`, true, undefined, { taskId: '', persist: false });
       }
     }
 
@@ -2817,11 +2901,11 @@
         d.message ||
         (d.type === 'task_paused' ? d.pause_message : '') ||
         (d.type === 'task_error' ? d.error : '');
-      if (msg) {
+      if (msg && d.task_id) {
         const warn = Boolean(d.warn ?? (d.type === 'task_error' && d.error)) || d.log_level === 'warn' || d.log_level === 'error';
         const logTag = d.log_tag || (warn ? 'warn' : 'llm');
         const logLabel = d.log_label || String(d.step || d.state || 'RUN').toUpperCase().slice(0, 8);
-        appendLog(logTag, logLabel, msg, warn, d.time);
+        appendLog(logTag, logLabel, msg, warn, d.time, { taskId: d.task_id, fromServer: true });
       }
       if (!d.task_id) return null;
       const tCard = REAL_TASKS.find(x => x.id === d.task_id);
@@ -2921,7 +3005,7 @@
           renderStreamTable();
         }
       } catch (err) {
-        appendLog('warn', 'SYNC', `实时同步任务数据失败 (${artifact}): ${err.message}`, true);
+        appendLog('warn', 'SYNC', `实时同步任务数据失败 (${artifact}): ${err.message}`, true, undefined, { taskId, persist: false });
       }
     }
 
@@ -2967,11 +3051,11 @@
               loadBackendTasks({ skipActiveDetail: false, forceDetailReload: true });
             }
           } catch (parseErr) {
-            appendLog('warn', 'SSE', `解析事件流数据失败: ${parseErr.message}`, true);
+            appendLog('warn', 'SSE', `解析事件流数据失败: ${parseErr.message}`, true, undefined, { taskId: '', persist: false });
           }
         };
       } catch (err) {
-        appendLog('warn', 'SSE', `连接实时事件流失败: ${err.message}`, true);
+        appendLog('warn', 'SSE', `连接实时事件流失败: ${err.message}`, true, undefined, { taskId: '', persist: false });
       }
     }
 

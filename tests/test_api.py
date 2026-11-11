@@ -605,3 +605,78 @@ def test_get_task_utterances_asr_words_fallback_and_raw_backfill(client):
     assert len(utts2) == 1
     assert utts2[0]["src_raw"] == "are you ready"
     assert utts2[0]["src_punct"] == "Are you ready?"
+
+
+def test_per_task_log_isolation_and_restart_persistence(client):
+    task_a = create_local_task(client, filename="alpha.mp4")
+    task_b = create_local_task(client, filename="beta.mp4")
+
+    def step_a():
+        TaskRunner.log_event("Alpha ASR complete", tag="asr", label="ASR")
+
+    def step_b():
+        TaskRunner.log_event(
+            "Beta LLM warning", tag="warn", label="TRANS", level="warn"
+        )
+
+    api.runner.start([("Step A", step_a)], task_id=task_a)
+    finish(client, task_a)
+
+    api.runner.start([("Step B", step_b)], task_id=task_b)
+    finish(client, task_b)
+
+    post_res = client.post(
+        f"/api/tasks/{task_a}/logs",
+        json={
+            "msg": "Client merge action",
+            "tag": "llm",
+            "label": "MERGE",
+            "warn": False,
+            "time": "12:00:01",
+        },
+    )
+    assert post_res.status_code == 201
+
+    assert any(x["msg"] == "Alpha ASR complete" for x in api.runner.recent_logs(task_a))
+    assert not any(
+        x["msg"] == "Beta LLM warning" for x in api.runner.recent_logs(task_a)
+    )
+    assert any(x["msg"] == "Beta LLM warning" for x in api.runner.recent_logs(task_b))
+    assert not any(
+        x["msg"] == "Alpha ASR complete" for x in api.runner.recent_logs(task_b)
+    )
+
+    ws_a = TaskWorkspace(Path("output") / task_a)
+    ws_b = TaskWorkspace(Path("output") / task_b)
+    assert ws_a.runtime_log_path.is_file()
+    assert not (ws_a.log_dir / "runtime.log").exists()
+    assert ws_b.runtime_log_path.is_file()
+
+    # Simulate backend restart clearing in-memory runner buffers
+    fresh_runner = TaskRunner()
+    fresh_runner.add_listener(api._on_runner_event)
+    api.runner = fresh_runner
+    assert api.runner.recent_logs(task_a) == []
+
+    logs_a = client.get(f"/api/tasks/{task_a}/logs").json()["logs"]
+    logs_b = client.get(f"/api/tasks/{task_b}/logs").json()["logs"]
+
+    msgs_a = [x["msg"] for x in logs_a]
+    msgs_b = [x["msg"] for x in logs_b]
+    assert "Alpha ASR complete" in msgs_a
+    assert "Client merge action" in msgs_a
+    assert all("Beta" not in m for m in msgs_a)
+
+    assert "Beta LLM warning" in msgs_b
+    assert any(
+        x["msg"] == "Beta LLM warning" and x["warn"] is True and x["tag"] == "warn"
+        for x in logs_b
+    )
+    assert all("Alpha" not in m and "Client merge" not in m for m in msgs_b)
+
+    del_res = client.delete(f"/api/tasks/{task_a}")
+    assert del_res.status_code == 200
+    assert client.get(f"/api/tasks/{task_a}/logs").status_code == 404
+    assert [
+        x["msg"] for x in client.get(f"/api/tasks/{task_b}/logs").json()["logs"]
+    ] == msgs_b
